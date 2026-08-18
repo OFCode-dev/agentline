@@ -53,48 +53,56 @@ bash install.sh --with-hooks
 
 ## What each line shows
 
+Every `│`-separated segment below is independent: when its value cannot be measured (or is zero/empty), the segment disappears and the pipes close up around it — nothing ever renders as `n/a`.
+
 ### Line 1 — Session
 
-| Segment | Meaning |
-|---|---|
-| `✦ Fable 5` / `Opus 5` … | Model, colored by family; frontier models get a truecolor gradient. `🧠` = extended thinking on, `⚡Fast` = fast mode |
-| `🟢low` → `🔴max` | Reasoning effort level |
-| `📊 42%` | Context window used — turns yellow at 60 %, red with `⚠️` at 80 % |
-| `S:31% ↻2h49m` | 5-hour rate limit used, and when it resets |
-| `W:58% ↻24/8` | 7-day rate limit used, and the reset date |
-| `💰 $12.47` · `⏱️ 3h42m` | Session cost and duration |
-| `📥 8.4m` · `📤 126.5k` | Input / output tokens |
-| `🔤 ↑1.2k ↓8.4k` | Words you typed (↑) vs. words Claude wrote (↓) — optional hook |
-| `📝 +1204 -336` | Lines added / removed |
-| `🔥 37%` · `💾 6.2G` · `💽 41%` | Host CPU, used RAM, root-disk usage — disk turns red at 80 % |
+| Segment | Meaning | Details |
+|---|---|---|
+| `✦ Fable 5 🧠` | Model name, parsed from the model id | Colored by family: Fable/Mythos get a `✦` truecolor amber→orange gradient, Opus magenta, Sonnet cyan, Haiku green. `🧠` is attached (no pipe) when extended thinking is on. Hidden only when the payload has no model. |
+| `⚡Fast` | Fast mode | Bold yellow. Its own segment; shown only while fast mode is active. |
+| `🟠high` | Reasoning effort level | `🟢low` dim · `🟡med` cyan · `🟠high` orange · `🔴xhigh` red · `🔴max` gold. Unknown values render as `⚙️ <level>`. Hidden when the payload has no effort. |
+| `📊 42%` | Context window used | Green below 60 %, yellow from 60 %, red from 80 % — and at 80 % the icon swaps to `⚠️` as a deliberate "wrap up or compact" signal. |
+| `S:31% ↻2h49m` | 5-hour rate limit | Percentage used: green below 70 %, yellow from 70 %, red from 90 %. `↻` shows the time left until the window resets (`2h49m`), dim; omitted when no reset timestamp is available. |
+| `W:58% ↻24/8` | 7-day rate limit | Same color thresholds (70/90). `↻` shows the reset **date** as day/month, dim. |
+| `💰 $12.47` | Session cost | USD, two decimals. Hidden when the payload carries no cost. |
+| `⏱️ 3h42m` | Session duration | `XhYm`, or `Ym` under an hour. |
+| `📥 8.4m` | Input tokens | Abbreviated: `746`, `126.5k`, `8.4m`. |
+| `📤 126.5k` | Output tokens | Same abbreviation. |
+| `🔤 ↑1.2k ↓8.4k` | Word counter — optional hook | `↑` words you typed, `↓` words Claude wrote, counted from the session transcript (text only, tool noise excluded). Requires the [word-counter hook](#optional-hooks-word-counter--agent-tracker); hidden without it or while both counts are zero. |
+| `📝 +1204 -336` | Lines of code changed | Added in green, removed in red. |
+| `🔥 37%` | Host CPU usage | 100 − idle, sampled from `top` (BSD variant on macOS). Hidden if unmeasurable. |
+| `💾 6.2G` | Used RAM | Linux: `MemTotal − MemAvailable`; macOS: active + wired + compressed pages. |
+| `💽 41%` | Root-disk usage | From `df -P /`. Green below 80 %; at 80 % it turns red and gains a `⚠️`. Hidden on mounts that report no percentage. |
 
 ### Line 2 — Environment
 
-| Segment | Meaning |
-|---|---|
-| `v3.0.24` | Claude Code version |
-| `~/projects/agentline` | Working directory, home-relative |
-| `🌿 OFCode-dev/agentline@main` | Branch, prefixed with the `owner/repo` its origin points at — so you always know *which* repo's `main` you are on |
-| `🏷️ session-name` | Named session (truncated at 30 chars) |
-| `🤖 o****r@g***l.com` | Active Claude account, always masked — taken from the payload, or from `claude auth status` cached for 60 s, so account switches appear within a minute |
-| `18/08/2026 Tue · 21:45:03` | Date and clock (system timezone; pin with `AGENTLINE_TZ`) |
+| Segment | Meaning | Details |
+|---|---|---|
+| `v3.0.24` | Claude Code version | Dim. |
+| `~/projects/agentline` | Working directory | Blue; home-relative (`~` at `$HOME`), absolute outside your home. |
+| `🌿 OFCode-dev/agentline@main` | Git branch | Branch in magenta, prefixed with the dim `owner/repo` its `origin` remote points at (SSH and HTTPS remotes both parsed) — so you always know *which* repo's `main` you are on. Repos without an origin show the branch alone; non-repos hide the segment. |
+| `🏷️ session-name` | Named session | Truncated at 30 chars; hidden for unnamed sessions. |
+| `🤖 o****r@g***l.com` | Active Claude account | Always masked before display (first/last characters kept, middle starred). Taken from the payload when present, otherwise from `claude auth status` cached for 60 s — account switches appear within a minute. Hidden when neither source yields an address. |
+| `19/08/2026 Wed` | Date | `dd/mm/yyyy Day`, dim; the day abbreviation is pinned to English regardless of host locale. |
+| `01:39:24` | Clock | `HH:MM:SS`, cyan. System timezone by default; pin with `AGENTLINE_TZ` (e.g. home time on a UTC server). |
 
 ### Line 3 — Claude layer
 
-| Segment | Meaning |
-|---|---|
-| `⚙️ context7 · playwright` | MCP servers that are configured **and actually running** (process-checked; remote HTTP/SSE servers listed as configured) |
-| `🤖 code review · tests` | Live subagents (optional hook) |
-| `♻️ claude --resume <id>` | Recovery command — paste it after a crash to resume this exact session |
+| Segment | Meaning | Details |
+|---|---|---|
+| `⚙️ context7 · playwright` | Active MCP servers | Global and per-project servers from `~/.claude.json`, merged. Command-based servers count only if their process is actually running (`pgrep`-checked); remote HTTP/SSE servers count as configured. Hidden when none are active. |
+| `🤖 code review · tests` | Live subagents — optional hook | Entries fresher than 5 minutes from the [agent-tracker hook](#optional-hooks-word-counter--agent-tracker), labels truncated at 25 chars, yellow. Cleared when the main session stops. |
+| `♻️ claude --resume <id>` | Recovery command | Ready to paste after a crash to resume this exact session. Prefers the session **id** (what `--resume` accepts); falls back to the quoted session name, which `--resume` treats as a picker search term. |
 
 ### Line 4 — System layer
 
-| Segment | Meaning |
-|---|---|
-| `🛡️ Web ✓ · DB ✓ · Cache ✗` | Health of the systemd units *you* chose to watch (see below) — failures show a red ✗ |
-| `🔐 ssh:2` | Remote SSH sessions on this host (yellow when more than one) |
-| `⏰ cron:5` | Active user cron jobs |
-| `🌐 node(3000) · python(8471)` | Listening dev servers on ports 3000–9999 |
+| Segment | Meaning | Details |
+|---|---|---|
+| `🛡️ Web ✓ · DB ✓ · Cache ✗` | Service health | One entry per systemd unit you listed in `~/.claude/agentline-services.conf` (see below). Healthy units render dim `Label ✓` — deliberately unobtrusive; a down unit renders bold red `Label ✗` so only failures draw the eye. Units not defined on the host are skipped silently; the whole panel hides on macOS (no systemd) or without a config file. |
+| `🔐 ssh:2` | Remote SSH sessions | Counted from `who` (entries with an origin host). Dim at 1; bold yellow above 1, so an unexpected second login stands out. Hidden at 0. |
+| `⏰ cron:5` | User cron jobs | Non-empty, non-comment lines of `crontab -l`. Dim; hidden when the crontab is empty or missing. |
+| `🌐 node(3000) vite(5173)` | Listening dev servers | Your processes listening on TCP ports 3000–9999 (`ss` on Linux, `lsof` on macOS), shown as `process(port)`. System daemons outside that range are excluded. Hidden when nothing listens. |
 
 Lines 3 and 4 are omitted when empty, joined into one line when the combined width fits within 120 columns, and wrapped onto continuation rows at segment (`│`) boundaries when either grows past that budget — a segment is never split mid-way. Tune the budget with `AGENTLINE_WIDTH` (set it near your real terminal width). That is by design: information density without wasted rows or overflow.
 
