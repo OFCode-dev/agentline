@@ -43,6 +43,8 @@ bash install.sh
 
 Restart Claude Code — the status bar appears at the bottom of the terminal.
 
+agentline is also an installable [agent skill](SKILL.md): `npx skills add OFCode-dev/agentline` teaches your agent how to install and configure it for you.
+
 Add the optional 🔤 word-counter and 🤖 live agent-tracker segments (they need two small [hooks](#optional-hooks-word-counter--agent-tracker)):
 
 ```bash
