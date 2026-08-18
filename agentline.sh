@@ -63,6 +63,7 @@ fields = {
     'fast': g('fast_mode'),
     'version': g('version'),
     'payload_email': g('account', 'email'),
+    'payload_transcript': g('transcript_path'),
 }
 print('\n'.join(f'{k}={shlex.quote(str(v))}' for k, v in fields.items()))
 PYEOF
@@ -84,6 +85,13 @@ if date -r 0 >/dev/null 2>&1; then
   fmt_epoch() { date -r "$1" "+$2" 2>/dev/null; }   # BSD / macOS
 else
   fmt_epoch() { date -d "@$1" "+$2" 2>/dev/null; }  # GNU / Linux
+fi
+
+# Reverse a file: GNU has tac, BSD/macOS has tail -r.
+if command -v tac >/dev/null 2>&1; then
+  revcat() { tac "$1" 2>/dev/null; }
+else
+  revcat() { tail -r "$1" 2>/dev/null; }
 fi
 
 # === System Info ===
@@ -287,10 +295,33 @@ case "$effort_raw" in
   high)   effort="🟠${ORANGE}high${RESET}" ;;
   # The /effort scale runs low < medium < high < xhigh < max, with ultracode
   # as a side mode (xhigh + workflows). The payload reports ultracode as plain
-  # "xhigh", so xhigh wears ultracode's violet-ripple styling (bold white on a
-  # violet gradient) and max mirrors the picker's rainbow-animated, static.
-  xhigh)  effort="🟣\033[1;38;2;255;255;255;48;2;62;22;118mx\033[48;2;82;37;149mh\033[48;2;101;51;179mi\033[48;2;121;66;210mg\033[48;2;140;80;240mh${RESET}" ;;
-  max)    effort="🌈\033[1;38;2;255;107;107mm\033[38;2;243;249;157ma\033[38;2;122;162;247mx${RESET}" ;;
+  # "xhigh"; the only place the distinction survives is the session transcript,
+  # which records an "ultra_effort_enter"/"ultra_effort_exit" attachment when
+  # the mode toggles and a "Set effort level to <level>" line on each /effort.
+  # Scan it backwards: the most recent marker tells the current state. Escaped
+  # quotes in message text can never match the raw-JSON pattern, so quoting
+  # these strings in conversation does not false-positive.
+  xhigh)
+    ultracode=""
+    tp="$payload_transcript"
+    if [ ! -f "$tp" ] && [ -n "$session_id" ]; then
+      tp="$HOME/.claude/projects/$(printf '%s' "$cwd" | sed 's|[^a-zA-Z0-9]|-|g')/${session_id}.jsonl"
+    fi
+    if [ -f "$tp" ]; then
+      marker=$(revcat "$tp" | grep -m1 -oE '"attachment":\{"type":"ultra_effort_(enter|exit)"|<local-command-stdout>Set effort level to [a-z]+')
+      case "$marker" in
+        *ultra_effort_enter*|*"to ultracode") ultracode=1 ;;
+      esac
+    fi
+    if [ -n "$ultracode" ]; then
+      # Mirrors the /effort picker's violet-ripple: bold white on a violet
+      # gradient, rgb(62,22,118) -> rgb(140,80,240), frozen in space.
+      effort="\033[1;38;2;255;255;255;48;2;62;22;118mu\033[48;2;72;29;133ml\033[48;2;82;37;149mt\033[48;2;91;44;164mr\033[48;2;101;51;179ma\033[48;2;111;58;195mc\033[48;2;121;66;210mo\033[48;2;130;73;225md\033[48;2;140;80;240me${RESET}"
+    else
+      effort="🔴${RED}xhigh${RESET}"
+    fi ;;
+  # max mirrors the picker's rainbow-animated, static.
+  max)    effort="\033[1;38;2;255;107;107mm\033[38;2;243;249;157ma\033[38;2;122;162;247mx${RESET}" ;;
   *)      [ -n "$effort_raw" ] && effort="⚙️  $effort_raw" ;;
 esac
 

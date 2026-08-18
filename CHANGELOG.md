@@ -35,3 +35,13 @@ First public release.
   `/effort` picker's rainbow-animated styling — so the scale's true top level
   outranks the violet `xhigh` visually, matching low < medium < high < xhigh
   < max (ultracode is a side mode that reports as `xhigh`).
+
+## 1.2.0 — 2026-08-19
+
+- True ultracode detection: the payload reports ultracode as plain `xhigh`,
+  so agentline now scans the session transcript's effort markers and renders
+  a violet `ultracode` pill only when ultracode is really on; genuine xhigh
+  stays red. The 🟣 and 🌈 marker emojis are gone — the pill and the rainbow
+  speak for themselves.
+- `transcript_path` extracted from the payload (with a session-id fallback);
+  reverse file scan is BSD/macOS-portable (`tac` / `tail -r`).
