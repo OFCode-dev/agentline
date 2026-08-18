@@ -1,0 +1,26 @@
+# agentline — machine-local service health list (line 4 of the status bar)
+#
+# Copy to ~/.claude/agentline-services.conf and list what this host runs.
+# That file is gitignored on purpose: each machine keeps its own units, and the
+# list never travels between machines.
+#
+# Format, one entry per line:
+#
+#   <systemd-unit-name>:<Label>
+#
+#   - blank lines and lines starting with # are ignored
+#   - if <Label> is omitted, the unit name is used as the label
+#   - units that do not exist on this host are skipped silently, so the same
+#     file can be copied between hosts without breaking the status bar
+#
+# systemd is Linux-only. On macOS the panel stays empty and line 4 simply omits
+# it, so this file is harmless there.
+#
+# Override the location with $AGENTLINE_SERVICES if you need to.
+#
+# Examples:
+#
+#   nginx:Web
+#   postgresql:DB
+#   redis-server:Cache
+#   docker:Docker
