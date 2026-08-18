@@ -63,7 +63,7 @@ Every `│`-separated segment below is independent: when its value cannot be mea
 |---|---|---|
 | `✦ Fable 5 🧠` | Model name, parsed from the model id | Colored by family: Fable/Mythos get a `✦` truecolor amber→orange gradient, Opus magenta, Sonnet cyan, Haiku green. `🧠` is attached (no pipe) when extended thinking is on. Hidden only when the payload has no model. |
 | `⚡Fast` | Fast mode | Bold yellow. Its own segment; shown only while fast mode is active. |
-| `🟠high` | Reasoning effort level | `🟢low` dim · `🟡med` cyan · `🟠high` orange · `🟣xhigh` bold white on a violet gradient, mirroring the `/effort` picker's top-setting styling · `🔴max` gold. Unknown values render as `⚙️ <level>`. Hidden when the payload has no effort. |
+| `🟠high` | Reasoning effort level | `🟢low` dim · `🟡med` cyan · `🟠high` orange · `🟣xhigh` bold white on a violet gradient (the `/effort` picker's ultracode styling — ultracode sessions report `xhigh`) · `🌈max` static rainbow, mirroring the picker's animated one. The scale runs low < medium < high < xhigh < max, with ultracode as a side mode. Unknown values render as `⚙️ <level>`. Hidden when the payload has no effort. |
 | `📊 42%` | Context window used | Green below 60 %, yellow from 60 %, red from 80 % — and at 80 % the icon swaps to `⚠️` as a deliberate "wrap up or compact" signal. |
 | `S:31% ↻2h49m` | 5-hour rate limit | Percentage used: green below 70 %, yellow from 70 %, red from 90 %. `↻` shows the time left until the window resets (`2h49m`), dim; omitted when no reset timestamp is available. |
 | `W:58% ↻24/8` | 7-day rate limit | Same color thresholds (70/90). `↻` shows the reset **date** as day/month, dim. |

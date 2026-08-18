@@ -28,3 +28,10 @@ First public release.
 
 - `xhigh` effort now renders as bold white on a violet gradient with a 🟣
   marker, mirroring the styling of the `/effort` picker's top setting.
+
+## 1.1.2 — 2026-08-19
+
+- `max` effort now renders as a static rainbow with a 🌈 marker, mirroring the
+  `/effort` picker's rainbow-animated styling — so the scale's true top level
+  outranks the violet `xhigh` visually, matching low < medium < high < xhigh
+  < max (ultracode is a side mode that reports as `xhigh`).
