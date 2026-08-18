@@ -23,3 +23,8 @@ First public release.
 - Word counter redesigned: `🔤 ↑typed ↓written`, placed between the token
   counters and the line counters.
 - Day abbreviation on line 2 pinned to English regardless of host locale.
+
+## 1.1.1 — 2026-08-19
+
+- `xhigh` effort now renders as bold white on a violet gradient with a 🟣
+  marker, mirroring the styling of the `/effort` picker's top setting.

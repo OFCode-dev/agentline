@@ -285,7 +285,9 @@ case "$effort_raw" in
   low)    effort="🟢${DIM}low${RESET}" ;;
   medium) effort="🟡${CYAN}med${RESET}" ;;
   high)   effort="🟠${ORANGE}high${RESET}" ;;
-  xhigh)  effort="🔴${RED}xhigh${RESET}" ;;
+  # xhigh mirrors the /effort picker's top ("ultracode") styling: bold white
+  # on a violet gradient, rgb(62,22,118) -> rgb(140,80,240), frozen in space.
+  xhigh)  effort="🟣\033[1;38;2;255;255;255;48;2;62;22;118mx\033[48;2;82;37;149mh\033[48;2;101;51;179mi\033[48;2;121;66;210mg\033[48;2;140;80;240mh${RESET}" ;;
   max)    effort="🔴${GOLD}max${RESET}" ;;
   *)      [ -n "$effort_raw" ] && effort="⚙️  $effort_raw" ;;
 esac
