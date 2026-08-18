@@ -1,6 +1,6 @@
 #!/bin/bash
 # agentline optional hook: counts words in assistant output and user input.
-# Feeds the 💬 in/out segment on agentline's line 1.
+# Feeds the 🔤 word-counter segment (↑ typed, ↓ written) on agentline's line 1.
 #
 # Claude Code hook payloads do not inline the transcript; they point at it via
 # transcript_path (a JSONL file). This reads that file and counts the words in

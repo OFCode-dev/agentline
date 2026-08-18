@@ -23,7 +23,7 @@ Most Claude Code status lines show a model name and a folder. agentline is the m
 What makes it different:
 
 - **Zero dependencies.** One bash file using `python3`, `awk`, `git`, `top` — tools already on every macOS and Linux box. No npm, no cargo, no daemon, no network requests.
-- **Adaptive layout.** Lines 3 and 4 disappear entirely when they have nothing to say, and merge into one line when their combined width fits. A quiet laptop gets two lines; a busy server gets four.
+- **Adaptive layout.** Lines 3 and 4 disappear entirely when they have nothing to say, merge into one line when their combined width fits, and wrap onto continuation rows at segment boundaries when a busy host outgrows the width budget. A quiet laptop gets two lines; a crowded server gets exactly as many as it needs.
 - **Crash insurance.** The `♻️ claude --resume` command is always visible, so if Claude Code exits unexpectedly you paste one line and continue where you left off.
 - **Host awareness.** Few Claude Code status lines watch your systemd units, SSH sessions, and dev servers — agentline does, so your status bar tells you nginx went down before your monitoring does.
 - **Cross-platform from one file.** BSD/GNU differences (`date`, `top`, `vm_stat`, `lsof`/`ss`) are resolved once at startup, not probed per segment.
@@ -43,7 +43,7 @@ bash install.sh
 
 Restart Claude Code — the status bar appears at the bottom of the terminal.
 
-Add the optional 💬 word-counter and 🤖 live agent-tracker segments (they need two small [hooks](#optional-hooks-word-counter--agent-tracker)):
+Add the optional 🔤 word-counter and 🤖 live agent-tracker segments (they need two small [hooks](#optional-hooks-word-counter--agent-tracker)):
 
 ```bash
 bash install.sh --with-hooks
@@ -58,13 +58,13 @@ bash install.sh --with-hooks
 | Segment | Meaning |
 |---|---|
 | `✦ Fable 5` / `Opus 5` … | Model, colored by family; frontier models get a truecolor gradient. `🧠` = extended thinking on, `⚡Fast` = fast mode |
-| `💬 in:1.2k out:8.4k` | Words you typed vs. words Claude wrote (optional hook) |
 | `🟢low` → `🔴max` | Reasoning effort level |
 | `📊 42%` | Context window used — turns yellow at 60 %, red with `⚠️` at 80 % |
 | `S:31% ↻2h49m` | 5-hour rate limit used, and when it resets |
 | `W:58% ↻24/8` | 7-day rate limit used, and the reset date |
 | `💰 $12.47` · `⏱️ 3h42m` | Session cost and duration |
 | `📥 8.4m` · `📤 126.5k` | Input / output tokens |
+| `🔤 ↑1.2k ↓8.4k` | Words you typed (↑) vs. words Claude wrote (↓) — optional hook |
 | `📝 +1204 -336` | Lines added / removed |
 | `🔥 37%` · `💾 6.2G` · `💽 41%` | Host CPU, used RAM, root-disk usage — disk turns red at 80 % |
 
@@ -96,7 +96,7 @@ bash install.sh --with-hooks
 | `⏰ cron:5` | Active user cron jobs |
 | `🌐 node(3000) · python(8471)` | Listening dev servers on ports 3000–9999 |
 
-Lines 3 and 4 are omitted when empty and joined into one line when the combined width fits within 120 columns (`AGENTLINE_WIDTH` to change). That is by design: information density without wasted rows.
+Lines 3 and 4 are omitted when empty, joined into one line when the combined width fits within 120 columns, and wrapped onto continuation rows at segment (`│`) boundaries when either grows past that budget — a segment is never split mid-way. Tune the budget with `AGENTLINE_WIDTH` (set it near your real terminal width). That is by design: information density without wasted rows or overflow.
 
 ## Service health panel
 
@@ -117,7 +117,7 @@ Everything is optional — agentline works with zero configuration.
 | Variable | Default | Effect |
 |---|---|---|
 | `AGENTLINE_SERVICES` | `~/.claude/agentline-services.conf` | Path to the service list |
-| `AGENTLINE_WIDTH` | `120` | Column budget for merging lines 3 + 4 |
+| `AGENTLINE_WIDTH` | `120` | Column budget for merging and wrapping lines 3 + 4 |
 | `AGENTLINE_TZ` | system timezone | Pin the clock, e.g. `Europe/Istanbul` on a UTC server |
 
 Set them in the `env` block of `~/.claude/settings.json` so Claude Code passes them to every render:
@@ -132,7 +132,7 @@ Set them in the `env` block of `~/.claude/settings.json` so Claude Code passes t
 
 Two segments read files that Claude Code itself does not provide, so they are fed by two small hooks shipped in [`hooks/`](hooks/):
 
-- **`wordcount-hook.sh`** — counts words in the transcript (PostToolUse + Stop) and feeds `💬 in/out` on line 1.
+- **`wordcount-hook.sh`** — counts words in the transcript (PostToolUse + Stop) and feeds `🔤 ↑in ↓out` on line 1.
 - **`agent-tracker-hook.sh`** — records subagent spawns (PreToolUse on Agent) and clears them on Stop, feeding `🤖` on line 3.
 
 `bash install.sh --with-hooks` copies them to `~/.claude/agentline/` and adds the hook entries to `settings.json` idempotently — existing hooks are never duplicated or removed. Without them, the two segments simply stay hidden; nothing else changes.
@@ -166,7 +166,7 @@ Claude Code invokes the `statusLine` command on every render and pipes a JSON pa
 Yes. Line 1 shows both the 5-hour rate limit (`S:31% ↻2h49m`) and the 7-day rate limit (`W:58% ↻24/8`) — percentage used and time until reset, updated on every render.
 
 **Why are lines 3 and 4 sometimes missing?**
-They hide when empty and merge when short — a status bar should spend rows on information, not on structure. See [Adaptive layout](#why-agentline).
+They hide when empty, merge when short, and wrap onto extra rows when crowded — a status bar should spend rows on information, not on structure. See [Adaptive layout](#why-agentline).
 
 **Does agentline slow Claude Code down?**
 No. Rendering is a single pass of one bash script with a few short-lived `python3` helpers; there are no daemons and no network calls. Claude Code renders the status line asynchronously, so your prompt never waits on it.
@@ -174,7 +174,7 @@ No. Rendering is a single pass of one bash script with a few short-lived `python
 **Does it work on macOS?**
 Yes — CPU, memory, and listening-port probes have BSD branches selected once at startup. Only the systemd service panel is Linux-specific, and it degrades to nothing on macOS.
 
-**Why don't I see the 💬 word counts or the 🤖 agents?**
+**Why don't I see the 🔤 word counts or the 🤖 agents?**
 Those two segments are fed by the optional hooks. Run `bash install.sh --with-hooks`.
 
 **Is my e-mail address exposed on screen shares?**

@@ -374,7 +374,8 @@ if [ -n "$lines_added" ] || [ -n "$lines_removed" ]; then
   lines_fmt="\033[1;32m+${lines_added:-0}\033[0m \033[1;31m-${lines_removed:-0}\033[0m"
 fi
 
-date_str=$(date "+%d/%m/%Y %a")
+# LC_ALL=C pins the day abbreviation to English regardless of the host locale.
+date_str=$(LC_ALL=C date "+%d/%m/%Y %a")
 time_str=$(date "+%H:%M:%S")
 
 # Word counts from hook
@@ -400,9 +401,6 @@ line1=""
 if [ -n "$model" ]; then
   line1="${model_color}${model}${thinking_icon:+ ${thinking_icon}}${RESET}"
 fi
-if [ -n "$words_in_w" ] || [ -n "$words_out_w" ]; then
-  line1="${line1:+${line1}${P}}💬 ${DIM}in:${RESET}${words_in_w:-0} ${DIM}out:${RESET}${words_out_w:-0}"
-fi
 [ -n "$effort" ]         && line1="${line1:+${line1}${P}}${effort}"
 [ -n "$fast_icon" ]      && line1="${line1:+${line1}${P}}${YELLOW}${fast_icon}${RESET}"
 if [ -n "$used_pct" ]; then
@@ -425,6 +423,10 @@ fi
 [ -n "$duration_fmt" ]   && line1="${line1:+${line1}${P}}⏱️  ${duration_fmt}"
 [ -n "$tokens_in_fmt" ]  && line1="${line1:+${line1}${P}}📥 ${tokens_in_fmt}"
 [ -n "$tokens_out_fmt" ] && line1="${line1:+${line1}${P}}📤 ${tokens_out_fmt}"
+# Word counter (optional hook): ↑ words you typed, ↓ words Claude wrote.
+if [ -n "$words_in_w" ] || [ -n "$words_out_w" ]; then
+  line1="${line1:+${line1}${P}}🔤 ${DIM}↑${RESET}${words_in_w:-0} ${DIM}↓${RESET}${words_out_w:-0}"
+fi
 [ -n "$lines_fmt" ]      && line1="${line1:+${line1}${P}}📝 ${lines_fmt}"
 [ -n "$cpu_usage" ]      && line1="${line1:+${line1}${P}}🔥 ${cpu_usage}"
 [ -n "$mem_used_gb" ]    && line1="${line1:+${line1}${P}}💾 ${mem_used_gb}"
@@ -529,26 +531,51 @@ if [ -n "$dev_ports" ]; then
   line4="${line4:+${line4}${P}}🌐 ${DIM}${dev_ports}${RESET}"
 fi
 
-# Lines 3 and 4 are separate layers (Claude vs system), but on a host where both
-# are short the split wastes a row. Join them when the combined visible width
-# still fits, and leave them apart when it does not. Width is measured after
-# stripping colour escapes, counting wide glyphs as two cells.
+# Lines 3 and 4 are separate layers (Claude vs system). On a quiet host the
+# split wastes a row, so they are joined when the combined width fits. On a
+# busy host either line can outgrow the terminal, so each is wrapped onto
+# continuation rows at segment (│) boundaries instead of overflowing — a
+# segment is never split internally. Width is measured after stripping colour
+# escapes, counting wide glyphs as two cells; tune with $AGENTLINE_WIDTH.
 STATUSLINE_WIDTH="${AGENTLINE_WIDTH:-120}"
-if [ -n "$line3" ] && [ -n "$line4" ]; then
-  combined="${line3}${P}${line4}"
-  combined_width=$(printf '%b' "$combined" | python3 -c "
+layer_rows=$(python3 - "$STATUSLINE_WIDTH" "$P" "$line3" "$line4" <<'PYEOF'
 import re, sys, unicodedata
-s = re.sub(r'\x1b\[[0-9;]*m', '', sys.stdin.read()).rstrip('\n')
-print(sum(2 if unicodedata.east_asian_width(c) in ('W', 'F') else 1 for c in s))
-" 2>/dev/null)
-  if [ -n "$combined_width" ] && [ "$combined_width" -le "$STATUSLINE_WIDTH" ]; then
-    line3="$combined"
-    line4=""
-  fi
-fi
+width, sep, line3, line4 = int(sys.argv[1]), sys.argv[2], sys.argv[3], sys.argv[4]
 
-# Print only non-empty lines, so 3 and 4 collapse away instead of leaving gaps
+def vis(s):
+    # Colour codes are still in backslash-escape form here (rendered later by
+    # printf %b), so strip the literal \033[..m sequences before measuring.
+    s = re.sub(r'\\033\[[0-9;]*m', '', s)
+    return sum(2 if unicodedata.east_asian_width(c) in ('W', 'F') else 1 for c in s)
+
+def wrap(line):
+    if not line:
+        return []
+    if vis(line) <= width:
+        return [line]
+    rows, cur = [], ''
+    for seg in line.split(sep):
+        cand = cur + sep + seg if cur else seg
+        if cur and vis(cand) > width:
+            rows.append(cur)
+            cur = seg
+        else:
+            cur = cand
+    if cur:
+        rows.append(cur)
+    return rows
+
+if line3 and line4 and vis(line3 + sep + line4) <= width:
+    rows = [line3 + sep + line4]
+else:
+    rows = wrap(line3) + wrap(line4)
+sys.stdout.write('\n'.join(rows))
+PYEOF
+)
+
+# Print only non-empty rows, so lines 3 and 4 collapse away instead of gaps
 out="${line1}\n${line2}"
-[ -n "$line3" ] && out="${out}\n${line3}"
-[ -n "$line4" ] && out="${out}\n${line4}"
+while IFS= read -r row; do
+  [ -n "$row" ] && out="${out}\n${row}"
+done <<< "$layer_rows"
 printf "%b" "$out"

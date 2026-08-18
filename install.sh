@@ -89,7 +89,7 @@ else:
 PYEOF
 
 # --- Optional hooks -----------------------------------------------------------
-# The 💬 word-counter (line 1) and 🤖 agent-tracker (line 3) segments read
+# The 🔤 word-counter (line 1) and 🤖 agent-tracker (line 3) segments read
 # files written by two small hooks. They are opt-in because they touch the
 # hooks section of settings.json.
 if [ "${1:-}" = "--with-hooks" ]; then
@@ -138,7 +138,7 @@ ensure("Stop", "", at)
 with open(settings_path, "w") as f:
     json.dump(d, f, indent=2)
     f.write("\n")
-print("✓ Hooks wired: word counter (💬) + agent tracker (🤖)")
+print("✓ Hooks wired: word counter (🔤) + agent tracker (🤖)")
 PYEOF
 fi
 
