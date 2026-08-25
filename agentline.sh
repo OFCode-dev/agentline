@@ -135,6 +135,13 @@ fields = {
     'used_pct': g('context_window', 'used_percentage'),
     'five_hour': g('rate_limits', 'five_hour', 'used_percentage'),
     'seven_day': g('rate_limits', 'seven_day', 'used_percentage'),
+    # Per-model weekly bucket. Claude Code forwards the whole rate_limits
+    # object verbatim (`...(D.five_hour||D.seven_day)&&{rate_limits:D}`), so
+    # this arrives untouched on accounts that have it and is simply absent on
+    # those that do not. There is no `seven_day_fable` key in any shipped
+    # version: `seven_day_opus` is the premium-model bucket, a legacy name
+    # kept across the model lineup, and it is where Fable usage lands.
+    'seven_day_top': g('rate_limits', 'seven_day_opus', 'used_percentage'),
     'five_hour_reset': g('rate_limits', 'five_hour', 'resets_at'),
     'seven_day_reset': g('rate_limits', 'seven_day', 'resets_at'),
     'effort_raw': g('effort', 'level'),
@@ -587,10 +594,25 @@ if [ -n "$five_hour" ]; then
   reset_part=""; [ -n "$five_hour_reset_fmt" ] && reset_part="${DIM}↻${five_hour_reset_fmt}${RESET}"
   line1="${line1:+${line1}${P}}${c}S:$(printf '%.0f' $five_hour)%${RESET}${reset_part:+ }${reset_part}"
 fi
+# Weekly limits. The premium-model bucket rides inside the W segment as an
+# orange `F:` field, between the account-wide percentage and the reset marker,
+# so the reset date stays at the end where it reads as belonging to both. It
+# is its own colour on purpose: the 70/90 thresholds answer "how close am I to
+# the wall", while this answers "how much of that is the expensive model" —
+# a different question, so it does not share W's colour. Either half may be
+# missing; the segment renders whichever exist and disappears when neither do.
+week_body=""
 if [ -n "$seven_day" ]; then
   c=$(color_pct "$seven_day" 90 70)
+  week_body="${c}W:$(printf '%.0f' $seven_day)%${RESET}"
+fi
+case "$seven_day_top" in
+  ''|*[!0-9.]*) ;;
+  *) week_body="${week_body:+${week_body} }${ORANGE}F:$(printf '%.0f' "$seven_day_top")%${RESET}" ;;
+esac
+if [ -n "$week_body" ]; then
   reset_part=""; [ -n "$seven_day_reset_fmt" ] && reset_part="${DIM}↻${seven_day_reset_fmt}${RESET}"
-  line1="${line1:+${line1}${P}}${c}W:$(printf '%.0f' $seven_day)%${RESET}${reset_part:+ }${reset_part}"
+  line1="${line1:+${line1}${P}}${week_body}${reset_part:+ }${reset_part}"
 fi
 [ -n "$cost_fmt" ]       && line1="${line1:+${line1}${P}}💰 \$${cost_fmt}"
 [ -n "$duration_fmt" ]   && line1="${line1:+${line1}${P}}⏱️  ${duration_fmt}"

@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Weekly premium-model usage as an orange `F:` field inside the `W:` segment
+  (`W:28% F:12% ↻29/8`), read from `rate_limits.seven_day_opus`. Claude Code
+  forwards the whole rate-limits object verbatim, so the field appears on
+  accounts that have that bucket and is silently absent on those that do not.
+  Note there is no `seven_day_fable` key in any shipped version —
+  `seven_day_opus` is the premium bucket, a legacy name kept across the model
+  lineup. Non-numeric values are ignored rather than passed to `printf`.
+
 - Live clock: the `HH:MM:SS` segment on line 2 now ticks every second instead
   of freezing between conversation events. `install.sh` sets
   `statusLine.refreshInterval` to 1 in `settings.json` (an interval you already

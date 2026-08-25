@@ -66,7 +66,7 @@ Every `│`-separated segment below is independent: when its value cannot be mea
 | `🟠high` | Reasoning effort level | `🟢low` dim · `🟡med` cyan · `🟠high` orange · `🔴xhigh` red · `ultracode` bold white on a violet gradient · `max` static rainbow, both mirroring the `/effort` picker's styling. The scale runs low < medium < high < xhigh < max, with ultracode as a side mode (xhigh + workflows). Unknown values render as `⚙️ <level>`. Hidden when the payload has no effort. |
 | `📊 42%` | Context window used | Green below 60 %, yellow from 60 %, red from 80 % — and at 80 % the icon swaps to `⚠️` as a deliberate "wrap up or compact" signal. |
 | `S:31% ↻2h49m` | 5-hour rate limit | Percentage used: green below 70 %, yellow from 70 %, red from 90 %. `↻` shows the time left until the window resets (`2h49m`), dim; omitted when no reset timestamp is available. |
-| `W:58% ↻24/8` | 7-day rate limit | Same color thresholds (70/90). `↻` shows the reset **date** as day/month, dim. |
+| `W:58% F:12% ↻24/8` | 7-day rate limit | `W:` is the account-wide weekly percentage, same color thresholds as `S:` (70/90). `F:` is the **premium-model** share of that week — Fable/Opus — in orange, read from `rate_limits.seven_day_opus`. It carries its own color on purpose: `W` answers "how close am I to the wall", `F` answers "how much of that is the expensive model". Either half is omitted when the payload lacks it, and the whole segment disappears when both are missing. `↻` shows the reset **date** as day/month, dim. |
 | `💰 $12.47` | Session cost | USD, two decimals. Hidden when the payload carries no cost. |
 | `⏱️ 3h42m` | Session duration | `XhYm`, or `Ym` under an hour. |
 | `📥 8.4m` | Input tokens | Abbreviated: `746`, `126.5k`, `8.4m`. |
