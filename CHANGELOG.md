@@ -1,5 +1,38 @@
 # Changelog
 
+## Unreleased
+
+- Live clock: the `HH:MM:SS` segment on line 2 now ticks every second instead
+  of freezing between conversation events. `install.sh` sets
+  `statusLine.refreshInterval` to 1 in `settings.json` (an interval you already
+  chose is left alone), and re-running the installer adds it to an existing
+  install.
+- Per-session render cache makes that affordable. The finished line is stored
+  with the clock as a placeholder; a tick with an unchanged payload and a cache
+  younger than `AGENTLINE_CACHE_TTL` (default 5 s) only stamps in the current
+  time — no `python3`, no host probes, and no `date` at all on bash ≥ 5.0.
+  Full render ≈ 0.5 s, cached tick ≈ 0 s. Any payload change invalidates the
+  cache immediately, so no segment is ever shown stale across a state change.
+- Host probes are throttled independently of the render cache, via a new
+  `AGENTLINE_PROBE_TTL` (default 15 s). The render cache is invalidated by any
+  payload change, which happens constantly during a turn, so on its own it
+  still let `top -bn1`, `df`, `ss`, `crontab`, `who` and a `systemctl
+  is-active` per unit run up to once a second — most of a render's cost, spent
+  on numbers that barely move. CPU, RAM, disk, ports, services, MCP and git now
+  survive those invalidations: a render that misses the render cache but hits
+  the probe cache costs ~0.11 s instead of ~0.5 s. The cwd is part of the
+  validity check, so changing directory re-probes git at once; the live
+  subagent list is never throttled.
+- New `AGENTLINE_CACHE_TTL` variable to trade render freshness against CPU.
+- The render cache lives in a per-user `0700` directory
+  (`${TMPDIR:-/tmp}/agentline-<euid>/`), created atomically with `mkdir -m 700`
+  and re-verified on every render as a non-symlink directory owned by the
+  current user. A predictable path directly in a shared `/tmp` would let a
+  co-tenant pre-plant a symlink and redirect the write, and would leave the
+  cached payload world-readable. If the directory cannot be trusted, caching
+  is disabled rather than written unsafely — the bar still renders, it just
+  stops taking the fast path.
+
 ## 1.0.0 — 2026-08-18
 
 First public release.

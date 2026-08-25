@@ -87,7 +87,7 @@ Every `│`-separated segment below is independent: when its value cannot be mea
 | `🏷️ session-name` | Named session | Truncated at 30 chars; hidden for unnamed sessions. |
 | `🤖 o****r@g***l.com` | Active Claude account | Always masked before display (first/last characters kept, middle starred). Taken from the payload when present, otherwise from `claude auth status` cached for 60 s — account switches appear within a minute. Hidden when neither source yields an address. |
 | `19/08/2026 Wed` | Date | `dd/mm/yyyy Day`, dim; the day abbreviation is pinned to English regardless of host locale. |
-| `01:39:24` | Clock | `HH:MM:SS`, cyan. System timezone by default; pin with `AGENTLINE_TZ` (e.g. home time on a UTC server). |
+| `01:39:24` | Clock | `HH:MM:SS`, cyan, and it **ticks live** — `install.sh` sets `statusLine.refreshInterval` to 1 s, and agentline serves those ticks from a render cache so a second costs no subprocesses. System timezone by default; pin with `AGENTLINE_TZ` (e.g. home time on a UTC server). |
 
 ### Line 3 — Claude layer
 
@@ -129,6 +129,8 @@ Everything is optional — agentline works with zero configuration.
 | `AGENTLINE_SERVICES` | `~/.claude/agentline-services.conf` | Path to the service list |
 | `AGENTLINE_WIDTH` | `120` | Column budget for merging and wrapping lines 3 + 4 |
 | `AGENTLINE_TZ` | system timezone | Pin the clock, e.g. `Europe/Istanbul` on a UTC server |
+| `AGENTLINE_CACHE_TTL` | `5` | Seconds a cached render may serve clock ticks before the line is rebuilt |
+| `AGENTLINE_PROBE_TTL` | `15` | Seconds the host layer (CPU, RAM, disk, ports, services, MCP, git) may be reused. Independent of the render cache, and unaffected by payload changes — see below |
 
 Set them in the `env` block of `~/.claude/settings.json` so Claude Code passes them to every render:
 
@@ -155,14 +157,23 @@ Copy `agentline.sh` anywhere and point `~/.claude/settings.json` at it:
 {
   "statusLine": {
     "type": "command",
-    "command": "/path/to/agentline.sh"
+    "command": "/path/to/agentline.sh",
+    "refreshInterval": 1
   }
 }
 ```
 
+`refreshInterval` is what keeps the clock alive. Without it Claude Code only re-renders the status line when the conversation changes, so the seconds freeze between messages; with it the line is redrawn every second.
+
 ## How it works
 
 Claude Code invokes the `statusLine` command on every render and pipes a JSON payload (model, context window, rate limits, cost, session, workspace) to stdin. agentline extracts every field in a single `python3` pass, probes the host with standard tools (`top`, `df`, `who`, `ss`/`lsof`, `systemctl`, `crontab`), assembles up to four ANSI-colored lines, and prints them. One pass, no daemons, and no network requests of its own. Segments that cannot be measured on the current platform vanish instead of erroring — the same file runs unmodified on macOS and Linux.
+
+Two caches keep that affordable, because they answer different questions.
+
+The **render cache** holds the finished line, and is invalidated by any change to the payload — which happens constantly during a turn. The **probe cache** holds the host layer (CPU, RAM, disk, ports, services, MCP, git) and deliberately survives payload changes, because a `top` reading does not stop being true just because the token count moved. Without that split, a busy turn would re-run `top -bn1`, `df`, `ss`, `crontab`, `who` and a `systemctl is-active` per unit once a second, which is most of a render's cost spent on numbers that barely move. With it, a render that misses the render cache but hits the probe cache costs ~0.11 s instead of ~0.5 s. The working directory is part of the probe cache's validity check, so changing directory re-probes git immediately rather than showing the previous repo's branch; the live subagent list is never throttled.
+
+Once a second is far too often to pay for a full render, so the finished line is cached per session with the clock left as a placeholder. A tick whose payload is byte-identical and whose cache is younger than `AGENTLINE_CACHE_TTL` just stamps the current time into the cached line and prints — no `python3`, no probes, no `date` at all on bash ≥ 5.0, which uses the built-in `$EPOCHSECONDS` and `printf '%(%H:%M:%S)T'`. Any real event changes the payload and invalidates the cache on the spot, so a ticking clock never means stale numbers next to it.
 
 ## Requirements
 

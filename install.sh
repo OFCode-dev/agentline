@@ -63,6 +63,11 @@ fi
 # Point settings.json at the installed script. An existing agentline command is
 # left verbatim (it may carry an interpreter prefix or a custom path); an empty
 # or pre-rename statusline command is (re)pointed at $DEST.
+#
+# statusLine.refreshInterval is what makes the clock tick: without it Claude
+# Code only re-renders the status line on conversation events, so the seconds
+# freeze between messages. 1s is affordable because agentline serves those
+# ticks from its render cache. An interval the user already chose is honoured.
 python3 - "$DEST" "$SETTINGS" <<'PYEOF'
 import json, sys
 dest, settings_path = sys.argv[1], sys.argv[2]
@@ -71,15 +76,30 @@ try:
         d = json.load(f)
 except Exception:
     d = {}
-existing = (d.get("statusLine") or {}).get("command", "")
-if not existing or "statusline" in existing:
-    d["statusLine"] = {"type": "command", "command": dest}
+
+def save():
     with open(settings_path, "w") as f:
         json.dump(d, f, indent=2)
         f.write("\n")
+
+def ensure_refresh():
+    sl = d.get("statusLine") or {}
+    if sl.get("refreshInterval") is not None:
+        return f"• statusLine.refreshInterval left as-is: {sl['refreshInterval']}s"
+    sl["refreshInterval"] = 1
+    d["statusLine"] = sl
+    save()
+    return "✓ statusLine.refreshInterval set to 1s (live clock)"
+
+existing = (d.get("statusLine") or {}).get("command", "")
+if not existing or "statusline" in existing:
+    d["statusLine"] = {**(d.get("statusLine") or {}), "type": "command", "command": dest}
+    save()
     print(f"✓ settings.json statusLine set to {dest}")
+    print(f"  {ensure_refresh()}")
 elif dest in existing:
     print(f"• settings.json left as-is: {existing}")
+    print(f"  {ensure_refresh()}")
 else:
     # The configured command does not reference the path just installed to
     # (e.g. it points at a wrapper or a non-.sh symlink). Say so instead of

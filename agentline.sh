@@ -8,6 +8,93 @@
 # instead of erroring.
 input=$(cat)
 
+# === Live clock fast path ===
+# Claude Code re-invokes this script every `statusLine.refreshInterval`
+# seconds (install.sh sets 1), which is what makes the HH:MM:SS clock on
+# line 2 tick in real time instead of freezing between conversation events.
+# A full render costs ~20 subprocesses — far too much to pay once a second —
+# so the finished output is cached with the clock replaced by a placeholder.
+# While the payload is byte-identical and the cache is younger than
+# $AGENTLINE_CACHE_TTL, a tick only substitutes the current time and prints:
+# zero subprocesses on bash >= 5.0. Any real event (token counts, cost, cwd,
+# model) changes the payload and invalidates the cache on the spot, so no
+# segment is ever shown stale across a state change.
+CLOCK_TOKEN='@@AGENTLINE_CLOCK@@'
+CACHE_TTL="${AGENTLINE_CACHE_TTL:-5}"
+
+# Display timezone: system-local by default. Set $AGENTLINE_TZ (for example
+# "Europe/Istanbul") to pin the clock to home time on remote UTC servers.
+# Resolved before the fast path so cached ticks honour it too.
+[ -n "$AGENTLINE_TZ" ] && export TZ="$AGENTLINE_TZ"
+
+# bash >= 5.0 has $EPOCHSECONDS and printf's %(fmt)T, so a tick needs no
+# `date` at all. Older bash (macOS ships 3.2) pays two forks instead — still
+# an order of magnitude cheaper than a full render.
+if [ "${BASH_VERSINFO[0]:-0}" -ge 5 ]; then _fast_time=1; else _fast_time=0; fi
+_tick_now() {  # -> $_now_epoch, $_now_clock, without forking where possible
+  if [ "$_fast_time" = 1 ]; then
+    _now_epoch=$EPOCHSECONDS
+    printf -v _now_clock '%(%H:%M:%S)T' -1
+  else
+    _now_epoch=$(date +%s)
+    _now_clock=$(date +%H:%M:%S)
+  fi
+}
+
+# The cache is keyed by session so concurrent Claude Code windows never trade
+# renders. The id is pulled straight out of the raw JSON with parameter
+# expansion — the python parse below has not run yet, and forking for it here
+# would defeat the point.
+_sid=default
+case "$input" in
+  *'"session_id"'*)
+    _sid="${input#*\"session_id\"}"
+    _sid="${_sid#*\"}"
+    _sid="${_sid%%\"*}"
+    case "$_sid" in ''|*[!a-zA-Z0-9_-]*) _sid=default ;; esac
+    ;;
+esac
+# The cache lives in a per-user, owner-only directory, never directly in the
+# shared temp dir: a predictable path under a world-writable /tmp lets a
+# co-tenant pre-plant a symlink and redirect the writes below onto any file
+# this user can write, and it would also leave the payload (the full session
+# JSON) world-readable under the usual 022 umask. The directory is created
+# 0700 atomically on the slow path and re-verified here on every render — a
+# real directory, not a symlink, owned by us. Anything else disables caching
+# rather than writing somewhere untrusted. $EUID is a bash builtin, so this
+# costs no fork.
+# `mkdir -m 700` sets the mode atomically at creation — a mkdir/chmod pair
+# would leave a window where the directory is world-writable. It runs only
+# when the directory is missing (once per boot), so the steady-state fast path
+# stays fork-free. Not -p: the parent temp dir already exists, and refusing to
+# create intermediate levels keeps the write path shallow and predictable.
+CACHE_DIR="${TMPDIR:-/tmp}/agentline-${EUID:-0}"
+CACHE_BASE=""
+[ -d "$CACHE_DIR" ] || mkdir -m 700 "$CACHE_DIR" 2>/dev/null
+if [ -d "$CACHE_DIR" ] && [ ! -L "$CACHE_DIR" ] && [ -O "$CACHE_DIR" ]; then
+  CACHE_BASE="${CACHE_DIR}/render_${_sid}"
+fi
+
+_tick_now
+_prev_payload=""
+if [ -n "$CACHE_BASE" ] && [ -f "${CACHE_BASE}.payload" ]; then
+  _prev_payload=$(<"${CACHE_BASE}.payload")
+fi
+if [ -n "$_prev_payload" ] && [ "$_prev_payload" = "$input" ] && [ -f "${CACHE_BASE}.render" ]; then
+  _cached=$(<"${CACHE_BASE}.render")
+  _cached_ts="${_cached%%$'\n'*}"
+  _cached_body="${_cached#*$'\n'}"
+  case "$_cached_ts" in
+    ''|*[!0-9]*) ;;
+    *)
+      if [ -n "$_cached_body" ] && [ $(( _now_epoch - _cached_ts )) -lt "$CACHE_TTL" ]; then
+        printf "%b" "${_cached_body//$CLOCK_TOKEN/$_now_clock}"
+        exit 0
+      fi
+      ;;
+  esac
+fi
+
 # === JSON Parsing ===
 # One python3 pass extracts every payload field as shell-quoted assignments;
 # the former per-field helper spawned 20+ interpreters per render, and this is
@@ -75,9 +162,7 @@ PYEOF
 # platform once here; never probe per call site.
 OS="$(uname -s)"
 
-# Display timezone: system-local by default. Set $AGENTLINE_TZ (for example
-# "Europe/Istanbul") to pin the clock to home time on remote UTC servers.
-[ -n "$AGENTLINE_TZ" ] && export TZ="$AGENTLINE_TZ"
+# ($AGENTLINE_TZ is applied up in the fast path, before any clock is read.)
 
 # Epoch -> formatted date. GNU date wants `-d @<ts>`, BSD date wants `-r <ts>`.
 # The flavour is decided once, at definition time, not on every invocation.
@@ -94,7 +179,38 @@ else
   revcat() { tail -r "$1" 2>/dev/null; }
 fi
 
+# === Host probe cache ===
+# The clock ticks once a second, but CPU, RAM, disk, ports, services, MCP and
+# git do not change at that rate — and re-running `top -bn1`, `df`, `ss`,
+# `crontab`, `who` and a `systemctl is-active` per unit once a second is most
+# of a full render's cost, spent on numbers that barely move. These probes
+# therefore get their own, longer TTL, kept deliberately separate from the
+# render cache: the render cache is invalidated by any payload change, which
+# happens constantly during a turn, whereas host readings stay perfectly valid
+# across one. The cwd is part of the validity check, so changing directory
+# re-probes git immediately instead of showing the previous repo's branch.
+# `active_agents` is excluded on purpose — it is one awk over a small file, and
+# the live subagent list is the thing worth watching in real time.
+PROBE_TTL="${AGENTLINE_PROBE_TTL:-15}"
+PROBE_VARS="active_mcps cpu_usage cron_count dev_ports disk_pct git_branch git_repo mem_used_gb ssh_count svc_panel"
+_probes_fresh=0
+if [ -n "$CACHE_BASE" ] && [ -f "${CACHE_BASE}.probes" ]; then
+  _pc=$(<"${CACHE_BASE}.probes")
+  _pc_ts="${_pc%%$'\n'*}";   _pc_rest="${_pc#*$'\n'}"
+  _pc_cwd="${_pc_rest%%$'\n'*}"; _pc_body="${_pc_rest#*$'\n'}"
+  case "$_pc_ts" in
+    ''|*[!0-9]*) ;;
+    *)
+      if [ "$_pc_cwd" = "$cwd" ] && [ $(( _now_epoch - _pc_ts )) -lt "$PROBE_TTL" ]; then
+        eval "$_pc_body"
+        _probes_fresh=1
+      fi
+      ;;
+  esac
+fi
+
 # === System Info ===
+if [ "$_probes_fresh" != 1 ]; then
 # CPU: BSD top has no `-b`, and Linux top has no "CPU usage:" idle line.
 cpu_usage=""
 if [ "$OS" = "Darwin" ]; then
@@ -178,7 +294,9 @@ except Exception:
 PYEOF
 )
 
-# Active agents (from hook-written file)
+fi  # end of throttled host probes (part 1)
+
+# Active agents (from hook-written file) — never throttled, see PROBE_VARS.
 active_agents=""
 if [ -f /tmp/claude_agents.txt ]; then
   now=$(date +%s)
@@ -199,6 +317,8 @@ case "$cwd" in
   "$HOME"/*) folder="~${cwd#"$HOME"}" ;;
   *)         folder="$cwd" ;;
 esac
+
+if [ "$_probes_fresh" != 1 ]; then
 
 # SSH sessions. Remote logins are `pts/N` on Linux but `ttysNNN` on macOS, which
 # is indistinguishable from a local terminal by device name alone. Both platforms
@@ -264,6 +384,22 @@ if command -v systemctl >/dev/null 2>&1 && [ -r "$SVC_CONFIG" ]; then
     fi
     svc_panel="${svc_panel:+${svc_panel} \033[2;37m·\033[0m }${entry}"
   done < "$SVC_CONFIG"
+fi
+
+fi  # end of throttled host probes (part 2)
+
+# Persist the probe results for the next $PROBE_TTL seconds. `printf -v %q` is
+# a builtin, so quoting the values costs no fork, and it round-trips the ANSI
+# escapes in $svc_panel through eval intact. Skipped when the probes came from
+# the cache (nothing new to store) or when the cache directory failed its
+# ownership check at stage 0.
+if [ "$_probes_fresh" != 1 ] && [ -n "$CACHE_BASE" ]; then
+  _pc_out=""
+  for _v in $PROBE_VARS; do
+    printf -v _q '%q' "${!_v}"
+    _pc_out="${_pc_out}${_v}=${_q}"$'\n'
+  done
+  printf '%s\n%s\n%s' "$_now_epoch" "$cwd" "$_pc_out" > "${CACHE_BASE}.probes" 2>/dev/null
 fi
 
 # === Colors ===
@@ -411,7 +547,9 @@ fi
 
 # LC_ALL=C pins the day abbreviation to English regardless of the host locale.
 date_str=$(LC_ALL=C date "+%d/%m/%Y %a")
-time_str=$(date "+%H:%M:%S")
+# The clock is rendered as a placeholder so the cached line can be re-stamped
+# with the live time on every tick; it is substituted just before printing.
+time_str="$CLOCK_TOKEN"
 
 # Word counts from hook
 words_in_w=""
@@ -613,4 +751,21 @@ out="${line1}\n${line2}"
 while IFS= read -r row; do
   [ -n "$row" ] && out="${out}\n${row}"
 done <<< "$layer_rows"
-printf "%b" "$out"
+
+# Cache the finished render (clock still a placeholder) for the ticks that
+# follow. $out normally holds no real newline — colour breaks are literal \n
+# rendered by printf %b — but a payload value could smuggle one in and would
+# then collide with the epoch/body split, so such a render is simply not
+# cached. The timestamp is taken now, not at script start, so the TTL measures
+# from when the data was finished and the printed clock is not a render late.
+_tick_now
+case "$out" in
+  *$'\n'*) ;;
+  *)
+    if [ -n "$CACHE_BASE" ]; then
+      printf '%s' "$input" > "${CACHE_BASE}.payload" 2>/dev/null
+      printf '%s\n%s' "$_now_epoch" "$out" > "${CACHE_BASE}.render" 2>/dev/null
+    fi
+    ;;
+esac
+printf "%b" "${out//$CLOCK_TOKEN/$_now_clock}"
