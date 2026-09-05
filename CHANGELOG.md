@@ -51,10 +51,18 @@
 
 - `max` and ultracode (`xhigh` entered via the ultra-effort mode) now animate
   in the statusline instead of rendering one frozen gradient frame: each tick
-  rotates the word one step around a closed color wheel (rainbow for `max`,
-  the violet gradient folded back on itself for ultracode), using the same
-  zero-fork clock-tick substitution as the `HH:MM:SS` segment — no extra
-  `python3` or subprocess cost on the cached fast path.
+  turns the word one step around a closed color wheel, through the same
+  zero-fork clock-tick substitution as the `HH:MM:SS` segment — no `python3`,
+  no subprocess, ~0.5 ms of bash arithmetic on a one-second tick.
+  Only one frame a second ever reaches the terminal, so the wheels are cut
+  finer than the words need and the letters sample them at a stride: the
+  spread across the word is unchanged while a tick moves the pattern a
+  fraction of a letter. Both are generated in OkLCh at fixed lightness rather
+  than stepped through RGB corners, which keeps hue turning without the
+  brightness lurching — a naive full-saturation wheel swings 12.9x in
+  relative luminance between yellow and blue, these hold to 1.16x. ultracode
+  keeps the picker's bold-white-on-violet treatment; violet as a foreground
+  alone sits too close to a dark terminal ground to read as lit.
 
 ## 1.0.0 — 2026-08-18
 

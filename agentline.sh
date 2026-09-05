@@ -83,30 +83,58 @@ fi
 # (the violet one folds back on itself) so the ripple has no visible seam.
 # Defined this early, ahead of the fast-path exit below, so a cache hit can
 # advance the animation without paying for a full render.
+#
+# Only one frame a second ever reaches the terminal, so what reads as choppy
+# is not the frame rate but the size of each step. Both wheels are therefore
+# finer than the word needs, and the letters sample them at a stride: the
+# spread across the word stays what it was while a tick moves the pattern a
+# fraction of a letter. The wheels are generated in OkLCh at a fixed
+# lightness rather than stepped through RGB corners, so hue turns without the
+# brightness lurching (a naive full-saturation wheel swings 12.9x in relative
+# luminance between yellow and blue; this one, 1.16x). Lightness 0.80 and
+# chroma <= 0.155 are the middle of the band the previous static gradient
+# already used, so the palette is the same family, just continuous.
 _RAINBOW_WHEEL=(
-  "255 0 0" "255 127 0" "255 255 0" "127 255 0" "0 255 0" "0 255 127"
-  "0 255 255" "0 127 255" "0 0 255" "127 0 255" "255 0 255" "255 0 127"
+  "255 154 186" "255 157 172" "255 159 159" "255 161 145" "255 162 130" "255 164 112"
+  "255 166 87" "252 170 56" "241 177 43" "228 184 38" "213 191 44" "196 198 58"
+  "177 204 76" "156 209 95" "133 214 115" "106 217 135" "75 220 155" "26 221 174"
+  "0 219 193" "0 217 209" "0 215 224" "0 213 239" "0 210 254" "87 204 255"
+  "117 199 255" "136 195 255" "151 191 255" "164 187 255" "176 183 255" "188 178 255"
+  "202 172 255" "217 164 255" "233 155 251" "245 151 237" "255 148 221" "255 151 202"
 )
+# The shipped endpoints, rgb(62,22,118) -> rgb(140,80,240), interpolated in
+# OkLab and folded back on itself: 17 out, 15 home, a seamless 32-step loop.
 _VIOLET_WHEEL=(
-  "62 22 118" "72 29 133" "82 37 149" "91 44 164" "101 51 179" "111 58 195"
-  "121 66 210" "130 73 225" "140 80 240" "130 73 225" "121 66 210" "111 58 195"
-  "101 51 179" "91 44 164" "82 37 149" "72 29 133"
+  "62 22 118" "67 26 125" "71 29 132" "76 33 140" "80 36 147" "85 40 154"
+  "90 43 162" "95 47 169" "100 50 177" "105 54 185" "109 58 192" "114 61 200"
+  "119 65 208" "125 69 216" "130 72 224" "135 76 232" "140 80 240" "135 76 232"
+  "130 72 224" "125 69 216" "119 65 208" "114 61 200" "109 58 192" "105 54 185"
+  "100 50 177" "95 47 169" "90 43 162" "85 40 154" "80 36 147" "76 33 140"
+  "71 29 132" "67 26 125"
 )
 # -> $_anim_out. $1 is the word to color, $2 the wheel array's name (bash 3.2
 # has no namerefs, so the wheel is selected once here rather than passed in).
 _anim_frame() {
-  local word="$1" n i idx rgb frame=""
+  local word="$1" n step i idx rgb frame=""
   case "$2" in
-    rainbow) n=${#_RAINBOW_WHEEL[@]} ;;
-    violet)  n=${#_VIOLET_WHEEL[@]} ;;
+    # Three letters a third of the wheel apart, turning 10 degrees a tick.
+    rainbow) n=${#_RAINBOW_WHEEL[@]}; step=12 ;;
+    # Nine letters across half the fold — the dark-to-light sweep the static
+    # gradient had — carried half a letter a tick.
+    violet)  n=${#_VIOLET_WHEEL[@]};  step=2  ;;
   esac
   for (( i=0; i<${#word}; i++ )); do
-    idx=$(( (_now_epoch + i) % n ))
+    idx=$(( (_now_epoch + i * step) % n ))
     case "$2" in
-      rainbow) rgb="${_RAINBOW_WHEEL[$idx]}" ;;
-      violet)  rgb="${_VIOLET_WHEEL[$idx]}" ;;
+      rainbow)
+        rgb="${_RAINBOW_WHEEL[$idx]}"
+        frame="${frame}\033[1;38;2;${rgb// /;}m${word:$i:1}" ;;
+      # Bold white on the violet, as the picker draws it: violet as foreground
+      # alone sits too close to a dark terminal ground to read as lit.
+      violet)
+        rgb="${_VIOLET_WHEEL[$idx]}"
+        frame="${frame}\033[1;38;2;255;255;255;48;2;${rgb// /;}m${word:$i:1}" ;;
     esac
-    frame="${frame}\033[1;38;2;${rgb// /;}m${word:$i:1}"
   done
   _anim_out="${frame}\033[0m"
 }
@@ -506,7 +534,7 @@ case "$effort_raw" in
     fi
     if [ -n "$ultracode" ]; then
       # Mirrors the /effort picker's violet-ripple, rotated one wheel step
-      # per tick by _anim_frame/_RAINBOW_WHEEL above instead of a single
+      # per tick by _anim_frame/_VIOLET_WHEEL above instead of a single
       # frozen frame. Token substituted at print time, same as $CLOCK_TOKEN.
       effort="@@AGENTLINE_ANIM_ULTRA@@"
     else
