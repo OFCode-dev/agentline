@@ -84,23 +84,30 @@ fi
 # Defined this early, ahead of the fast-path exit below, so a cache hit can
 # advance the animation without paying for a full render.
 #
-# Only one frame a second ever reaches the terminal, so what reads as choppy
-# is not the frame rate but the size of each step. Both wheels are therefore
-# finer than the word needs, and the letters sample them at a stride: the
-# spread across the word stays what it was while a tick moves the pattern a
-# fraction of a letter. The wheels are generated in OkLCh at a fixed
-# lightness rather than stepped through RGB corners, so hue turns without the
-# brightness lurching (a naive full-saturation wheel swings 12.9x in relative
-# luminance between yellow and blue; this one, 1.16x). Lightness 0.80 and
-# chroma <= 0.155 are the middle of the band the previous static gradient
-# already used, so the palette is the same family, just continuous.
+# A terminal has no position between one cell and the next, so a step of less
+# than a whole letter cannot read as movement: it only re-tints every letter
+# where it stands, which the eye takes for flicker. A tick therefore advances
+# the pattern exactly one letter — the wheel stride and the letter stride are
+# the same number — so each letter inherits the colour its neighbour just had
+# and the eye reads the whole pattern as travelling.
+#
+# That also buys the palette its saturation back. A chase only permutes a
+# fixed set of colours, so the bar's total brightness is identical frame to
+# frame and the wheel can be as chromatic as the gamut allows; it was the
+# re-tinting, not the vividness, that strobed. Generated in OkLCh at
+# lightness 0.70, taking the most chroma each hue can hold there.
+#
+# 37 entries, not 36: three letters a third of the wheel apart come back in
+# three ticks one step short of where they started, so the hues precess a
+# full turn every ~111 s instead of cycling the same three colours forever.
 _RAINBOW_WHEEL=(
-  "255 154 186" "255 157 172" "255 159 159" "255 161 145" "255 162 130" "255 164 112"
-  "255 166 87" "252 170 56" "241 177 43" "228 184 38" "213 191 44" "196 198 58"
-  "177 204 76" "156 209 95" "133 214 115" "106 217 135" "75 220 155" "26 221 174"
-  "0 219 193" "0 217 209" "0 215 224" "0 213 239" "0 210 254" "87 204 255"
-  "117 199 255" "136 195 255" "151 191 255" "164 187 255" "176 183 255" "188 178 255"
-  "202 172 255" "217 164 255" "233 155 251" "245 151 237" "255 148 221" "255 151 202"
+  "255 87 153" "255 92 131" "255 97 108" "255 100 83" "255 103 48" "248 113 0"
+  "232 127 0" "220 137 0" "208 145 0" "196 151 0" "184 158 0" "170 164 0"
+  "153 170 0" "129 177 0" "89 185 0" "0 191 61" "0 188 111" "0 186 136"
+  "0 184 154" "0 183 168" "0 181 181" "0 179 193" "0 177 205" "0 175 218"
+  "0 172 234" "0 167 255" "75 161 255" "104 155 255" "126 149 255" "144 142 255"
+  "162 134 255" "181 124 255" "202 109 255" "228 79 255" "255 23 244" "255 63 207"
+  "255 78 178"
 )
 # The shipped endpoints, rgb(62,22,118) -> rgb(140,80,240), interpolated in
 # OkLab and folded back on itself: 17 out, 15 home, a seamless 32-step loop.
@@ -117,14 +124,16 @@ _VIOLET_WHEEL=(
 _anim_frame() {
   local word="$1" n step i idx rgb frame=""
   case "$2" in
-    # Three letters a third of the wheel apart, turning 10 degrees a tick.
+    # Three letters a third of the wheel apart; the set chases round in 3 s.
     rainbow) n=${#_RAINBOW_WHEEL[@]}; step=12 ;;
     # Nine letters across half the fold — the dark-to-light sweep the static
-    # gradient had — carried half a letter a tick.
+    # gradient had — with the crest travelling a letter a tick, home in 16 s.
     violet)  n=${#_VIOLET_WHEEL[@]};  step=2  ;;
   esac
   for (( i=0; i<${#word}; i++ )); do
-    idx=$(( (_now_epoch + i * step) % n ))
+    # Letter i now shows what letter i+1 showed a tick ago: one letter of
+    # travel per tick, because the epoch and the letter index share a stride.
+    idx=$(( ((_now_epoch + i) * step) % n ))
     case "$2" in
       rainbow)
         rgb="${_RAINBOW_WHEEL[$idx]}"

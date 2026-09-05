@@ -54,13 +54,18 @@
   turns the word one step around a closed color wheel, through the same
   zero-fork clock-tick substitution as the `HH:MM:SS` segment — no `python3`,
   no subprocess, ~0.5 ms of bash arithmetic on a one-second tick.
-  Only one frame a second ever reaches the terminal, so the wheels are cut
-  finer than the words need and the letters sample them at a stride: the
-  spread across the word is unchanged while a tick moves the pattern a
-  fraction of a letter. Both are generated in OkLCh at fixed lightness rather
-  than stepped through RGB corners, which keeps hue turning without the
-  brightness lurching — a naive full-saturation wheel swings 12.9x in
-  relative luminance between yellow and blue, these hold to 1.16x. ultracode
+  A terminal has no position between one cell and the next, so a step of less
+  than a whole letter cannot read as movement — it only re-tints each letter
+  where it stands, which the eye takes for flicker. A tick therefore advances
+  the pattern exactly one letter: each letter inherits the colour its
+  neighbour just had, and the eye reads the pattern as travelling. That also
+  buys the saturation back, since a chase only permutes a fixed set of
+  colours and the bar's total brightness is identical frame to frame — it was
+  the re-tinting, not the vividness, that strobed. The rainbow is generated
+  in OkLCh at lightness 0.70 with the most chroma each hue can hold there,
+  and has 37 entries rather than 36 so three letters a third of the wheel
+  apart come back one step short every three ticks, precessing a full turn
+  every ~111 s instead of cycling the same three colours forever. ultracode
   keeps the picker's bold-white-on-violet treatment; violet as a foreground
   alone sits too close to a dark terminal ground to read as lit.
 
