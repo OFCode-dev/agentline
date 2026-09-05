@@ -75,6 +75,42 @@ if [ -d "$CACHE_DIR" ] && [ ! -L "$CACHE_DIR" ] && [ -O "$CACHE_DIR" ]; then
   CACHE_BASE="${CACHE_DIR}/render_${_sid}"
 fi
 
+# === Animated effort gradients ===
+# The /effort picker animates "max" and ultracode live; a statusline can't
+# run a render loop, but it is already re-invoked every refreshInterval
+# second for the clock above, so the same zero-fork tick can rotate a fixed
+# color wheel instead of freezing on one frame. Each wheel is a closed loop
+# (the violet one folds back on itself) so the ripple has no visible seam.
+# Defined this early, ahead of the fast-path exit below, so a cache hit can
+# advance the animation without paying for a full render.
+_RAINBOW_WHEEL=(
+  "255 0 0" "255 127 0" "255 255 0" "127 255 0" "0 255 0" "0 255 127"
+  "0 255 255" "0 127 255" "0 0 255" "127 0 255" "255 0 255" "255 0 127"
+)
+_VIOLET_WHEEL=(
+  "62 22 118" "72 29 133" "82 37 149" "91 44 164" "101 51 179" "111 58 195"
+  "121 66 210" "130 73 225" "140 80 240" "130 73 225" "121 66 210" "111 58 195"
+  "101 51 179" "91 44 164" "82 37 149" "72 29 133"
+)
+# -> $_anim_out. $1 is the word to color, $2 the wheel array's name (bash 3.2
+# has no namerefs, so the wheel is selected once here rather than passed in).
+_anim_frame() {
+  local word="$1" n i idx rgb frame=""
+  case "$2" in
+    rainbow) n=${#_RAINBOW_WHEEL[@]} ;;
+    violet)  n=${#_VIOLET_WHEEL[@]} ;;
+  esac
+  for (( i=0; i<${#word}; i++ )); do
+    idx=$(( (_now_epoch + i) % n ))
+    case "$2" in
+      rainbow) rgb="${_RAINBOW_WHEEL[$idx]}" ;;
+      violet)  rgb="${_VIOLET_WHEEL[$idx]}" ;;
+    esac
+    frame="${frame}\033[1;38;2;${rgb// /;}m${word:$i:1}"
+  done
+  _anim_out="${frame}\033[0m"
+}
+
 _tick_now
 _prev_payload=""
 if [ -n "$CACHE_BASE" ] && [ -f "${CACHE_BASE}.payload" ]; then
@@ -88,7 +124,18 @@ if [ -n "$_prev_payload" ] && [ "$_prev_payload" = "$input" ] && [ -f "${CACHE_B
     ''|*[!0-9]*) ;;
     *)
       if [ -n "$_cached_body" ] && [ $(( _now_epoch - _cached_ts )) -lt "$CACHE_TTL" ]; then
-        printf "%b" "${_cached_body//$CLOCK_TOKEN/$_now_clock}"
+        _tick_out="${_cached_body//$CLOCK_TOKEN/$_now_clock}"
+        case "$_tick_out" in
+          *'@@AGENTLINE_ANIM_MAX@@'*)
+            _anim_frame max rainbow
+            _tick_out="${_tick_out//@@AGENTLINE_ANIM_MAX@@/$_anim_out}" ;;
+        esac
+        case "$_tick_out" in
+          *'@@AGENTLINE_ANIM_ULTRA@@'*)
+            _anim_frame ultracode violet
+            _tick_out="${_tick_out//@@AGENTLINE_ANIM_ULTRA@@/$_anim_out}" ;;
+        esac
+        printf "%b" "$_tick_out"
         exit 0
       fi
       ;;
@@ -365,6 +412,7 @@ import sys
 for item in sys.stdin.read().split():
     if item and ':' in item:
         proc, port = item.rsplit(':', 1)
+        proc = proc.strip('()')
         print(f'{proc}({port})', end=' ')
 " | sed 's/ $//')
 
@@ -457,14 +505,15 @@ case "$effort_raw" in
       esac
     fi
     if [ -n "$ultracode" ]; then
-      # Mirrors the /effort picker's violet-ripple: bold white on a violet
-      # gradient, rgb(62,22,118) -> rgb(140,80,240), frozen in space.
-      effort="\033[1;38;2;255;255;255;48;2;62;22;118mu\033[48;2;72;29;133ml\033[48;2;82;37;149mt\033[48;2;91;44;164mr\033[48;2;101;51;179ma\033[48;2;111;58;195mc\033[48;2;121;66;210mo\033[48;2;130;73;225md\033[48;2;140;80;240me${RESET}"
+      # Mirrors the /effort picker's violet-ripple, rotated one wheel step
+      # per tick by _anim_frame/_RAINBOW_WHEEL above instead of a single
+      # frozen frame. Token substituted at print time, same as $CLOCK_TOKEN.
+      effort="@@AGENTLINE_ANIM_ULTRA@@"
     else
       effort="🔴${RED}xhigh${RESET}"
     fi ;;
-  # max mirrors the picker's rainbow-animated, static.
-  max)    effort="\033[1;38;2;255;107;107mm\033[38;2;243;249;157ma\033[38;2;122;162;247mx${RESET}" ;;
+  # max mirrors the picker's rainbow-animated look with a live-ticking wheel.
+  max)    effort="@@AGENTLINE_ANIM_MAX@@" ;;
   *)      [ -n "$effort_raw" ] && effort="⚙️  $effort_raw" ;;
 esac
 
@@ -790,4 +839,15 @@ case "$out" in
     fi
     ;;
 esac
-printf "%b" "${out//$CLOCK_TOKEN/$_now_clock}"
+out="${out//$CLOCK_TOKEN/$_now_clock}"
+case "$out" in
+  *'@@AGENTLINE_ANIM_MAX@@'*)
+    _anim_frame max rainbow
+    out="${out//@@AGENTLINE_ANIM_MAX@@/$_anim_out}" ;;
+esac
+case "$out" in
+  *'@@AGENTLINE_ANIM_ULTRA@@'*)
+    _anim_frame ultracode violet
+    out="${out//@@AGENTLINE_ANIM_ULTRA@@/$_anim_out}" ;;
+esac
+printf "%b" "$out"

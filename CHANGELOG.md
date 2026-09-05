@@ -41,6 +41,21 @@
   is disabled rather than written unsafely — the bar still renders, it just
   stops taking the fast path.
 
+- Fixed: dev-server port entries could render with a stray, unmatched `(`
+  (e.g. `(v1(3002)`). Some processes report their kernel `comm` name already
+  wrapped in parentheses (a real Linux convention, e.g. `(sd-pam)`), and the
+  15-byte `comm` truncation can chop the trailing `)` off a longer one before
+  it ever reaches `ss`. The formatter now strips any leading/trailing
+  parens from the process name before wrapping it in its own `(port)`, so
+  every entry matches the `name(port)` shape.
+
+- `max` and ultracode (`xhigh` entered via the ultra-effort mode) now animate
+  in the statusline instead of rendering one frozen gradient frame: each tick
+  rotates the word one step around a closed color wheel (rainbow for `max`,
+  the violet gradient folded back on itself for ultracode), using the same
+  zero-fork clock-tick substitution as the `HH:MM:SS` segment — no extra
+  `python3` or subprocess cost on the cached fast path.
+
 ## 1.0.0 — 2026-08-18
 
 First public release.
