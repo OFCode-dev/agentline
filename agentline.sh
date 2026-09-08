@@ -220,12 +220,17 @@ fields = {
     'five_hour': g('rate_limits', 'five_hour', 'used_percentage'),
     'seven_day': g('rate_limits', 'seven_day', 'used_percentage'),
     # Per-model weekly bucket. Claude Code forwards the whole rate_limits
-    # object verbatim (`...(D.five_hour||D.seven_day)&&{rate_limits:D}`), so
-    # this arrives untouched on accounts that have it and is simply absent on
-    # those that do not. There is no `seven_day_fable` key in any shipped
-    # version: `seven_day_opus` is the premium-model bucket, a legacy name
-    # kept across the model lineup, and it is where Fable usage lands.
-    'seven_day_top': g('rate_limits', 'seven_day_opus', 'used_percentage'),
+    # object verbatim (`...(D.five_hour||D.seven_day)&&{rate_limits:D}`), but
+    # it builds that object from four response-header buckets only (2.1.x:
+    # five_hour, seven_day, seven_day_overage_included, overage). Its own label
+    # map names `seven_day_overage_included` the "Fable 5 limit" and
+    # `seven_day_opus` the "Opus limit" -- and `seven_day_opus` is not among
+    # the forwarded buckets, so it is kept only as a fallback for other builds.
+    # Accounts whose responses carry neither key can opt into the /usage
+    # endpoint (AGENTLINE_USAGE_API=1, see the weekly segment below).
+    'seven_day_top': (lambda a, b: a if a != '' else b)(
+        g('rate_limits', 'seven_day_overage_included', 'used_percentage'),
+        g('rate_limits', 'seven_day_opus', 'used_percentage')),
     'five_hour_reset': g('rate_limits', 'five_hour', 'resets_at'),
     'seven_day_reset': g('rate_limits', 'seven_day', 'resets_at'),
     'effort_raw': g('effort', 'level'),
@@ -679,6 +684,59 @@ if [ -n "$five_hour" ]; then
   c=$(color_pct "$five_hour" 90 70)
   reset_part=""; [ -n "$five_hour_reset_fmt" ] && reset_part="${DIM}↻${five_hour_reset_fmt}${RESET}"
   line1="${line1:+${line1}${P}}${c}S:$(printf '%.0f' $five_hour)%${RESET}${reset_part:+ }${reset_part}"
+fi
+# === Fable weekly limit — opt-in network source ===
+# When the payload carried no per-model bucket (the normal case on 2.1.x, see
+# the parse block), the only place the Fable share exists is the /usage
+# endpoint, which reports it inside `limits[]` as kind=weekly_scoped with
+# scope.model.display_name=Fable. That is a network call, which this script
+# otherwise never makes, so it is strictly opt-in (AGENTLINE_USAGE_API=1),
+# served from a cache for AGENTLINE_USAGE_TTL seconds (default 300), and any
+# failure -- no credentials, expired token, non-200, malformed JSON -- simply
+# leaves `F:` hidden. The token is read by python straight from
+# ~/.claude/.credentials.json and never appears in argv, env, or output. The
+# cache file lives in the same owner-only directory as the render cache and is
+# skipped entirely when that directory failed its trust check ($CACHE_BASE
+# empty). Empty results are cached too, so a logged-out state does not retry
+# the request on every render.
+if [ -z "$seven_day_top" ] && [ "${AGENTLINE_USAGE_API:-0}" = "1" ] && [ -n "$CACHE_BASE" ]; then
+  usage_cache="${CACHE_DIR}/usage.fable"
+  usage_ttl="${AGENTLINE_USAGE_TTL:-300}"
+  usage_age=999999
+  if [ -f "$usage_cache" ]; then
+    mtime=$(stat -c %Y "$usage_cache" 2>/dev/null || stat -f %m "$usage_cache" 2>/dev/null || echo 0)
+    usage_age=$(( _now_epoch - mtime ))
+  fi
+  if [ "$usage_age" -lt "$usage_ttl" ]; then
+    seven_day_top=$(<"$usage_cache")
+  else
+    seven_day_top=$(python3 - <<'PYEOF'
+import json, os, urllib.request
+out = ''
+try:
+    cred = json.load(open(os.path.expanduser('~/.claude/.credentials.json')))['claudeAiOauth']
+    req = urllib.request.Request('https://api.anthropic.com/api/oauth/usage', headers={
+        'Authorization': 'Bearer ' + cred['accessToken'],
+        'anthropic-beta': 'oauth-2025-04-20',
+        'Accept': 'application/json',
+    })
+    d = json.load(urllib.request.urlopen(req, timeout=10))
+    scoped = [l for l in d.get('limits', []) if isinstance(l, dict) and l.get('kind') == 'weekly_scoped']
+    for want in ('fable', 'opus'):
+        for l in scoped:
+            name = str(((l.get('scope') or {}).get('model') or {}).get('display_name') or '').lower()
+            if name == want and isinstance(l.get('percent'), (int, float)):
+                out = str(l['percent'])
+                break
+        if out:
+            break
+except Exception:
+    pass
+print(out)
+PYEOF
+)
+    printf '%s' "$seven_day_top" > "$usage_cache" 2>/dev/null
+  fi
 fi
 # Weekly limits. The premium-model bucket rides inside the W segment as an
 # orange `F:` field, between the account-wide percentage and the reset marker,

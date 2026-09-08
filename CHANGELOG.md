@@ -3,12 +3,21 @@
 ## Unreleased
 
 - Weekly premium-model usage as an orange `F:` field inside the `W:` segment
-  (`W:28% F:12% ↻29/8`), read from `rate_limits.seven_day_opus`. Claude Code
-  forwards the whole rate-limits object verbatim, so the field appears on
-  accounts that have that bucket and is silently absent on those that do not.
-  Note there is no `seven_day_fable` key in any shipped version —
-  `seven_day_opus` is the premium bucket, a legacy name kept across the model
-  lineup. Non-numeric values are ignored rather than passed to `printf`.
+  (`W:28% F:12% ↻29/8`). Read from `rate_limits.seven_day_overage_included`
+  first — Claude Code's own label map calls that bucket the "Fable 5 limit" —
+  with `rate_limits.seven_day_opus` as a fallback. Claude Code 2.1.x builds
+  the status-line `rate_limits` object from four response-header buckets only
+  (`five_hour`, `seven_day`, `seven_day_overage_included`, `overage`);
+  `seven_day_opus` is not among them, so reading it alone never rendered on
+  2.1.x. Non-numeric values are ignored rather than passed to `printf`.
+- Opt-in `/usage` source for `F:`: on accounts whose responses carry no
+  per-model header at all (verified on Max 5x — the payload holds only
+  `five_hour` and `seven_day`), the Fable share exists only at
+  `GET /api/oauth/usage` → `limits[]` → `kind: weekly_scoped`,
+  `scope.model.display_name: Fable`. `AGENTLINE_USAGE_API=1` reads it from
+  there, cached for `AGENTLINE_USAGE_TTL` seconds (default 300) in the
+  owner-only cache directory. It is the only network request agentline can
+  make, it is off by default, and every failure mode leaves `F:` hidden.
 
 - Live clock: the `HH:MM:SS` segment on line 2 now ticks every second instead
   of freezing between conversation events. `install.sh` sets

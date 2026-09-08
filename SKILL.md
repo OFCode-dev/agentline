@@ -39,6 +39,8 @@ Set variables in the `env` block of `~/.claude/settings.json`:
 | `AGENTLINE_SERVICES` | `~/.claude/agentline-services.conf` | Path to the service list |
 | `AGENTLINE_WIDTH` | `120` | Column budget for merging/wrapping lines 3+4 — set near the user's real terminal width |
 | `AGENTLINE_TZ` | system timezone | Pin the clock, e.g. `Europe/Istanbul` on a UTC server |
+| `AGENTLINE_USAGE_API` | unset | Set to `1` to fetch the Fable weekly share (`F:`) from `/api/oauth/usage` when the payload has no per-model bucket — the only network call agentline can make, opt-in only |
+| `AGENTLINE_USAGE_TTL` | `300` | Seconds a fetched `/usage` result is reused |
 
 Service panel (line 4): edit `~/.claude/agentline-services.conf`, one `systemd-unit:Label` per line. Discover candidates with `systemctl list-units --type=service --state=running` and let the user choose which units to monitor — prefer their own services over distro plumbing. The file is machine-local and gitignored by design.
 
