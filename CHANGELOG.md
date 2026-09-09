@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- Live agents on line 3 are no longer limited to Claude's own subagents. Any
+  process can register itself through the new `hooks/agentline-agent.sh`
+  (`add` / `remove <label>`), so an external agent CLI driven from a shell —
+  `codex`, `agy`, a run on another host — is visible while it works instead of
+  being waited on blind. `add` replaces a row carrying the same label rather
+  than appending, which makes it usable as a heartbeat.
+- The agent tracker no longer deletes the whole file on `Stop`. `Stop` fires at
+  the end of every assistant turn, so a still-running external agent that had
+  taken a row was wiped from the bar while it was still working. The hook now
+  records what it registered in a per-session sidecar and removes only those
+  labels; rows owned by another session or by an external process survive.
+- Registry writes take an `flock` and prune by age before applying the size
+  cap. The previous append-then-`tail -8` could interleave under parallel
+  dispatch and could evict a running agent while a stale row survived.
+
 - Weekly premium-model usage as an orange `F:` field inside the `W:` segment
   (`W:28% F:12% ↻29/8`). Read from `rate_limits.seven_day_overage_included`
   first — Claude Code's own label map calls that bucket the "Fable 5 limit" —

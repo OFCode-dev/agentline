@@ -117,7 +117,10 @@ if [ "${1:-}" = "--with-hooks" ]; then
   mkdir -p "$HOOKS_DEST"
   cp "$SCRIPT_DIR/hooks/wordcount-hook.sh" "$HOOKS_DEST/"
   cp "$SCRIPT_DIR/hooks/agent-tracker-hook.sh" "$HOOKS_DEST/"
-  chmod +x "$HOOKS_DEST/wordcount-hook.sh" "$HOOKS_DEST/agent-tracker-hook.sh"
+  # Shared registry used by the hook and by any external process.
+  cp "$SCRIPT_DIR/hooks/agentline-agent.sh" "$HOOKS_DEST/"
+  chmod +x "$HOOKS_DEST/wordcount-hook.sh" "$HOOKS_DEST/agent-tracker-hook.sh" \
+           "$HOOKS_DEST/agentline-agent.sh"
 
   python3 - "$SETTINGS" "$HOOKS_DEST" <<'PYEOF'
 import json, sys

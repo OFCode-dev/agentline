@@ -94,7 +94,7 @@ Every `│`-separated segment below is independent: when its value cannot be mea
 | Segment | Meaning | Details |
 |---|---|---|
 | `⚙️ context7 · playwright` | Active MCP servers | Global and per-project servers from `~/.claude.json`, merged. Command-based servers count only if their process is actually running (`pgrep`-checked); remote HTTP/SSE servers count as configured. Hidden when none are active. |
-| `🤖 code review · tests` | Live subagents — optional hook | Entries fresher than 5 minutes from the [agent-tracker hook](#optional-hooks-word-counter--agent-tracker), labels truncated at 25 chars, yellow. Cleared when the main session stops. |
+| `🤖 code review · tests` | Live subagents — optional hook | Entries fresher than 5 minutes, labels truncated at 25 chars, yellow. Claude's own subagents come from the [agent-tracker hook](#optional-hooks-word-counter--agent-tracker) and clear when that session stops; any other process can [register itself](#showing-external-agents) and stays until it deregisters or goes stale. |
 | `♻️ claude --resume <id>` | Recovery command | Ready to paste after a crash to resume this exact session. Prefers the session **id** (what `--resume` accepts); falls back to the quoted session name, which `--resume` treats as a picker search term. |
 
 ### Line 4 — System layer
@@ -148,8 +148,48 @@ Two segments read files that Claude Code itself does not provide, so they are fe
 
 - **`wordcount-hook.sh`** — counts words in the transcript (PostToolUse + Stop) and feeds `🔤 ↑in ↓out` on line 1.
 - **`agent-tracker-hook.sh`** — records subagent spawns (PreToolUse on Agent) and clears them on Stop, feeding `🤖` on line 3.
+- **`agentline-agent.sh`** — the locked registry both of the above write through, and the entry point for anything else that wants a row on line 3 (see below).
 
 `bash install.sh --with-hooks` copies them to `~/.claude/agentline/` and adds the hook entries to `settings.json` idempotently — existing hooks are never duplicated or removed. Without them, the two segments simply stay hidden; nothing else changes.
+
+
+### Showing external agents
+
+`🤖` is not limited to Claude's own subagents. During an orchestration the
+expensive, slow work is often an external agent CLI — `codex`, `agy`, an SDK
+run on another host — and those used to be invisible: the bar showed the
+subagents and nothing else, so a run that took ten minutes looked like a hang.
+
+Any process can take a row. The contract is one file,
+`/tmp/claude_agents.txt`, one entry per line, `<epoch> <label>`; agentline
+renders entries younger than five minutes. Write through the helper rather
+than appending by hand — it takes a lock, so parallel dispatch cannot lose an
+entry, and it replaces a row that already carries the same label instead of
+appending a duplicate:
+
+```bash
+AL=~/.claude/agentline/agentline-agent.sh
+label="codex round 1"
+
+"$AL" add "$label"
+while :; do sleep 30; "$AL" add "$label"; done &   # heartbeat
+hb=$!
+trap 'kill "$hb" 2>/dev/null; "$AL" remove "$label"' EXIT
+
+codex exec ...        # the bar shows "codex round 1" for as long as this runs
+```
+
+The heartbeat is what keeps the row alive past the five-minute window; without
+it a longer run simply ages out of the display. If the process dies without
+running its trap, the row disappears on its own once it goes stale.
+
+Rows are only ever removed by whoever put them there: the agent-tracker hook
+clears its own session's subagents on `Stop` and leaves everything else alone,
+so an external run in progress survives the end of an assistant turn.
+
+Set `CLAUDE_AGENTS_FILE` to point the helper somewhere else (useful in tests),
+`AGENTLINE_AGENT_WINDOW` to change the freshness window, and
+`AGENTLINE_AGENT_CAP` to change how many rows are kept.
 
 ## Manual install
 
