@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Dim text is readable on light terminal themes. `DIM` was `2;37` — faint
+  *white* — so every dim value (service health, `ssh:`/`cron:`, dev ports, date,
+  version, resume command, reset times) all but disappeared on a light
+  background. It is now plain faint (`2`), which dims whatever foreground the
+  theme uses.
+
 - Live agents on line 3 are no longer limited to Claude's own subagents. Any
   process can register itself through the new `hooks/agentline-agent.sh`
   (`add` / `remove <label>`), so an external agent CLI driven from a shell —

@@ -475,11 +475,11 @@ if command -v systemctl >/dev/null 2>&1 && [ -r "$SVC_CONFIG" ]; then
     # Skip services not defined on this machine (portability)
     systemctl cat "$svc" >/dev/null 2>&1 || continue
     if systemctl is-active --quiet "$svc" 2>/dev/null; then
-      entry="\033[2;37m${label} ✓\033[0m"
+      entry="\033[2m${label} ✓\033[0m"
     else
       entry="\033[1;31m${label} ✗\033[0m"
     fi
-    svc_panel="${svc_panel:+${svc_panel} \033[2;37m·\033[0m }${entry}"
+    svc_panel="${svc_panel:+${svc_panel} \033[2m·\033[0m }${entry}"
   done < "$SVC_CONFIG"
 fi
 
@@ -501,7 +501,10 @@ fi
 
 # === Colors ===
 RESET="\033[0m"
-DIM="\033[2;37m"
+# Faint in the terminal's own foreground, not a fixed white: 2;37 vanished on
+# light themes. 90 (bright black) is no fix either — it is the background on
+# Solarized-style dark themes.
+DIM="\033[2m"
 GREEN="\033[1;32m"
 BLUE="\033[1;34m"
 CYAN="\033[1;36m"
