@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- The hook side files follow `AGENTLINE_TMP`. `claude_wordcount.txt` and
+  `claude_agents.txt` were hard-coded under `/tmp`, ignoring `TMPDIR` and
+  `HOME`, so two users on one host shared one counter and no test could run
+  without reading the host's real files. agentline and both hooks now resolve
+  `${AGENTLINE_TMP:-/tmp}`, so the default is unchanged. The reader also
+  honours `CLAUDE_AGENTS_FILE`, which the registry helper already accepted:
+  a relocated registry used to leave the 🤖 segment empty.
+
 - Caches are scoped to the account. Claude Code keeps one account per
   config directory, but the `/usage` cache was a single `usage.fable` and the
   fetch always read `~/.claude/.credentials.json`, so a `CLAUDE_CONFIG_DIR`

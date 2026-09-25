@@ -8,7 +8,8 @@
 # the totals. Called by PostToolUse and Stop hooks via stdin JSON. Wire it up
 # with `bash install.sh --with-hooks` (see README).
 
-WCFILE="/tmp/claude_wordcount.txt"
+# Same directory agentline.sh reads from: /tmp unless $AGENTLINE_TMP is set.
+WCFILE="${AGENTLINE_TMP:-/tmp}/claude_wordcount.txt"
 
 input=$(cat)
 counts=$(PAYLOAD="$input" python3 - <<'PYEOF'

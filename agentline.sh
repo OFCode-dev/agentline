@@ -398,9 +398,19 @@ PYEOF
 
 fi  # end of throttled host probes (part 1)
 
+# Side files written by the optional hooks (hooks/*.sh) live in one shared
+# directory, /tmp unless $AGENTLINE_TMP names another. The hooks resolve the
+# same variable, so reader and writers always agree; a per-user or per-test
+# directory keeps two users on one host — or a test run — from reading each
+# other's counters. The agent registry also honours CLAUDE_AGENTS_FILE, the
+# override agentline-agent.sh has always accepted: the reader used to ignore
+# it, so a relocated registry silently emptied the 🤖 segment.
+AGENTLINE_TMP="${AGENTLINE_TMP:-/tmp}"
+AGENTS_FILE="${CLAUDE_AGENTS_FILE:-$AGENTLINE_TMP/claude_agents.txt}"
+
 # Active agents (from hook-written file) — never throttled, see PROBE_VARS.
 active_agents=""
-if [ -f /tmp/claude_agents.txt ]; then
+if [ -f "$AGENTS_FILE" ]; then
   now=$(date +%s)
   active_agents=$(awk -v now="$now" '{
     age = now - $1
@@ -409,7 +419,7 @@ if [ -f /tmp/claude_agents.txt ]; then
       if (length(label) > 25) label = substr(label,1,22) "..."
       printf "%s · ", label
     }
-  }' /tmp/claude_agents.txt | sed 's/ · $//')
+  }' "$AGENTS_FILE" | sed 's/ · $//')
 fi
 
 # Home-relative path (~/projects/agentline) rather than the bare folder name.
@@ -674,8 +684,8 @@ time_str="$CLOCK_TOKEN"
 # Word counts from hook
 words_in_w=""
 words_out_w=""
-if [ -f /tmp/claude_wordcount.txt ]; then
-  wc_line=$(cat /tmp/claude_wordcount.txt)
+if [ -f "$AGENTLINE_TMP/claude_wordcount.txt" ]; then
+  wc_line=$(cat "$AGENTLINE_TMP/claude_wordcount.txt")
   wi=$(echo "$wc_line" | awk '{print $1}')
   wo=$(echo "$wc_line" | awk '{print $2}')
   [ -n "$wi" ] && [ "$wi" != "0" ] && words_in_w=$(awk -v n="$wi" 'BEGIN {

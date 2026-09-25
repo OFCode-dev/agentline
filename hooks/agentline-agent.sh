@@ -26,12 +26,14 @@
 # file bounded even if a process dies before deregistering.
 #
 # Environment:
-#   CLAUDE_AGENTS_FILE      data file (default /tmp/claude_agents.txt)
+#   CLAUDE_AGENTS_FILE      data file (default $AGENTLINE_TMP/claude_agents.txt)
+#   AGENTLINE_TMP           side-file directory shared with agentline.sh
+#                           (default /tmp)
 #   AGENTLINE_AGENT_WINDOW  freshness window, seconds (default 300, matches
 #                           the window agentline.sh displays)
 #   AGENTLINE_AGENT_CAP     maximum entries kept (default 16)
 
-AGENTLINE_AGENT_FILE="${CLAUDE_AGENTS_FILE:-/tmp/claude_agents.txt}"
+AGENTLINE_AGENT_FILE="${CLAUDE_AGENTS_FILE:-${AGENTLINE_TMP:-/tmp}/claude_agents.txt}"
 AGENTLINE_AGENT_WINDOW="${AGENTLINE_AGENT_WINDOW:-300}"
 AGENTLINE_AGENT_CAP="${AGENTLINE_AGENT_CAP:-16}"
 
