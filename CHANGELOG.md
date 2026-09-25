@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+- `install.sh` no longer wipes a `settings.json` it cannot parse. Any JSON
+  error used to become an empty object that the next save wrote back, so one
+  trailing comma cost every permission, hook and `env` entry. It now stops
+  with `✗ … is not valid JSON (line N)` before touching anything. Each run
+  that does edit the file first copies it to
+  `settings.json.agentline-bak-<timestamp>` (newest 5 kept), then writes to a
+  temp file and renames it into place, through a symlink if there is one.
+- The installer no longer takes over other status lines. It used to match
+  `"statusline"` anywhere in the command, so `npx -y ccstatusline@latest` or a
+  user's `my-statusline.sh` was silently repointed. A `custom.sh` was worse:
+  it was treated as the install target and overwritten by `cp`. Only
+  `agentline.sh` is upgraded in place now, and only the pre-rename
+  `statusline-command.sh` / `statusline.sh` are migrated. Anything else is
+  left alone, with the snippet to paste printed instead; `--force` switches
+  anyway. The hook repoint follows the same rule: a hook is repointed only
+  when it sits in the old `statusline/` directory or no longer exists.
+- Local tweaks survive upgrades. `~/.claude/agentline/local.sh`
+  (`AGENTLINE_LOCAL`) is sourced on every full render, after the colours and
+  before the lines are assembled, and the installer never writes it. It costs
+  nothing on cached ticks. An installed `agentline.sh` that differs from the
+  new one is kept as `agentline.sh.bak-<timestamp>` rather than overwritten.
+
 - Dim text is readable on light terminal themes. `DIM` was `2;37` — faint
   *white* — so every dim value (service health, `ssh:`/`cron:`, dev ports, date,
   version, resume command, reset times) all but disappeared on a light

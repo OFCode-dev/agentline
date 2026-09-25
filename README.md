@@ -51,7 +51,12 @@ Add the optional 🔤 word-counter and 🤖 live agent-tracker segments (they ne
 bash install.sh --with-hooks
 ```
 
-`install.sh` is safe to re-run: it upgrades in place, never overwrites your machine-local service list, and wires hooks idempotently.
+`install.sh` is safe to re-run: it upgrades in place, never overwrites your machine-local service list, and wires hooks idempotently. It treats `~/.claude/settings.json` as yours:
+
+- A `settings.json` that is not valid JSON is refused with the line number. Nothing is rewritten.
+- A timestamped backup (`settings.json.agentline-bak-YYYYmmdd-HHMMSS`, newest 5 kept) is taken before any edit, and the new file is swapped in atomically. A symlinked `settings.json` stays a symlink.
+- A status line that is not agentline (`npx ccstatusline`, your own `my-statusline.sh`, …) is left untouched. The installer prints the snippet to paste instead. Pass `--force` to switch anyway.
+- If the installed `agentline.sh` differs from the new one, it is kept as `agentline.sh.bak-<timestamp>` before being replaced. Put your tweaks in [`local.sh`](#faq) so they survive upgrades.
 
 ## What each line shows
 
@@ -133,6 +138,7 @@ Everything is optional — agentline works with zero configuration.
 | `AGENTLINE_PROBE_TTL` | `15` | Seconds the host layer (CPU, RAM, disk, ports, services, MCP, git) may be reused. Independent of the render cache, and unaffected by payload changes — see below |
 | `AGENTLINE_USAGE_API` | unset | Set to `1` to fetch the Fable weekly share (`F:`) from `https://api.anthropic.com/api/oauth/usage` when the payload carries no per-model bucket. This is the **only** network call agentline can make, and only when you opt in. Uses the OAuth token from `~/.claude/.credentials.json`; the token never leaves the python helper |
 | `AGENTLINE_USAGE_TTL` | `300` | Seconds a fetched `/usage` result is reused before the endpoint is asked again |
+| `AGENTLINE_LOCAL` | `~/.claude/agentline/local.sh` | Your override file, sourced on every full render if it exists (see [FAQ](#faq)) |
 
 Set them in the `env` block of `~/.claude/settings.json` so Claude Code passes them to every render:
 
@@ -247,7 +253,15 @@ Those two segments are fed by the optional hooks. Run `bash install.sh --with-ho
 It is always masked (`o****r@g***l.com`) before display, and it never leaves your machine.
 
 **How do I customize segments or colors?**
-Edit `agentline.sh` directly — sections are marked with `# ===` comments, and each segment is an independent block you can delete or reorder freely.
+Put your overrides in `~/.claude/agentline/local.sh` (or the path in `AGENTLINE_LOCAL`). agentline sources it on every full render, after the payload parse, host probes and colours and before any line is assembled. `install.sh` never touches it, so it survives upgrades:
+
+```bash
+# ~/.claude/agentline/local.sh
+BLUE="\033[1;36m"   # recolour the folder name
+cpu_usage=          # blank a value to drop its segment
+```
+
+Editing `agentline.sh` directly still works — sections are marked with `# ===` comments — but an upgrade replaces it. The previous copy is kept as `agentline.sh.bak-<timestamp>`.
 
 **How do I uninstall?**
 Remove the `statusLine` entry from `~/.claude/settings.json` and delete `~/.claude/agentline/` (plus `~/.claude/agentline-services.conf` if you no longer want the service list).

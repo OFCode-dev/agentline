@@ -523,6 +523,19 @@ color_pct() {
   }'
 }
 
+# === Local overrides ===
+# install.sh replaces this script on every upgrade, so edits made to it are
+# lost (the replaced copy is kept as agentline.sh.bak-*, but that is a
+# recovery path, not a workflow). Tweaks belong in a file install.sh never
+# touches, sourced here: after the payload parse, the host probes and the
+# colours, before any line is assembled. It can redefine a colour, blank a
+# variable to drop its segment (`cpu_usage=`), or replace color_pct. This is
+# the slow path only — a cache-hit tick has exited long before — so it costs
+# one `[ -f ]` per full render and nothing per second; an edit shows up within
+# AGENTLINE_CACHE_TTL.
+AGENTLINE_LOCAL="${AGENTLINE_LOCAL:-$HOME/.claude/agentline/local.sh}"
+[ -f "$AGENTLINE_LOCAL" ] && . "$AGENTLINE_LOCAL"
+
 # === Format Helpers ===
 effort=""
 case "$effort_raw" in
