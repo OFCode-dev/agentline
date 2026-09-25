@@ -6,6 +6,12 @@
 # up to four lines: session stats, environment, Claude layer, system layer.
 # Every segment degrades gracefully — anything it cannot measure disappears
 # instead of erroring.
+#
+# Owner-only for everything this script creates. The caches below already
+# live in a 0700 directory, so this is defence in depth: a cache file copied
+# out, or a directory that loses its mode, still does not expose session JSON
+# or account data. `umask` is a builtin, so the fast path stays fork-free.
+umask 077
 input=$(cat)
 
 # === Live clock fast path ===
@@ -709,34 +715,61 @@ fi
 # otherwise never makes, so it is strictly opt-in (AGENTLINE_USAGE_API=1),
 # served from a cache for AGENTLINE_USAGE_TTL seconds (default 300), and any
 # failure -- no credentials, expired token, non-200, malformed JSON -- simply
-# leaves `F:` hidden. The token is read by python straight from
-# ~/.claude/.credentials.json and never appears in argv, env, or output. The
-# cache file lives in the same owner-only directory as the render cache and is
-# skipped entirely when that directory failed its trust check ($CACHE_BASE
-# empty). Empty results are cached too, so a logged-out state does not retry
-# the request on every render.
+# leaves `F:` hidden. The token is read by python straight from the profile's
+# .credentials.json and never appears in argv, env, or output. The cache file
+# lives in the same owner-only directory as the render cache and is skipped
+# entirely when that directory failed its trust check ($CACHE_BASE empty).
+#
+# Account scope: Claude Code keeps one account per config directory
+# (CLAUDE_CONFIG_DIR, default ~/.claude), so both the credentials read and
+# the cache key follow it — a single global usage file showed one profile's
+# weekly figure in another profile's bar. The key is the path with every
+# non-alphanumeric byte turned into `_`: parameter expansion, no cksum fork.
+# Two logins that take turns in the *same* directory still share a key; the
+# cached figure is then at most one TTL behind the switch. On macOS the OAuth
+# token lives in the Keychain, not in .credentials.json, so this source finds
+# no token there and `F:` stays hidden.
+_cfg_dir="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+_cfg_dir="${_cfg_dir%/}"
+_acct_key="${_cfg_dir//[!A-Za-z0-9]/_}"
 if [ -z "$seven_day_top" ] && [ "${AGENTLINE_USAGE_API:-0}" = "1" ] && [ -n "$CACHE_BASE" ]; then
-  usage_cache="${CACHE_DIR}/usage.fable"
+  usage_cache="${CACHE_DIR}/usage.${_acct_key}"
   usage_ttl="${AGENTLINE_USAGE_TTL:-300}"
   usage_age=999999
   if [ -f "$usage_cache" ]; then
     mtime=$(stat -c %Y "$usage_cache" 2>/dev/null || stat -f %m "$usage_cache" 2>/dev/null || echo 0)
+    # A file removed between the test and the stat (the daily prune, say)
+    # makes GNU stat fall through to `-f`, which prints a filesystem report.
+    case "$mtime" in ''|*[!0-9]*) mtime=0 ;; esac
     usage_age=$(( _now_epoch - mtime ))
   fi
   if [ "$usage_age" -lt "$usage_ttl" ]; then
     seven_day_top=$(<"$usage_cache")
   else
-    seven_day_top=$(python3 - <<'PYEOF'
-import json, os, urllib.request
+    # Claim the refresh before making it. Every open session and every tick
+    # lands here the moment the TTL runs out; bumping the mtime first makes
+    # the others read the cache as fresh and serve the previous value while
+    # this one fetches, so N sessions make one request, not N. No lock, so
+    # nothing can be left stuck: at worst two renders racing inside the same
+    # instant both fetch. The timeout is 3 s, not 10: this runs inside a
+    # render, and a status line that stalls is worse than one missing `F:`.
+    #
+    # The result, empty included, then replaces the cache. Keeping the old
+    # value on failure would leave a figure on screen that nothing has
+    # confirmed since, indefinitely for a logged-out account; an empty
+    # result instead hides `F:` for one TTL and does not retry every render.
+    touch "$usage_cache" 2>/dev/null
+    seven_day_top=$(python3 - "$_cfg_dir" <<'PYEOF'
+import json, os, sys, urllib.request
 out = ''
 try:
-    cred = json.load(open(os.path.expanduser('~/.claude/.credentials.json')))['claudeAiOauth']
+    cred = json.load(open(os.path.join(os.path.expanduser(sys.argv[1]), '.credentials.json')))['claudeAiOauth']
     req = urllib.request.Request('https://api.anthropic.com/api/oauth/usage', headers={
         'Authorization': 'Bearer ' + cred['accessToken'],
         'anthropic-beta': 'oauth-2025-04-20',
         'Accept': 'application/json',
     })
-    d = json.load(urllib.request.urlopen(req, timeout=10))
+    d = json.load(urllib.request.urlopen(req, timeout=3))
     scoped = [l for l in d.get('limits', []) if isinstance(l, dict) and l.get('kind') == 'weekly_scoped']
     for want in ('fable', 'opus'):
         for l in scoped:
@@ -804,13 +837,25 @@ line2=""
 # Masked email. The payload's account.email is free; only when it is absent is
 # `claude auth status` consulted, and that result is cached for 60 seconds --
 # a CLI cold start on every render would otherwise dominate the whole script.
+#
+# The cache holds the *unmasked* address, so it lives in the owner-only cache
+# directory, keyed by account like the usage cache (a `claude` child inherits
+# CLAUDE_CONFIG_DIR and reports that profile). It used to sit loose in the
+# shared temp dir as agentline-email-<uid>, world-readable under the usual
+# umask and shared by every profile; that file is removed on sight. When the
+# cache directory failed its trust check there is nowhere safe to keep the
+# address, and no cache means a CLI cold start every second, so the lookup is
+# skipped and only a payload-supplied address is shown.
+_old_email_cache="${TMPDIR:-/tmp}/agentline-email-${UID:-0}"
+[ -e "$_old_email_cache" ] && rm -f "$_old_email_cache" 2>/dev/null
 account_email="$payload_email"
-if [ -z "$account_email" ]; then
-  auth_cache="${TMPDIR:-/tmp}/agentline-email-$(id -u 2>/dev/null || echo 0)"
+if [ -z "$account_email" ] && [ -n "$CACHE_BASE" ]; then
+  auth_cache="${CACHE_DIR}/email.${_acct_key}"
   cache_age=999999
   if [ -f "$auth_cache" ]; then
     mtime=$(stat -c %Y "$auth_cache" 2>/dev/null || stat -f %m "$auth_cache" 2>/dev/null || echo 0)
-    cache_age=$(( $(date +%s) - mtime ))
+    case "$mtime" in ''|*[!0-9]*) mtime=0 ;; esac
+    cache_age=$(( _now_epoch - mtime ))
   fi
   if [ "$cache_age" -lt 60 ]; then
     account_email=$(cat "$auth_cache" 2>/dev/null)
@@ -927,6 +972,24 @@ else:
 sys.stdout.write('\n'.join(rows))
 PYEOF
 )
+
+# Prune the cache directory. Every session leaves render_<sid>.* files behind
+# and nothing else ever removes them, so a long-lived host collects thousands.
+# At most once a day, files untouched for more than 7 days are deleted — no
+# live session's cache is that old, since each full render rewrites it. The
+# gate is an epoch in a stamp file read with the `read` builtin, so the check
+# costs no fork on every other full render of the day; the stamp is written
+# before the sweep so a concurrent render does not start a second one.
+if [ -n "$CACHE_BASE" ]; then
+  _prune_stamp="${CACHE_DIR}/.pruned"
+  _pruned_at=0
+  [ -f "$_prune_stamp" ] && read -r _pruned_at < "$_prune_stamp"
+  case "$_pruned_at" in ''|*[!0-9]*) _pruned_at=0 ;; esac
+  if [ $(( _now_epoch - _pruned_at )) -ge 86400 ]; then
+    printf '%s\n' "$_now_epoch" > "$_prune_stamp" 2>/dev/null
+    find "$CACHE_DIR" -maxdepth 1 -type f -mtime +7 ! -name .pruned -delete 2>/dev/null
+  fi
+fi
 
 # Print only non-empty rows, so lines 3 and 4 collapse away instead of gaps
 out="${line1}\n${line2}"

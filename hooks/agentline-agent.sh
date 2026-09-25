@@ -21,8 +21,8 @@
 #   trap 'kill "$hb" 2>/dev/null; agentline-agent.sh remove "$label"' EXIT
 #   codex exec ...
 #
-# Writes are serialised with flock, so dispatching several agents at once
-# cannot drop an entry. Stale rows are pruned on every write, which keeps the
+# Writes are serialised — flock on Linux, a mkdir lock where flock is missing
+# (macOS) — so dispatching several agents at once cannot drop an entry. Stale rows are pruned on every write, which keeps the
 # file bounded even if a process dies before deregistering.
 #
 # Environment:
@@ -51,8 +51,43 @@ agentline_agent() {
   mkdir -p "$(dirname "$file")" 2>/dev/null || return 1
 
   (
-    exec 9>>"$lock" 2>/dev/null || exit 0
-    flock -w 5 9 2>/dev/null
+    # Serialise writers. Linux ships flock(1); macOS does not, and the old
+    # unguarded `flock … 2>/dev/null` there simply ran every write unlocked,
+    # so parallel dispatch could still drop a row. Where flock is missing, an
+    # atomic `mkdir` stands in: a lock directory older than 10 s is taken to
+    # belong to a writer that died holding it (a write takes well under a
+    # second) and is cleared. Either way, a lock not won within 5 s means the
+    # write is skipped rather than raced — a heartbeat `add` re-registers on
+    # its next beat, whereas a racing rewrite can silently drop another row.
+    if command -v flock >/dev/null 2>&1; then
+      exec 9>>"$lock" 2>/dev/null || exit 0
+      if ! flock -w 5 9 2>/dev/null; then
+        echo "agentline-agent: registry busy, skipped $op '$label'" >&2
+        exit 0
+      fi
+    else
+      local lockdir="${file}.d" deadline held now_s
+      deadline=$(( $(date +%s) + 5 ))
+      until mkdir "$lockdir" 2>/dev/null; do
+        now_s=$(date +%s)
+        held=$(stat -c %Y "$lockdir" 2>/dev/null || stat -f %m "$lockdir" 2>/dev/null)
+        # The holder may release between mkdir and stat. GNU stat then fails
+        # the -c form and reads `-f %m` as "filesystem status of a file named
+        # %m", printing a report instead of a number; drop anything
+        # non-numeric and simply retry the mkdir.
+        case "$held" in *[!0-9]*) held="" ;; esac
+        if [ -n "$held" ] && [ $(( now_s - held )) -gt 10 ]; then
+          rmdir "$lockdir" 2>/dev/null
+          continue
+        fi
+        if [ "$now_s" -ge "$deadline" ]; then
+          echo "agentline-agent: registry busy, skipped $op '$label'" >&2
+          exit 0
+        fi
+        sleep 0.1 2>/dev/null || sleep 1
+      done
+      trap 'rmdir "$lockdir" 2>/dev/null' EXIT
+    fi
 
     local now tmp
     now=$(date +%s)

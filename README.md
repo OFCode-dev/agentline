@@ -136,7 +136,7 @@ Everything is optional — agentline works with zero configuration.
 | `AGENTLINE_TZ` | system timezone | Pin the clock, e.g. `Europe/Istanbul` on a UTC server |
 | `AGENTLINE_CACHE_TTL` | `5` | Seconds a cached render may serve clock ticks before the line is rebuilt |
 | `AGENTLINE_PROBE_TTL` | `15` | Seconds the host layer (CPU, RAM, disk, ports, services, MCP, git) may be reused. Independent of the render cache, and unaffected by payload changes — see below |
-| `AGENTLINE_USAGE_API` | unset | Set to `1` to fetch the Fable weekly share (`F:`) from `https://api.anthropic.com/api/oauth/usage` when the payload carries no per-model bucket. This is the **only** network call agentline can make, and only when you opt in. Uses the OAuth token from `~/.claude/.credentials.json`; the token never leaves the python helper |
+| `AGENTLINE_USAGE_API` | unset | Set to `1` to fetch the Fable weekly share (`F:`) from `https://api.anthropic.com/api/oauth/usage` when the payload carries no per-model bucket. This is the **only** network call agentline can make, and only when you opt in. Uses the OAuth token from `.credentials.json` in your profile directory (`$CLAUDE_CONFIG_DIR`, default `~/.claude`); the token never leaves the python helper. The result is cached per profile, so two profiles never show each other's figure. Once the cache expires, only one of your open sessions makes the request, and it times out after 3 s. On macOS the token lives in the Keychain rather than in `.credentials.json`, so `F:` stays hidden there |
 | `AGENTLINE_USAGE_TTL` | `300` | Seconds a fetched `/usage` result is reused before the endpoint is asked again |
 | `AGENTLINE_LOCAL` | `~/.claude/agentline/local.sh` | Your override file, sourced on every full render if it exists (see [FAQ](#faq)) |
 
@@ -250,7 +250,7 @@ Yes — CPU, memory, and listening-port probes have BSD branches selected once a
 Those two segments are fed by the optional hooks. Run `bash install.sh --with-hooks`.
 
 **Is my e-mail address exposed on screen shares?**
-It is always masked (`o****r@g***l.com`) before display, and it never leaves your machine.
+It is always masked (`o****r@g***l.com`) before display, and it never leaves your machine. When it has to be looked up via `claude auth status`, the unmasked address is cached per profile inside agentline's owner-only cache directory (`$TMPDIR/agentline-<uid>/`, mode 700; every file mode 600), never loose in `/tmp`.
 
 **How do I customize segments or colors?**
 Put your overrides in `~/.claude/agentline/local.sh` (or the path in `AGENTLINE_LOCAL`). agentline sources it on every full render, after the payload parse, host probes and colours and before any line is assembled. `install.sh` never touches it, so it survives upgrades:

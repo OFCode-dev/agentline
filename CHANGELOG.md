@@ -2,6 +2,34 @@
 
 ## Unreleased
 
+- Caches are scoped to the account. Claude Code keeps one account per
+  config directory, but the `/usage` cache was a single `usage.fable` and the
+  fetch always read `~/.claude/.credentials.json`, so a `CLAUDE_CONFIG_DIR`
+  profile showed the default account's `F:` share. The credentials path and
+  both caches now follow `CLAUDE_CONFIG_DIR`, keyed by the directory path
+  (`usage.<key>`, `email.<key>`, built with parameter expansion, no fork).
+- The unmasked account e-mail no longer sits in `/tmp`. Its cache was
+  `$TMPDIR/agentline-email-<uid>`: outside the owner-only directory, mode
+  664 and shared by every profile. It now lives in the 0700 cache
+  directory, per account, and the old file is deleted on sight. The script
+  also runs under `umask 077`, so every cache file is 600. When the cache
+  directory fails its trust check, the `claude auth status` fallback is
+  skipped, because it would otherwise be a CLI cold start every second.
+- One `/usage` request per expiry, not one per session. The render that
+  finds the cache expired touches it before fetching, so every other
+  session serves the previous value in the meantime. No lock is involved,
+  so none can be left stuck. The request timeout drops from 10 s to 3 s
+  because it runs inside a render. A failed fetch still caches empty,
+  hiding `F:` for one TTL rather than showing an unconfirmed number.
+- The agent registry is locked on macOS too. macOS has no `flock`, and the
+  unguarded call there let every write run unlocked. A `mkdir` lock with a
+  5 s wait now stands in, and a lock directory older than 10 s is cleared
+  as abandoned. A write that cannot get the lock is skipped with a note on
+  stderr instead of racing.
+- The cache directory is pruned. Every session left `render_<sid>.*` files
+  behind forever; once a day, files untouched for 7 days are deleted. The
+  daily gate is read with a builtin, so the other renders pay nothing.
+
 - `install.sh` no longer wipes a `settings.json` it cannot parse. Any JSON
   error used to become an empty object that the next save wrote back, so one
   trailing comma cost every permission, hook and `env` entry. It now stops
