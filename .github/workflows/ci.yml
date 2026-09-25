@@ -1,0 +1,32 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  # bash 5 + GNU userland. shellcheck gates on errors only: the script leans
+  # on eval'd heredocs and deliberate word splitting, so style-level findings
+  # are advisory, not a build break. strace powers the fast-path fork count.
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install shellcheck and strace
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck strace
+      - name: shellcheck
+        run: shellcheck -S error agentline.sh install.sh hooks/*.sh tests/*.sh
+      - name: Tests (bash 5)
+        run: bash tests/run.sh
+
+  # The system /bin/bash is 3.2 on every macOS release, and BSD date, sed,
+  # awk and tail are what macOS users actually run agentline with.
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Tests (system bash 3.2)
+        run: /bin/bash tests/run.sh

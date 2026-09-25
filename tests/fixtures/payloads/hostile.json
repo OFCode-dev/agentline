@@ -1,0 +1,1 @@
+{"session_id":"../../etc/x","session_name":"a\"b\" $(touch pwned) `touch pwned2`","cwd":"@@CWD@@","version":"$(touch pwned3)","model":{"id":"not-a-claude-model","display_name":"'; touch pwned4 #"},"effort":{"level":"turbo"},"cost":{"total_cost_usd":0}}

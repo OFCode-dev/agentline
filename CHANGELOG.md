@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- A test suite and CI. `bash tests/run.sh` (bash + python3, no bats) runs
+  the real script over a fixture set — full, minimal, `{}`, malformed and
+  empty input, a null post-compact window, a 1M model, Fable + max, xhigh vs
+  ultracode, hostile values — at widths 120/80/40 against ANSI-stripped
+  golden files, and requires exit 0, empty stderr and wraps only at `│`.
+  It also proves cached ticks come from the render cache, counts fast-path
+  forks with strace where available, and runs `install.sh` end to end
+  against fixture homes. Host probes are seeded through the probe cache, so
+  runs are hermetic. GitHub Actions runs it on Ubuntu (bash 5, shellcheck
+  at error level) and on macOS under the system bash 3.2.
 - The hook side files follow `AGENTLINE_TMP`. `claude_wordcount.txt` and
   `claude_agents.txt` were hard-coded under `/tmp`, ignoring `TMPDIR` and
   `HOME`, so two users on one host shared one counter and no test could run

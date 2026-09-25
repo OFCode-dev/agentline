@@ -225,6 +225,18 @@ The **render cache** holds the finished line, and is invalidated by any change t
 
 Once a second is far too often to pay for a full render, so the finished line is cached per session with the clock left as a placeholder. A tick whose payload is byte-identical and whose cache is younger than `AGENTLINE_CACHE_TTL` just stamps the current time into the cached line and prints — no `python3`, no probes, no `date` at all on bash ≥ 5.0, which uses the built-in `$EPOCHSECONDS` and `printf '%(%H:%M:%S)T'`. Any real event changes the payload and invalidates the cache on the spot, so a ticking clock never means stale numbers next to it.
 
+## Development / tests
+
+```bash
+bash tests/run.sh             # the whole suite, ~10 s, no network
+/bin/bash tests/run.sh        # same, under macOS's bash 3.2
+bash tests/run.sh --update    # regenerate tests/golden/ after an intended output change
+```
+
+The suite needs only `bash` and `python3`. It renders every payload in `tests/fixtures/payloads/` (full, minimal, `{}`, malformed JSON, empty stdin, a null context window after compaction, a 1M-context model, Fable + `max`, xhigh vs ultracode transcripts, hostile values) at `AGENTLINE_WIDTH` 120, 80 and 40, and compares the output, with ANSI codes stripped and the clock masked, against `tests/golden/`. Every render must exit 0 with empty stderr, and lines 3/4 may only wrap at `│` boundaries. It also checks that a cached tick is served from the render cache and that `install.sh` behaves correctly: a malformed `settings.json` is refused untouched, backups are timestamped, a foreign status line is left alone, re-runs are idempotent, and `--with-hooks` can be run twice. Where `strace` exists, it asserts that the once-a-second fast path forks nothing beyond reading stdin.
+
+Runs are hermetic. They use a temp `TMPDIR` and `HOME`, `TZ=UTC`, and `LC_ALL=C`, with host probes seeded through the probe cache and the hook side files under `AGENTLINE_TMP`, so no real host data reaches the output. CI runs it on Ubuntu (bash 5, shellcheck, strace) and macOS (system bash 3.2).
+
 ## Requirements
 
 - Claude Code ≥ 2.x

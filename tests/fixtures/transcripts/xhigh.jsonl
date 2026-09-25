@@ -1,0 +1,5 @@
+{"type":"user","message":{"role":"user","content":"start"}}
+{"type":"attachment","attachment":{"type":"ultra_effort_enter"}}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"ultracode is on"}]}}
+{"type":"user","message":{"role":"user","content":"<local-command-stdout>Set effort level to xhigh</local-command-stdout>"}}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"quoting \"attachment\":{\"type\":\"ultra_effort_enter\"} in prose must not count"}]}}
