@@ -38,6 +38,10 @@ CLOCK_TOKEN="@@${_AL_TOK}AGENTLINE_CLOCK@@"
 ANIM_MAX_TOKEN="@@${_AL_TOK}AGENTLINE_ANIM_MAX@@"
 ANIM_ULTRA_TOKEN="@@${_AL_TOK}AGENTLINE_ANIM_ULTRA@@"
 CACHE_TTL="${AGENTLINE_CACHE_TTL:-5}"
+# ASCII unit and record separators: segment builders emit name<US>text<RS>
+# records for the layout pass (see "Layout"). Like the \x02 above, no cleaned
+# display string can contain them.
+_US=$'\x1f'; _RS=$'\x1e'
 
 # The UTF-8 encoding of a C1 control (U+0080-U+009F) is the byte C2 followed
 # by 80-9F. Spelled as byte variables once here so the display sanitizer
@@ -900,17 +904,26 @@ fi
 # === Build Output ===
 P=" ${DIM}│${RESET} "
 
+# Every segment is emitted as a named record instead of being appended to a
+# fixed line: the layout pass at the end ("Layout") decides which line each
+# one lands on, in what order, and — at narrow widths — which ones give way.
+# One flat string rather than an associative array, which bash 3.2 (the macOS
+# /bin/bash) does not have; a function call, not a fork. The names are the
+# AGENTLINE_LAYOUT vocabulary. An empty text is no segment at all.
+SEGS=""
+_seg() { [ -n "$2" ] && SEGS="${SEGS}$1${_US}$2${_RS}"; return 0; }
+
 # Line 1: model first, then stats. A payload that did not decode leads with a
 # dim marker instead of silently losing the model and context segments; it is
 # prepended, not a replacement, because the host and session-independent
-# segments after it are still correct.
-line1=""
-[ -n "$payload_err" ] && line1="${DIM}⚠ payload${RESET}"
+# segments after it are still correct. The layout pass puts it at the front
+# of the first line whatever the layout, and never drops it.
+[ -n "$payload_err" ] && _seg warn "${DIM}⚠ payload${RESET}"
 if [ -n "$model" ]; then
-  line1="${line1:+${line1}${P}}${model_color}${model}${thinking_icon:+ ${thinking_icon}}${RESET}"
+  _seg model "${model_color}${model}${thinking_icon:+ ${thinking_icon}}${RESET}"
 fi
-[ -n "$effort" ]         && line1="${line1:+${line1}${P}}${effort}"
-[ -n "$fast_icon" ]      && line1="${line1:+${line1}${P}}${YELLOW}${fast_icon}${RESET}"
+_seg effort "$effort"
+[ -n "$fast_icon" ] && _seg fast "${YELLOW}${fast_icon}${RESET}"
 if [ -n "$used_pct" ]; then
   c=$(color_pct "$used_pct" 80 60)
   ctx_icon="📊"
@@ -928,12 +941,12 @@ if [ -n "$used_pct" ]; then
     c="$YELLOW"
     ctx_tag=" ${DIM}>200k${RESET}"
   fi
-  line1="${line1:+${line1}${P}}${c}${ctx_icon} $(printf '%.0f' "$used_pct")%${RESET}${ctx_tag}"
+  _seg ctx "${c}${ctx_icon} $(printf '%.0f' "$used_pct")%${RESET}${ctx_tag}"
 fi
 if [ -n "$five_hour" ]; then
   c=$(color_pct "$five_hour" 90 70)
   reset_part=""; [ -n "$five_hour_reset_fmt" ] && reset_part="${DIM}↻${five_hour_reset_fmt}${RESET}"
-  line1="${line1:+${line1}${P}}${c}S:$(printf '%.0f' $five_hour)%${RESET}${reset_part:+ }${reset_part}"
+  _seg 5h "${c}S:$(printf '%.0f' $five_hour)%${RESET}${reset_part:+ }${reset_part}"
 fi
 # === Fable weekly limit — opt-in network source ===
 # When the payload carried no per-model bucket (the normal case on 2.1.x, see
@@ -1086,34 +1099,33 @@ case "$seven_day_top" in
 esac
 if [ -n "$week_body" ]; then
   reset_part=""; [ -n "$seven_day_reset_fmt" ] && reset_part="${DIM}↻${seven_day_reset_fmt}${RESET}"
-  line1="${line1:+${line1}${P}}${week_body}${reset_part:+ }${reset_part}"
+  _seg week "${week_body}${reset_part:+ }${reset_part}"
 fi
-[ -n "$cost_fmt" ]       && line1="${line1:+${line1}${P}}💰 \$${cost_fmt}"
-[ -n "$duration_fmt" ]   && line1="${line1:+${line1}${P}}⏱️  ${duration_fmt}"
-[ -n "$tokens_in_fmt" ]  && line1="${line1:+${line1}${P}}📥 ${tokens_in_fmt}"
-[ -n "$tokens_out_fmt" ] && line1="${line1:+${line1}${P}}📤 ${tokens_out_fmt}"
+[ -n "$cost_fmt" ]       && _seg cost "💰 \$${cost_fmt}"
+[ -n "$duration_fmt" ]   && _seg dur "⏱️  ${duration_fmt}"
+[ -n "$tokens_in_fmt" ]  && _seg tok_in "📥 ${tokens_in_fmt}"
+[ -n "$tokens_out_fmt" ] && _seg tok_out "📤 ${tokens_out_fmt}"
 # Word counter (optional hook): ↑ words you typed, ↓ words Claude wrote.
 if [ -n "$words_in_w" ] || [ -n "$words_out_w" ]; then
-  line1="${line1:+${line1}${P}}🔤 ${DIM}↑${RESET}${words_in_w:-0} ${DIM}↓${RESET}${words_out_w:-0}"
+  _seg words "🔤 ${DIM}↑${RESET}${words_in_w:-0} ${DIM}↓${RESET}${words_out_w:-0}"
 fi
-[ -n "$lines_fmt" ]      && line1="${line1:+${line1}${P}}📝 ${lines_fmt}"
-[ -n "$cpu_usage" ]      && line1="${line1:+${line1}${P}}🔥 ${cpu_usage}"
-[ -n "$mem_used_gb" ]    && line1="${line1:+${line1}${P}}💾 ${mem_used_gb}"
+[ -n "$lines_fmt" ]      && _seg lines "📝 ${lines_fmt}"
+[ -n "$cpu_usage" ]      && _seg cpu "🔥 ${cpu_usage}"
+[ -n "$mem_used_gb" ]    && _seg mem "💾 ${mem_used_gb}"
 if [ -n "$disk_pct" ]; then
   if [ "$disk_pct" -ge 80 ]; then
-    line1="${line1:+${line1}${P}}${RED}⚠️ 💽 ${disk_pct}%${RESET}"
+    _seg disk "${RED}⚠️ 💽 ${disk_pct}%${RESET}"
   else
     c=$(color_pct "$disk_pct" 90 80)
-    line1="${line1:+${line1}${P}}${c}💽 ${disk_pct}%${RESET}"
+    _seg disk "${c}💽 ${disk_pct}%${RESET}"
   fi
 fi
 
 # Line 2: env info
-line2=""
-[ -n "$version" ] && line2="${DIM}v${version}${RESET}"
-[ -n "$folder" ]            && line2="${line2:+${line2}${P}}${BLUE}${folder}${RESET}"
-[ -n "$git_branch" ]       && line2="${line2:+${line2}${P}}${MAGENTA}🌿 ${RESET}${DIM}${git_repo:+${git_repo}@}${RESET}${MAGENTA}${git_branch}${RESET}"
-[ -n "$session_name_fmt" ] && line2="${line2:+${line2}${P}}🏷️  ${session_name_fmt}"
+[ -n "$version" ]          && _seg version "${DIM}v${version}${RESET}"
+[ -n "$folder" ]           && _seg dir "${BLUE}${folder}${RESET}"
+[ -n "$git_branch" ]       && _seg git "${MAGENTA}🌿 ${RESET}${DIM}${git_repo:+${git_repo}@}${RESET}${MAGENTA}${git_branch}${RESET}"
+[ -n "$session_name_fmt" ] && _seg session "🏷️  ${session_name_fmt}"
 
 # Masked email. The payload's account.email is free; only when it is absent is
 # `claude auth status` consulted, and that result is cached for 60 seconds --
@@ -1175,17 +1187,13 @@ else:
     print(email)
 PYEOF
 masked_email=$(python3 -c "$_AL_PY" "$account_email")
-[ -n "$masked_email" ] && line2="${line2:+${line2}${P}}🤖 ${DIM}${masked_email}${RESET}"
-line2="${line2:+${line2}${P}}${DIM}${date_str}${RESET}${P}${CYAN}${time_str}${RESET}"
+[ -n "$masked_email" ] && _seg email "🤖 ${DIM}${masked_email}${RESET}"
+_seg date "${DIM}${date_str}${RESET}"
+_seg clock "${CYAN}${time_str}${RESET}"
 
 # Line 3 — Claude layer: MCP servers + active agents + resume command
-line3=""
-if [ -n "$active_mcps" ]; then
-  line3="⚙️  ${DIM}${active_mcps}${RESET}"
-fi
-if [ -n "$active_agents" ]; then
-  line3="${line3:+${line3}${P}}🤖 ${YELLOW}${active_agents}${RESET}"
-fi
+[ -n "$active_mcps" ]   && _seg mcp "⚙️  ${DIM}${active_mcps}${RESET}"
+[ -n "$active_agents" ] && _seg agents "🤖 ${YELLOW}${active_agents}${RESET}"
 # Recovery command: brings the session back after an unexpected exit.
 # `claude --resume` takes a session ID. A session name is free-form text, so
 # using it unquoted split the command into several arguments and could not be
@@ -1201,63 +1209,103 @@ if [ -n "$session_id" ]; then
 elif [ -n "$session_name" ]; then
   resume_cmd="claude --resume \"${session_name//\"/\\\"}\""
 fi
-[ -n "$resume_cmd" ] && line3="${line3:+${line3}${P}}♻️  ${DIM}${resume_cmd}${RESET}"
+[ -n "$resume_cmd" ] && _seg resume "♻️  ${DIM}${resume_cmd}${RESET}"
 
 # Line 4 — System layer: service health + ssh + cron + dev servers
-line4=""
-[ -n "$svc_panel" ] && line4="🛡️ ${svc_panel}"
+[ -n "$svc_panel" ] && _seg services "🛡️ ${svc_panel}"
 if [ -n "$ssh_count" ] && [ "$ssh_count" -gt 0 ]; then
   ssh_c="$DIM"; [ "$ssh_count" -gt 1 ] && ssh_c="$YELLOW"
-  line4="${line4:+${line4}${P}}🔐 ${ssh_c}ssh:${ssh_count}${RESET}"
+  _seg ssh "🔐 ${ssh_c}ssh:${ssh_count}${RESET}"
 fi
 if [ -n "$cron_count" ] && [ "$cron_count" -gt 0 ]; then
-  line4="${line4:+${line4}${P}}⏰ ${DIM}cron:${cron_count}${RESET}"
+  _seg cron "⏰ ${DIM}cron:${cron_count}${RESET}"
 fi
-if [ -n "$dev_ports" ]; then
-  line4="${line4:+${line4}${P}}🌐 ${DIM}${dev_ports}${RESET}"
-fi
+[ -n "$dev_ports" ] && _seg ports "🌐 ${DIM}${dev_ports}${RESET}"
 
+# === Layout ===
+# One python pass turns the segment records into rows. The layout is a list
+# of lines, each an ordered list of segment names; the default reproduces the
+# historical four lines exactly.
+#
 # Lines 3 and 4 are separate layers (Claude vs system). On a quiet host the
 # split wastes a row, so they are joined when the combined width fits. On a
 # busy host either line can outgrow the terminal, so each is wrapped onto
 # continuation rows at segment (│) boundaries instead of overflowing — a
 # segment is never split internally. Width is measured after stripping colour
 # escapes, counting wide glyphs as two cells; tune with $AGENTLINE_WIDTH.
+#
+# The rows come back joined by a literal \n, the form printf %b renders, so
+# the output is used as-is. It is written as bytes through os.fsencode, which
+# reverses exactly how python decoded argv: a byte the locale cannot decode
+# round-trips instead of raising on the way out.
+AGENTLINE_LAYOUT_DEFAULT="model,effort,fast,ctx,5h,week,cost,dur,tok_in,tok_out,words,lines,cpu,mem,disk / version,dir,git,session,email,date,clock / mcp,agents,resume / services,ssh,cron,ports"
 STATUSLINE_WIDTH="${AGENTLINE_WIDTH:-120}"
 IFS= read -r -d '' _AL_PY <<'PYEOF'
-import re, sys, unicodedata
-width, sep, line3, line4 = int(sys.argv[1]), sys.argv[2], sys.argv[3], sys.argv[4]
+import os, re, sys, unicodedata
+width, sep, segs, layout, default_layout = int(sys.argv[1]), sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5]
+placeholders = dict(zip(sys.argv[6:9], ('00:00:00', 'max', 'ultracode')))
+
+seg = {}
+for rec in segs.split('\x1e'):
+    name, _, text = rec.partition('\x1f')
+    if text and name not in seg:
+        seg[name] = text
+
+def parse(spec):
+    # "/" starts a line, "," separates names; unknown names and repeats are
+    # ignored, so a typo hides nothing but itself.
+    known = set(default_layout.replace('/', ',').replace(' ', '').split(','))
+    lines, seen = [], set()
+    for part in spec.split('/'):
+        names = []
+        for n in part.split(','):
+            n = n.strip()
+            if n in known and n not in seen:
+                seen.add(n)
+                names.append(n)
+        lines.append(names)
+    return lines
 
 def vis(s):
+    # The clock and the animated effort words are still placeholders here,
+    # substituted after layout; count them at the width they will print at.
+    for tok, shown in placeholders.items():
+        s = s.replace(tok, shown)
     # Colour codes are still in backslash-escape form here (rendered later by
     # printf %b), so strip the literal \033[..m sequences before measuring.
     s = re.sub(r'\\033\[[0-9;]*m', '', s)
     return sum(2 if unicodedata.east_asian_width(c) in ('W', 'F') else 1 for c in s)
 
-def wrap(line):
-    if not line:
-        return []
-    if vis(line) <= width:
-        return [line]
+def wrap(texts):
     rows, cur = [], ''
-    for seg in line.split(sep):
-        cand = cur + sep + seg if cur else seg
+    for t in texts:
+        cand = cur + sep + t if cur else t
         if cur and vis(cand) > width:
             rows.append(cur)
-            cur = seg
+            cur = t
         else:
             cur = cand
     if cur:
         rows.append(cur)
     return rows
 
-if line3 and line4 and vis(line3 + sep + line4) <= width:
-    rows = [line3 + sep + line4]
+lines = parse(layout)
+if 'warn' in seg:
+    lines[0].insert(0, 'warn')
+texts = [[seg[n] for n in names if n in seg] for names in lines]
+
+# Lines 1 and 2 are always printed, as they always were; lines 3 and 4 merge
+# when they fit together, wrap when they do not, and vanish when empty.
+rows = [sep.join(texts[0]), sep.join(texts[1])]
+l3, l4 = texts[2], texts[3]
+if l3 and l4 and vis(sep.join(l3 + l4)) <= width:
+    rows.append(sep.join(l3 + l4))
 else:
-    rows = wrap(line3) + wrap(line4)
-sys.stdout.write('\n'.join(rows))
+    rows += wrap(l3) + wrap(l4)
+sys.stdout.buffer.write(os.fsencode('\\n'.join(rows)))
 PYEOF
-layer_rows=$(python3 -c "$_AL_PY" "$STATUSLINE_WIDTH" "$P" "$line3" "$line4")
+out=$(python3 -c "$_AL_PY" "$STATUSLINE_WIDTH" "$P" "$SEGS" "$AGENTLINE_LAYOUT_DEFAULT" "$AGENTLINE_LAYOUT_DEFAULT" \
+  "$CLOCK_TOKEN" "$ANIM_MAX_TOKEN" "$ANIM_ULTRA_TOKEN")
 
 # Prune the cache directory. Every session leaves render_<sid>.* files behind
 # and nothing else ever removes them, so a long-lived host collects thousands.
@@ -1286,12 +1334,6 @@ if [ -n "$CACHE_BASE" ]; then
       \( -type d ! -perm 700 -exec chmod 700 {} + \) 2>/dev/null
   fi
 fi
-
-# Print only non-empty rows, so lines 3 and 4 collapse away instead of gaps
-out="${line1}\n${line2}"
-while IFS= read -r row; do
-  [ -n "$row" ] && out="${out}\n${row}"
-done <<< "$layer_rows"
 
 # Cache the finished render (clock still a placeholder) for the ticks that
 # follow. $out normally holds no real newline — colour breaks are literal \n
