@@ -1573,14 +1573,31 @@ def wrap(texts):
         rows.append(cur)
     return rows
 
+# Drop in AGENTLINE_DROP order until the line fits one row. When the list
+# runs out first, the line wraps anyway, and the segments dropped on the way
+# were lost for nothing while the wrapped rows had room to spare (at 100
+# columns line 2 lost version, e-mail and date and still took two rows, the
+# second one 60 cells short). So once the drops cannot make one row, the row
+# count of what is left is the target, and each dropped segment comes back —
+# the most important first, i.e. last dropped first, at its own position —
+# as long as the wrapped line stays within that many rows.
 def fit(names):
     names = [n for n in names if n in seg]
-    if fitting:
-        for d in drop:
-            if vis(sep.join(seg[n] for n in names)) <= width:
-                break
-            if d in names:
-                names.remove(d)
+    if not fitting:
+        return [seg[n] for n in names]
+    order, dropped = list(names), []
+    for d in drop:
+        if vis(sep.join(seg[n] for n in names)) <= width:
+            break
+        if d in names:
+            names.remove(d)
+            dropped.append(d)
+    if dropped and vis(sep.join(seg[n] for n in names)) > width:
+        target = len(wrap([seg[n] for n in names]))
+        for d in reversed(dropped):
+            cand = [n for n in order if n in names or n == d]
+            if len(wrap([seg[n] for n in cand])) <= target:
+                names = cand
     return [seg[n] for n in names]
 
 lines = parse(layout)

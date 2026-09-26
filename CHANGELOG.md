@@ -34,6 +34,13 @@
   which bash 3.2 does one byte per call. They are now read a line at a
   time, which is buffered on every bash. Only a pretty-printed, multi-line
   payload still takes the byte-wise read. There are still no extra forks.
+- A line that wraps in spite of the drops keeps what fits. When dropping
+  every `AGENTLINE_DROP` segment could not make a line one row, it wrapped
+  anyway, and the dropped segments stayed lost while the rows had room: at
+  80 columns line 1 lost duration, tokens, lines and the host readings and
+  still took two rows. The row count of what is left is now the budget,
+  and the dropped segments come back, most important first and in their
+  own places, as long as the line keeps that many rows.
 - A render that misses the render cache starts two `python3` instead of
   three, or four for a Fable/Mythos model. That is the render an active turn
   pays about once a second, and each `python3` start costs ~20 ms of CPU.

@@ -185,7 +185,7 @@ A compact two-line bar, for example:
 }
 ```
 
-**Narrow terminals.** Claude Code ≥ 2.1.153 tells the status line the terminal width (`COLUMNS`); agentline takes 2 cells off as a margin, because the value is read when the render starts and can trail a resize. When a line is wider than that, segments are dropped from it in `AGENTLINE_DROP` order until it fits, and whatever still does not fit wraps at `│` boundaries. The model, context and both rate limits are never dropped. A resize takes effect on the next tick — the width is part of the render cache key. On older Claude Code there is no `COLUMNS`, so the width is a guess (120, or `AGENTLINE_WIDTH`) and lines 1 and 2 are never trimmed on a guess; set `AGENTLINE_DROP` to opt in anyway.
+**Narrow terminals.** Claude Code ≥ 2.1.153 tells the status line the terminal width (`COLUMNS`); agentline takes 2 cells off as a margin, because the value is read when the render starts and can trail a resize. When a line is wider than that, segments are dropped from it in `AGENTLINE_DROP` order until it fits, and whatever still does not fit wraps at `│` boundaries. A line that has to wrap anyway gets its dropped segments back, most important first, wherever they fit without adding a row. The model, context and both rate limits are never dropped. A resize takes effect on the next tick — the width is part of the render cache key. On older Claude Code there is no `COLUMNS`, so the width is a guess (120, or `AGENTLINE_WIDTH`) and lines 1 and 2 are never trimmed on a guess; set `AGENTLINE_DROP` to opt in anyway.
 
 ## Optional hooks: word counter + agent tracker
 

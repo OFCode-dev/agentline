@@ -648,6 +648,32 @@ for cols in 122 62 30; do
   done
   if msg=$(rows_fit "$T/got" $((cols - 2)) 2>&1); then pass; else fail "layout: COLUMNS=$cols: $msg"; fi
 done
+# When dropping cannot make a line fit one row, the line wraps anyway, and
+# the segments dropped on the way come back as long as the row count stays
+# the same (they used to stay lost, with the wrapped rows half empty).
+# COLUMNS=80: line 1 takes two rows either way, so the second row gets the
+# duration, output tokens, lines and host readings back.
+prepare full "$p"; render "$p" - COLUMNS=80; normalize "$T/out" "$T/got"
+check "layout: COLUMNS=80 line 1 is two rows" sh -c "sed -n 2p '$T/got' | grep -q '^💰'"
+for want in '⏱️' '📤' '📝' '🔥' '💽'; do
+  check "layout: COLUMNS=80 wrapped line 1 re-gains $want" sh -c "sed -n 2p '$T/got' | grep -qF '$want'"
+done
+if msg=$(rows_fit "$T/got" 78 2>&1); then pass; else fail "layout: COLUMNS=80 re-insert: $msg"; fi
+# COLUMNS=100: a git branch too long for line 2 to fit one row (patched into
+# the seeded probe cache). Version, e-mail and date were dropped and the
+# line wrapped all the same, its second row 60 cells short.
+long_branch="feature/an-unusually-long-branch-name-for-narrow-x"
+prepare full "$p"
+sed "s#^git_branch=.*#git_branch=$long_branch#" "$(cbase "$(sid_of "$p")").probes" > "$T/probes.tmp"
+cat "$T/probes.tmp" > "$(cbase "$(sid_of "$p")").probes"
+render "$p" - COLUMNS=100; normalize "$T/out" "$T/got"
+check "layout: COLUMNS=100 long branch shown" has "$T/got" "$long_branch"
+for want in 'v3.0.24' '🤖 o*****t@e*****e.com' 'DD/MM/YYYY Day'; do
+  check "layout: COLUMNS=100 wrapped line 2 re-gains $want" has "$T/got" "$want"
+done
+check "layout: COLUMNS=100 line 2 still two rows" \
+  [ "$(grep -c -e "$long_branch" -e 'v3.0.24' -e 'DD/MM' -e 'golden-full' "$T/got")" = 2 ]
+if msg=$(rows_fit "$T/got" 98 2>&1); then pass; else fail "layout: COLUMNS=100 re-insert: $msg"; fi
 # A busy session at COLUMNS=122: once the default drop list ran out, line 1
 # still overflowed by a few cells and wrapped the host readings onto a row
 # of their own. cpu, mem and disk now close the list (host info, the least
