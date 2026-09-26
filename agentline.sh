@@ -1533,13 +1533,28 @@ fi
 #     cached tick counts it down like the clock. Whether it shows at all is
 #     decided per full render, which comes at least every
 #     AGENTLINE_CACHE_TTL seconds, so it appears at most that late.
-#   - cold: a red "🗄️ cold·tools" naming the first miss cause, plus the dim
-#     "~45k" tokens going cold re-writes, when the payload says.
+#   - cold: a red "🗄️ cold·ttl" saying why, plus the dim "~45k" tokens the
+#     next turn re-writes, when the payload says.
 # AGENTLINE_CACHE_VERBOSE=1 adds the session hit ratio in any state, red
 # below 25, yellow below 75. All bash tests on parser-made digits: no fork.
+#
+# Which cause a cold cache shows. A miss re-writes the cache, so right after
+# one the cache is warm again, not cold: last_miss_cause is history, and it
+# carries no time of its own to say whether it belongs to the latest request.
+# A cache that went cold by sitting idle past expires_at would otherwise
+# blame a tools_changed miss from an hour before. So an expires_at already
+# past means the TTL ran out, whatever the recorded miss — and whatever
+# `warm` still says, since a payload is only as fresh as the last event and
+# nothing re-runs the status line exactly at expiry. The recorded cause is
+# shown only when the payload gives no expiry to judge by (the latest
+# response wrote no cache at all), where it can only describe that response.
+# No "miss" marker while warm: with no time on the cause it would keep
+# naming the same old miss after every hit that followed it.
 if [ -n "$pc_state" ]; then
   pc_body=""
-  if [ "$pc_state" = cold ]; then
+  pc_gone=0
+  if [ -n "$pc_exp" ] && [ "$pc_exp" -le "$_now_epoch" ]; then pc_gone=1; pc_cause=ttl; fi
+  if [ "$pc_state" = cold ] || [ "$pc_gone" = 1 ]; then
     pc_body="${RED}cold${pc_cause:+·${pc_cause}}${RESET}${pc_recache:+ ${DIM}~${pc_recache}${RESET}}"
     _WARNED="${_WARNED},cache"
   elif [ -n "$pc_exp" ]; then

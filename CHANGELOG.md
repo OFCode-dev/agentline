@@ -19,10 +19,14 @@
   because warm is the normal case. With at most 60 seconds left (300 on a
   1-hour TTL, or `AGENTLINE_CACHE_WARN`) it shows a yellow `🗄️ ↻1m12s`
   that counts down live on cached ticks, with no fork. Once the cache has
-  gone cold it shows a red `🗄️ cold·tools`, naming the first miss cause
-  (`ttl`, `tools`, `prompt`, `model`, …), plus the dim `~45k` tokens that
-  going cold re-writes, when reported. This is the one place to learn
-  that connecting an MCP server mid-session just invalidated the cache.
+  gone cold it shows a red `🗄️ cold·ttl`, plus the dim `~45k` tokens the
+  next turn re-writes, when reported. A cache past its `expires_at` always
+  reads `ttl`, even when the payload still says warm or recorded another
+  miss earlier: a miss re-writes the cache, so the cache is warm again
+  right after one, and an idle cache that goes cold an hour after a
+  `tools_changed` miss went cold because the TTL ran out. Claude Code's
+  own miss cause (`tools`, `prompt`, `model`, …) is shown only when the
+  payload gives no expiry, i.e. when the latest response wrote no cache.
   `AGENTLINE_CACHE_VERBOSE=1` adds the session hit ratio. The segment is
   hidden on older Claude Code and when the provider reports no caching.
   There is deliberately no guess from the transcript's modification time,

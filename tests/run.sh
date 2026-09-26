@@ -706,8 +706,20 @@ pcache "{\"warm\":true,\"ttl\":\"5m\",\"expires_at\":$((pnow + 200))}" AGENTLINE
 check "cache: AGENTLINE_CACHE_WARN widens the window" grep -qE '🗄️ ↻3m[0-9]{2}s' "$T/pl"
 pcache "{\"warm\":true,\"ttl\":\"5m\",\"expires_at\":$(( (pnow + 50) * 1000 ))}"
 check "cache: expires_at in milliseconds" grep -qE '🗄️ ↻[0-9]+s' "$T/pl"
-pcache "{\"warm\":true,\"ttl\":\"5m\",\"expires_at\":$((pnow - 5))}"
-if grep -q '🗄️' "$T/pl"; then fail "cache: warm but already past expiry is hidden"; else pass; fi
+# Past expires_at the TTL ran out, whatever `warm` still says (F2) and
+# whatever miss was recorded before (F1): the cause shown is ttl.
+pcache "{\"warm\":true,\"ttl\":\"5m\",\"expires_at\":$((pnow - 5)),\"recache_tokens_if_cold\":45230}"
+check "cache: warm but already past expiry reads cold·ttl" grep -qF '🗄️ cold·ttl ~45k' "$T/pl"
+check "cache: expired warm cache is red" grep -q "${ESC}\[1;31mcold" "$T/out"
+pcache "{\"warm\":false,\"ttl\":\"5m\",\"expires_at\":$((pnow - 3600)),\"last_miss_cause\":{\"causes\":[\"tools_changed\"]}}"
+check "cache: idle past expiry blames the TTL, not an old miss" grep -qF '🗄️ cold·ttl' "$T/pl"
+if grep -q 'cold·tools' "$T/pl"; then fail "cache: an old tools miss is not shown after expiry"; else pass; fi
+# No expiry to judge by: the recorded cause is the latest response's.
+pcache '{"warm":false,"expires_at":null,"last_miss_cause":{"causes":["tools_changed"]}}'
+check "cache: cold with no expiry keeps the recorded cause" grep -qF '🗄️ cold·tools' "$T/pl"
+# Warm again right after a miss: nothing is shown (no stale miss marker).
+pcache "{\"warm\":true,\"ttl\":\"5m\",\"expires_at\":$((pnow + 290)),\"last_miss_cause\":{\"causes\":[\"tools_changed\"]}}"
+if grep -q '🗄️' "$T/pl"; then fail "cache: warm after a miss stays hidden"; else pass; fi
 pcache '{"warm":false,"last_miss_cause":{"causes":["ttl_expired_5m"]}}'
 check "cache: cold, ttl cause" grep -qF '🗄️ cold·ttl' "$T/pl"
 check "cache: cold is red" grep -q "${ESC}\[1;31mcold" "$T/out"
