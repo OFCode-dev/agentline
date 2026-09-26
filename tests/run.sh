@@ -218,29 +218,106 @@ done
 # shell text: one apostrophe in a python comment there opened a quote and
 # broke every full render with a syntax error, while bash 5 and `bash -n`
 # under bash 5 were fine. Scripts read such programs into a variable at top
-# level instead; this check keeps an odd apostrophe count out of any heredoc
-# that still sits inside a command substitution, whichever bash runs it.
-if python3 - "$ROOT/agentline.sh" "$ROOT/install.sh" "$ROOT"/hooks/*.sh "$TESTS/run.sh" > "$T/heredocs" 2>&1 <<"PYEOF"
+# level instead; this check keeps such hazards out of any heredoc that still
+# sits inside a command substitution, whichever bash runs it.
+#
+# A small tokenizer follows quotes, comments and ( / $( nesting across lines,
+# so a heredoc counts as inside $(...) wherever the opener is — also on an
+# earlier line. Its body must not hold an odd number of apostrophes, double
+# quotes or backticks, nor unbalanced parentheses: bash 3.2 reads all four
+# while it looks for the closing `)`. It also flags a `case ... in pat)`
+# inside $(...) on one line, whose `)` bash 3.2 takes for the end of the
+# substitution (write the pattern as `(pat)`). The checker is self-tested on
+# one sample per hazard, so a guard that stops seeing one fails too.
+cat > "$T/heredoc_guard.py" <<"PYEOF"
 import re, sys
-bad = []
-for path in sys.argv[1:]:
+HEREDOC = re.compile(r"<<-?\s*([\"']?)(\w+)\1")
+CASE_IN_SUBST = re.compile(r"\$\((?:(?!\)).)*?\bcase\b.*?\bin\s+(\S)")
+
+def scan(path):
+    bad, name = [], path.rsplit("/", 1)[-1]
     lines = open(path, encoding="utf-8").read().split("\n")
-    i = 0
+    stack, quote, i = [], None, 0  # stack: (kind, quote to restore on `)`)
     while i < len(lines):
-        m = re.search(r"<<-?[\"']?(\w+)[\"']?", lines[i])
-        start = lines[i].rfind("$(", 0, m.start()) if m else -1
-        if m and start >= 0 and ")" not in lines[i][start:m.start()]:
-            tag, body, j = m.group(1), [], i + 1
-            while j < len(lines) and lines[j].strip() != tag:
-                body.append(lines[j]); j += 1
-            if sum(l.count(chr(39)) for l in body) % 2:
-                bad.append("%s:%d" % (path.rsplit("/", 1)[-1], i + 1))
-            i = j
+        line, pending = lines[i], []
+        j = 0
+        while j < len(line):
+            c = line[j]
+            if quote == "'":
+                if c == "'":
+                    quote = None
+            elif c == "\\":
+                j += 1
+            elif quote == '"' and c == '"':
+                quote = None
+            elif line.startswith("$(", j):
+                m = CASE_IN_SUBST.match(line, j)
+                if m and m.group(1) != "(":
+                    bad.append("%s:%d: case pattern inside $(...), write it (pat)" % (name, i + 1))
+                stack.append(("$(", quote))
+                quote = None
+                j += 1
+            elif quote is None:
+                if c in "'\"":
+                    quote = c
+                elif c == "#" and (j == 0 or line[j - 1] in " \t;"):
+                    break
+                elif c == "(":
+                    stack.append(("(", None))
+                elif c == ")":
+                    if stack:
+                        quote = stack.pop()[1]
+                elif line.startswith("<<", j) and not line.startswith("<<<", j):
+                    h = HEREDOC.match(line, j)
+                    if h:
+                        pending.append((h.group(2), sum(k == "$(" for k, _ in stack), i + 1))
+                        j = h.end() - 1
+            j += 1
         i += 1
-if bad:
-    sys.exit("odd apostrophes in a heredoc inside $(...): " + ", ".join(bad))
+        for tag, depth, at in pending:
+            body = []
+            while i < len(lines) and lines[i].strip() != tag:
+                body.append(lines[i])
+                i += 1
+            i += 1
+            text, probs = "\n".join(body), []
+            if depth:
+                for ch, what in (("'", "apostrophes"), ('"', "double quotes"), ("`", "backticks")):
+                    if text.count(ch) % 2:
+                        probs.append("odd " + what)
+                if text.count("(") != text.count(")"):
+                    probs.append("unbalanced parentheses")
+            if probs:
+                bad.append("%s:%d: heredoc inside $(...): %s" % (name, at, ", ".join(probs)))
+    return bad
+
+bad = [b for p in sys.argv[1:] for b in scan(p)]
+print("\n".join(bad))
+sys.exit(1 if bad else 0)
 PYEOF
-then pass; else fail "bash 3.2 heredoc hazard: $(cat "$T/heredocs")"; fi
+if python3 "$T/heredoc_guard.py" "$ROOT/agentline.sh" "$ROOT/install.sh" "$ROOT"/hooks/*.sh \
+     "$TESTS/run.sh" "$ROOT"/bench/*.sh > "$T/heredocs" 2>&1; then
+  pass
+else
+  fail "bash 3.2 heredoc hazard: $(tr '\n' ' ' < "$T/heredocs")"
+fi
+# Self-test: each sample holds one hazard and must be flagged; the clean one
+# (a top-level heredoc with anything in it, a balanced one inside $(...))
+# must not.
+G="$T/guard"; mkdir -p "$G"
+q="'"; bq='`'
+printf 'x=$(python3 - <<%sEOF%s\n# it%ss\nEOF\n)\n' "$q" "$q" "$q" > "$G/apostrophe.sh"
+printf 'x=$(python3 - <<%sEOF%s\nprint("a)\nEOF\n)\n' "$q" "$q" > "$G/dquote.sh"
+printf 'x=$(cat <<%sEOF%s\n%s\nEOF\n)\n' "$q" "$q" "$bq" > "$G/backtick.sh"
+printf 'x=$(cat <<%sEOF%s\nf(\nEOF\n)\n' "$q" "$q" > "$G/paren.sh"
+printf 'x=$(\n  python3 - <<%sEOF%s\n# it%ss\nEOF\n)\n' "$q" "$q" "$q" > "$G/earlier.sh"
+printf 'y=$(case "$a" in b) echo 1 ;; esac)\n' > "$G/case.sh"
+printf 'cat <<%sEOF%s\nit%ss "( `\nEOF\nx=$(cat <<%sEOF%s\nf("a", %sb%s)\nEOF\n)\ny=$(case "$a" in (b) echo 1 ;; esac)\n' \
+  "$q" "$q" "$q" "$q" "$q" "$q" "$q" > "$G/clean.sh"
+for s in apostrophe dquote backtick paren earlier case; do
+  if python3 "$T/heredoc_guard.py" "$G/$s.sh" > /dev/null 2>&1; then fail "heredoc guard misses: $s"; else pass; fi
+done
+if msg=$(python3 "$T/heredoc_guard.py" "$G/clean.sh" 2>&1); then pass; else fail "heredoc guard false alarm: $msg"; fi
 
 # ===========================================================================
 # 2. Golden renders: every fixture at every width
