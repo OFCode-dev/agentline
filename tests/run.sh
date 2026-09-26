@@ -739,6 +739,19 @@ print(m and "".join([m[1], "*" * len(m[2]), m[3], m[4], m[5], "*" * len(m[6]), m
   render "$T/mask.json" 120 AGENTLINE_LAYOUT=email; normalize "$T/out" "$T/got"
   check "e-mail mask: $addr -> $want" grep -qxF "🤖 $want" "$T/got"
 done
+# The python fallback reads the unmasked address on stdin: argv is visible
+# to every local user through ps. A shim logs each python3's arguments.
+cat > "$PYSHIM/python3" <<EOF
+#!/bin/sh
+printf '%s\n' "\$*" >> "$T/py-argv"
+exec "$REAL_PY" "\$@"
+EOF
+printf '{"session_id":"mask-0002","cwd":"%s","account":{"email":"şule@örnek.com"}}\n' "$WORK" > "$T/mask.json"
+prepare minimal "$T/mask.json"; rm -f "$T/py-argv"
+render "$T/mask.json" 120 AGENTLINE_LAYOUT=email PATH="$PYSHIM:$PATH_F"; normalize "$T/out" "$T/got"
+check "e-mail mask: python fallback still masks" grep -qxF '🤖 ş**e@ö***k.com' "$T/got"
+check "e-mail mask: python fallback ran" [ -s "$T/py-argv" ]
+if grep -qF 'örnek' "$T/py-argv" 2>/dev/null; then fail "e-mail mask: unmasked address in python argv"; else pass; fi
 
 # ===========================================================================
 # 3c. Host probes: services panel, dev ports

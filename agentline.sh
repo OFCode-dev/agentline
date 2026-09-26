@@ -1352,9 +1352,14 @@ fi
 # so it is only trusted with an address spelled from an explicit ASCII list
 # (no ranges: bash 3.2 matches [a-z] by collation order, which admits
 # accented letters); anything else still goes to the python3 original.
+#
+# That python gets the address on stdin (a here-string, no extra fork), never
+# as an argument: argv is world-readable through `ps` and /proc/<pid>/cmdline
+# for as long as the process runs, and this is the unmasked address. Bytes in
+# and out, surrogateescape both ways, so no encoding can make it raise.
 IFS= read -r -d '' _AL_PY <<'PYEOF'
 import re, sys
-email = sys.argv[1]
+email = sys.stdin.buffer.read().decode('utf-8', 'surrogateescape').rstrip('\n')
 m = re.match(r'^(.)(.*)(.)(@)(.)(.*)(.)(\..+)$', email)
 if m:
     local_first = m.group(1)
@@ -1365,9 +1370,8 @@ if m:
     dom_mid     = '*' * len(m.group(6))
     dom_last    = m.group(7)
     tld         = m.group(8)
-    print(f'{local_first}{local_mid}{local_last}{at}{dom_first}{dom_mid}{dom_last}{tld}')
-else:
-    print(email)
+    email = f'{local_first}{local_mid}{local_last}{at}{dom_first}{dom_mid}{dom_last}{tld}'
+sys.stdout.buffer.write(email.encode('utf-8', 'surrogateescape'))
 PYEOF
 _mask_email() {  # _mask_email <address> -> $masked_email
   local e="$1" head loc dom dhead pre post s1 s2
@@ -1375,7 +1379,7 @@ _mask_email() {  # _mask_email <address> -> $masked_email
   case "$e" in
     '') return ;;
     *[!abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789@._+-]*)
-      masked_email=$(python3 -I -c "$_AL_PY" "$e"); return ;;
+      masked_email=$(python3 -I -c "$_AL_PY" <<< "$e"); return ;;
   esac
   head="$e"
   while :; do

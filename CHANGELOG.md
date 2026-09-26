@@ -25,6 +25,10 @@
   whole payload. On Python 3.11+ `json.loads` raised on it, and every
   segment from the payload was replaced by "⚠ payload". Such a literal now
   decodes as infinity, and only its own segment disappears.
+- The unmasked e-mail address is no longer visible in `ps`. Addresses the
+  bash mask cannot handle (non-ASCII ones) still go to `python3`, and that
+  call now receives the address on stdin instead of as an argument, which
+  any local user could read from the process list.
 - A render that misses the render cache starts two `python3` instead of
   three, or four for a Fable/Mythos model. That is the render an active turn
   pays about once a second, and each `python3` start costs ~20 ms of CPU.
