@@ -194,17 +194,28 @@ _tick_now
 _cache_key="${input}${_US}${COLUMNS-}|${AGENTLINE_WIDTH-}|${AGENTLINE_LAYOUT-}|${AGENTLINE_DROP+set:}${AGENTLINE_DROP-}"
 # The cache files are read with the `read` builtin, not `$(<file)`: bash 5
 # serves `$(<file)` in-process, but bash 3.2 (macOS) forks a subshell for
-# each, which cost this path two forks a second. `IFS= read -r -d ''` takes
-# the file verbatim; its non-zero status at end of file is expected.
+# each, which cost this path two forks a second.
+#
+# They are read a line at a time, not with `read -d ''`: with any delimiter
+# but newline, bash 3.2 reads one byte per syscall (some 1,700 reads a tick
+# for a typical payload), while a newline-delimited read of a regular file is
+# buffered on every bash. Both files are written without a trailing newline,
+# so a whole single-line file makes `read` hit end of file and return 1; a
+# return of 0 means a newline came first and there is more, which is treated
+# as no match. The payload key holds a newline only for a pretty-printed
+# payload, and for that one the byte-wise verbatim read is kept. The render
+# body never holds one: a render with a real newline is not cached (below).
 _prev_payload=""
-_cached=""
+_cached_body=""
 if [ -n "$CACHE_BASE" ] && [ -f "${CACHE_BASE}.payload" ]; then
-  IFS= read -r -d '' _prev_payload < "${CACHE_BASE}.payload"
+  case "$_cache_key" in
+    *$'\n'*) IFS= read -r -d '' _prev_payload < "${CACHE_BASE}.payload" ;;
+    *) IFS= read -r _prev_payload < "${CACHE_BASE}.payload" && _prev_payload="" ;;
+  esac
 fi
 if [ -n "$_prev_payload" ] && [ "$_prev_payload" = "$_cache_key" ] && [ -f "${CACHE_BASE}.render" ]; then
-  IFS= read -r -d '' _cached < "${CACHE_BASE}.render"
-  _cached_ts="${_cached%%$'\n'*}"
-  _cached_body="${_cached#*$'\n'}"
+  _cached_ts=""
+  { IFS= read -r _cached_ts; IFS= read -r _cached_body && _cached_body=""; } < "${CACHE_BASE}.render"
   case "$_cached_ts" in
     ''|*[!0-9]*) ;;
     *)

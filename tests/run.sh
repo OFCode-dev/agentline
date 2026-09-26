@@ -507,6 +507,24 @@ printf '%s\n%s' "$(date +%s)" 'OLD @@AGENTLINE_CLOCK@@' > "$CACHE_DIR/render_$si
 render "$p" 120
 check "old-format render cache is ignored" sh -c "! grep -q 'OLD' '$T/out' && grep -q 'Opus 5' '$T/out'"
 rm -f "$CACHE_DIR/render_$sid".*
+# The cache files are read a line at a time (bash 3.2 reads byte by byte
+# with -d ''). A file with more after its first line never matches: an extra
+# line after the payload key, or a second line in the body.
+prepare full "$p"; render "$p" 120
+printf '\nextra' >> "$(cbase "$sid").payload"
+printf '%s\n%s' "$(date +%s)" "CACHED $CLOCK_TOK" > "$render_file"
+render "$p" 120
+check "payload key with a trailing line is no match" grep -q 'Opus 5' "$T/out"
+printf '%s\n%s\n%s' "$(date +%s)" "CACHED $CLOCK_TOK" "MORE" > "$render_file"
+render "$p" 120
+check "render body with a second line is not served" sh -c "! grep -q 'CACHED' '$T/out' && grep -q 'Opus 5' '$T/out'"
+# A pretty-printed (multi-line) payload keeps the verbatim read, and hits.
+python3 -c 'import json, sys; print(json.dumps(json.load(open(sys.argv[1])), indent=2))' "$p" > "$T/pretty.json"
+prepare full "$T/pretty.json"; render "$T/pretty.json" 120
+printf '%s\n%s' "$(date +%s)" "CACHED $CLOCK_TOK" > "$render_file"
+render "$T/pretty.json" 120
+check "multi-line payload: tick serves the cached body" grep -Eq '^CACHED [0-9]{2}:[0-9]{2}:[0-9]{2}$' "$T/out"
+rm -f "$CACHE_DIR/render_$sid".*
 
 # Fork count. Only strace sees forks from $(...) and subshells — a PATH shim
 # sees execs alone — so this runs where strace exists (the Linux CI job).
@@ -549,6 +567,12 @@ PYEOF
     case " $allowed " in *" $prog "*) ;; *) bad="$bad $prog" ;; esac
   done
   check "fast path execs only [$allowed], got [$tick_progs]" [ -z "$bad" ]
+  # Reads are buffered on every bash: ~1,700 read(2) calls a tick on bash 3.2
+  # when the cache files were read with -d ''.
+  ( cd "$WORK" && run_env AGENTLINE_WIDTH=120 strace -f -qq -o "$T/st-read" -e trace=read \
+      "$TEST_BASH" "$ROOT/agentline.sh" < "$p" > /dev/null 2>&1 )
+  n_reads=$(grep -c 'read(' "$T/st-read")
+  check "fast path: buffered reads, got $n_reads read(2) calls" [ "$n_reads" -lt 200 ]
   # The seeded probe cache must keep every host probe from running.
   leaked=""
   for prog in ${full_progs//,/ }; do

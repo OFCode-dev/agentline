@@ -29,6 +29,11 @@
   bash mask cannot handle (non-ASCII ones) still go to `python3`, and that
   call now receives the address on stdin instead of as an argument, which
   any local user could read from the process list.
+- A cached tick on bash 3.2 (macOS) makes about 50 `read` system calls
+  instead of about 1,700. The two cache files were read with `read -d ''`,
+  which bash 3.2 does one byte per call. They are now read a line at a
+  time, which is buffered on every bash. Only a pretty-printed, multi-line
+  payload still takes the byte-wise read. There are still no extra forks.
 - A render that misses the render cache starts two `python3` instead of
   three, or four for a Fable/Mythos model. That is the render an active turn
   pays about once a second, and each `python3` start costs ~20 ms of CPU.
