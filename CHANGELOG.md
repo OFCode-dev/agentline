@@ -62,11 +62,19 @@
   so none can be left stuck. The request timeout drops from 10 s to 3 s
   because it runs inside a render. A failed fetch still caches empty,
   hiding `F:` for one TTL rather than showing an unconfirmed number.
-- The agent registry is locked on macOS too. macOS has no `flock`, and the
-  unguarded call there let every write run unlocked. A `mkdir` lock with a
-  5 s wait now stands in, and a lock directory older than 10 s is cleared
-  as abandoned. A write that cannot get the lock is skipped with a note on
-  stderr instead of racing.
+- The agent registry is locked on macOS too, by a lock no dead writer can
+  wedge. macOS has no `flock(1)`, and the unguarded call there let every
+  write run unlocked. Each write is now one short `python3` run that holds
+  `flock(2)` on `claude_agents.txt.lock` (the file the old `flock(1)` used,
+  so the two exclude each other) for the whole read-modify-write. The kernel
+  releases the lock with its holder, so there is no stale lock to break. A
+  `mkdir` lock tried in between lost rows under a 12-writer stress run and
+  could wedge the registry. A lock still held after 5 s skips the write with
+  a note on stderr instead of racing. A lock that cannot be opened (an
+  unwritable directory, a full disk, another user's file in a sticky `/tmp`)
+  skips at once instead of waiting out the 5 s, and so does a missing
+  `python3`. Leftover `.d` / `.d.stale.*` directories older than a minute
+  are removed on the next write.
 - The `/usage` refresh survives the render being cancelled. Claude Code
   cancels an in-flight status-line script whenever the next update is due
   (every second with `refreshInterval: 1`), and a full render plus a fetch
@@ -81,16 +89,6 @@
   cache file an older release left at 644 stayed 644 through every `>`
   rewrite. The daily sweep now sets surviving files to 600 and the
   directory to 700.
-- The registry lock can no longer spin forever, and every writer takes the
-  same one. Breaking a stale `mkdir` lock did `rmdir; continue`, skipping the
-  deadline, so a lock that could not be removed (another user's directory in
-  a sticky `/tmp`, a non-empty directory, a file in the way) looped on forks
-  indefinitely, and two waiters could both end up believing they held it.
-  The deadline is now checked first on every pass, and a stale lock is
-  broken by renaming it to a name unique to the waiter, so only one wins; a
-  fresh lock moved by mistake is put back. The lock is also no longer flock
-  on one process and mkdir on another depending on PATH, which let mixed
-  writers skip each other: it is the mkdir lock everywhere.
 - The cache directory is pruned. Every session left `render_<sid>.*` files
   behind forever; once a day, files untouched for 7 days are deleted. The
   daily gate is read with a builtin, so the other renders pay nothing.

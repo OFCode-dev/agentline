@@ -520,76 +520,126 @@ render "$PAY/minimal.json" 120 CLAUDE_AGENTS_FILE="$T/custom-agents.txt"
 check "reader honours CLAUDE_AGENTS_FILE" grep -q 'relocated' "$T/out"
 
 # --- Registry lock -----------------------------------------------------------
-# Run under a PATH with no flock (macOS has none): every tool the registry
-# needs is linked in, flock is not. A second PATH also replaces mv with one
-# that always fails, which makes a stale lock unbreakable.
-NOFLOCK="$T/noflock"; MVFAIL="$T/mvfail"
-mkdir -p "$NOFLOCK" "$MVFAIL"
-for tool in env date stat mkdir rmdir mv rm awk mktemp chmod wc tail sleep dirname cat sh; do
-  tp=$(command -v "$tool") && ln -s "$tp" "$NOFLOCK/$tool" && ln -s "$tp" "$MVFAIL/$tool"
-done
-rm -f "$MVFAIL/mv"; printf '#!/bin/sh\nexit 1\n' > "$MVFAIL/mv"; chmod +x "$MVFAIL/mv"
-REG="$T/lock/agents.txt"; LOCKD="$REG.d"
-reg() {  # reg <path-dir> <op> <label> -> $T/rerr, $lrc, $lsecs (killed after 20 s)
-  local pathdir="$1" start pid i=0; shift
+# flock(2) on <file>.lock, taken by python3. The holder below is a separate
+# python3 that takes the same lock and sleeps, so a test can hold it, and
+# kill -9 it, at will.
+REG="$T/lock/agents.txt"; LOCKF="$REG.lock"; LOCKD="$REG.d"
+reg() {  # reg <op> <label> [VAR=val...] -> $T/rerr, $lrc, $lsecs (killed after 20 s)
+  local op="$1" lab="$2" start pid i=0; shift 2
   mkdir -p "$T/lock"
   start=$(date +%s)
-  env -i PATH="$pathdir" CLAUDE_AGENTS_FILE="$REG" "$TEST_BASH" "$AGENT" "$@" 2> "$T/rerr" &
+  env -i PATH="$PATH_F" CLAUDE_AGENTS_FILE="$REG" ${1+"$@"} "$TEST_BASH" "$AGENT" "$op" "$lab" 2> "$T/rerr" &
   pid=$!
   while kill -0 "$pid" 2>/dev/null && [ "$i" -lt 200 ]; do sleep 0.1; i=$((i + 1)); done
   if kill -0 "$pid" 2>/dev/null; then kill -9 "$pid" 2>/dev/null; lrc=hung; wait "$pid" 2>/dev/null
   else wait "$pid"; lrc=$?; fi
   lsecs=$(( $(date +%s) - start ))
 }
+hold_lock() {  # hold_lock <seconds> -> $holder (pid), returns once the lock is held
+  rm -f "$T/held"
+  python3 - "$LOCKF" "$1" "$T/held" <<'PYEOF' &
+import fcntl, os, sys, time
+fd = os.open(sys.argv[1], os.O_RDWR | os.O_CREAT, 0o644)
+fcntl.flock(fd, fcntl.LOCK_EX)
+open(sys.argv[3], 'w').close()
+time.sleep(float(sys.argv[2]))
+PYEOF
+  holder=$!
+  wait_for 5 [ -e "$T/held" ]
+}
 old_stamp=200001010000
 
-check "lock test PATH has no flock" sh -c "! PATH='$NOFLOCK' command -v flock >/dev/null"
 rm -rf "$T/lock"; mkdir -p "$T/lock"
-for i in 1 2 3 4 5 6 7 8; do
-  env -i PATH="$NOFLOCK" CLAUDE_AGENTS_FILE="$REG" "$TEST_BASH" "$AGENT" add "parallel $i" 2>/dev/null &
+for i in 1 2 3 4 5 6 7 8 9 10 11 12; do
+  env -i PATH="$PATH_F" CLAUDE_AGENTS_FILE="$REG" "$TEST_BASH" "$AGENT" add "parallel $i" 2>/dev/null &
 done
 wait
-check "lock: 8 parallel adds all land" [ "$(grep -c 'parallel' "$REG")" = 8 ]
-check "lock: released after use" [ ! -e "$LOCKD" ]
-# One mechanism for every writer: with flock on PATH the same mkdir lock is
-# honoured, so a writer that has flock cannot slip past one that does not.
-mkdir "$LOCKD"
-reg "$PATH_F" add "flock on path"
-check "lock is the same with flock on PATH" grep -q 'registry busy' "$T/rerr"
-rmdir "$LOCKD"
+check "lock: 12 parallel adds all land" [ "$(grep -c 'parallel' "$REG")" = 12 ]
+check "lock: no mkdir-lock artefacts" sh -c "! ls -d '$LOCKD'* >/dev/null 2>&1"
+
+# The reviewer's wedge: an aged leftover mkdir lock plus 12 concurrent adds,
+# many rounds. Every round must land every row and leave nothing behind.
+bad_rounds=0
+for round in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
+  rm -f "$REG"; mkdir -p "$LOCKD"; touch -t "$old_stamp" "$LOCKD"
+  for i in 1 2 3 4 5 6 7 8 9 10 11 12; do
+    env -i PATH="$PATH_F" CLAUDE_AGENTS_FILE="$REG" "$TEST_BASH" "$AGENT" add "round $i" 2>/dev/null &
+  done
+  wait
+  if [ "$(grep -c 'round' "$REG" 2>/dev/null)" != 12 ] || ls -d "$LOCKD"* >/dev/null 2>&1; then
+    bad_rounds=$((bad_rounds + 1))
+  fi
+done
+check "lock stress: 15 rounds x 12 adds, $bad_rounds bad" [ "$bad_rounds" = 0 ]
 
 # A live lock is waited on, then the write is skipped — never raced, never hung.
-mkdir "$LOCKD"; cp "$REG" "$T/reg.before"
-reg "$NOFLOCK" add "blocked"
+cp "$REG" "$T/reg.before"
+hold_lock 8
+reg add "blocked"
 check "lock held: gives up with exit 0 (got $lrc)" [ "$lrc" = 0 ]
-check "lock held: within the deadline (${lsecs}s)" [ "$lsecs" -le 8 ]
+check "lock held: within the deadline (${lsecs}s)" [ "$lsecs" -le 7 ]
+check "lock held: waited for it (${lsecs}s)" [ "$lsecs" -ge 4 ]
 check "lock held: says skipped" grep -q 'registry busy' "$T/rerr"
 check "lock held: file untouched" cmp -s "$REG" "$T/reg.before"
-check "lock held: live lock left alone" [ -d "$LOCKD" ]
-rmdir "$LOCKD"
+# A holder that dies (kill -9, no cleanup) releases the lock with it.
+kill -9 "$holder" 2>/dev/null; wait "$holder" 2>/dev/null
+reg add "after a dead holder"
+check "dead holder: add succeeds at once (rc $lrc, ${lsecs}s)" [ "$lrc" = 0 -a "$lsecs" -le 2 ]
+check "dead holder: row written" grep -q 'after a dead holder' "$REG"
 
-# Stale locks that the old `rmdir; continue` could not clear, and spun on
-# forever: a regular file in the way, and a non-empty directory.
-touch "$LOCKD"; touch -t "$old_stamp" "$LOCKD"
-reg "$NOFLOCK" add "after stale file"
-check "stale file lock: add succeeds (got $lrc)" [ "$lrc" = 0 ]
-check "stale file lock: row written" grep -q 'after stale file' "$REG"
-check "stale file lock: cleared" [ ! -e "$LOCKD" ]
-mkdir -p "$LOCKD/junk"; touch -t "$old_stamp" "$LOCKD"
-reg "$NOFLOCK" add "after stale dir"
-check "stale non-empty lock: add succeeds (got $lrc)" [ "$lrc" = 0 ]
-check "stale non-empty lock: row written" grep -q 'after stale dir' "$REG"
-check "stale non-empty lock: set aside, not deleted" sh -c "ls -d '$LOCKD'.stale.* >/dev/null 2>&1"
-rm -rf "$LOCKD" "$LOCKD".stale.*
+# flock(1) — what earlier releases locked this same file with — is excluded
+# by, and excludes, the python lock: one mechanism for every writer.
+if command -v flock >/dev/null 2>&1; then
+  flock "$LOCKF" sleep 8 & fpid=$!
+  sleep 0.5
+  reg add "vs flock(1)"
+  check "flock(1) holder: python writer waits it out" grep -q 'registry busy' "$T/rerr"
+  kill "$fpid" 2>/dev/null; wait "$fpid" 2>/dev/null
+else
+  skip "flock(1) interop: flock not installed"
+fi
 
-# A stale lock that cannot be broken (rename refused, as for another user's
-# directory in a sticky /tmp) must still give up at the deadline.
-mkdir "$LOCKD"; touch -t "$old_stamp" "$LOCKD"
-reg "$MVFAIL" add "unbreakable"
-check "unbreakable stale lock: exit 0, not hung (got $lrc)" [ "$lrc" = 0 ]
-check "unbreakable stale lock: within the deadline (${lsecs}s)" [ "$lsecs" -le 8 ]
-check "unbreakable stale lock: says skipped" grep -q 'registry busy' "$T/rerr"
-rm -rf "$LOCKD"
+# Errors that waiting cannot cure fail fast instead of costing the deadline:
+# a lock name that cannot be opened (a directory in the way stands in for
+# another user's lock file), an unwritable directory.
+rm -f "$LOCKF"; mkdir "$LOCKF"
+reg add "lock unopenable"
+check "unopenable lock: exit 0 at once (rc $lrc, ${lsecs}s)" [ "$lrc" = 0 -a "$lsecs" -le 2 ]
+check "unopenable lock: says why" grep -q 'cannot open the lock' "$T/rerr"
+rmdir "$LOCKF"
+mkdir -p "$T/ro"; chmod 555 "$T/ro"
+if [ -w "$T/ro" ]; then
+  skip "unwritable registry dir: running as root"
+else
+  reg add "read-only dir" CLAUDE_AGENTS_FILE="$T/ro/agents.txt"
+  check "unwritable dir: exit 0 at once (rc $lrc, ${lsecs}s)" [ "$lrc" = 0 -a "$lsecs" -le 2 ]
+  check "unwritable dir: says skipped" grep -q 'skipped add' "$T/rerr"
+fi
+chmod 755 "$T/ro"
+
+# Leftovers of the old mkdir lock are swept on the next write — aged ones
+# only; a fresh one may belong to an older helper still running.
+mkdir -p "$LOCKD/junk" "$LOCKD.stale.1.2/junk" "$LOCKD.stale.3.4"
+touch -t "$old_stamp" "$LOCKD" "$LOCKD.stale.1.2"
+reg add "sweeper"
+check "sweep: aged lock dir removed" [ ! -e "$LOCKD" ]
+check "sweep: aged stale dir removed" [ ! -e "$LOCKD.stale.1.2" ]
+check "sweep: fresh stale dir kept" [ -d "$LOCKD.stale.3.4" ]
+check "sweep: flock file kept" [ -f "$LOCKF" ]
+rm -rf "$LOCKD.stale.3.4"
+
+# A label cannot inject a second row.
+reg add "$(printf 'two\nlines')"
+check "label newline: one row" grep -qx '[0-9]* two lines' "$REG"
+
+# No python3: the write is skipped with a note, never half-done.
+NOPY="$T/nopy"; mkdir -p "$NOPY"
+for tool in dirname mkdir; do ln -sf "$(command -v "$tool")" "$NOPY/$tool"; done
+cp "$REG" "$T/reg.before"
+env -i PATH="$NOPY" CLAUDE_AGENTS_FILE="$REG" "$TEST_BASH" "$AGENT" add "no python" 2> "$T/rerr"; lrc=$?
+check "no python3: exit 0 (got $lrc)" [ "$lrc" = 0 ]
+check "no python3: says skipped" grep -q 'python3 not found' "$T/rerr"
+check "no python3: file untouched" cmp -s "$REG" "$T/reg.before"
 
 # ===========================================================================
 # 5. install.sh, end to end against a fixture HOME
