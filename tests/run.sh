@@ -344,6 +344,17 @@ check "huge numbers: model still parsed" grep -q 'Opus 5' "$T/out"
 check "huge numbers: huge window forces the yellow warning" grep -q "${ESC}\[1;33m⚠️  25%" "$T/out"
 if grep -qE 'S:|W:|💰|⏱️|📥' "$T/out"; then fail "huge numbers: a bad or absurd field leaked a segment"; else pass; fi
 check "huge numbers: a sane field next to them still shows" grep -q '📤 5.0k' "$T/out"
+# An integer literal past 4300 digits made json.loads itself raise on Python
+# 3.11+, which lost the whole payload ("⚠ payload"). It is dropped alone now.
+big=$(printf '%05000d' 0 | tr 0 7)
+printf '{"session_id":"bigint-0001","cwd":"%s","model":{"id":"claude-opus-5"},"context_window":{"total_input_tokens":%s,"total_output_tokens":5000}}\n' \
+  "$WORK" "$big" > "$T/bigint.json"
+prepare minimal "$T/bigint.json"
+render "$T/bigint.json" 120
+check "5000-digit int: exit 0 (got $rc)" [ "$rc" = 0 ]
+check "5000-digit int: payload still parsed" grep -q 'Opus 5' "$T/out"
+check "5000-digit int: field next to it still shows" grep -q '📤 5.0k' "$T/out"
+if grep -qE '⚠ payload|📥' "$T/out"; then fail "5000-digit int: payload lost or the int leaked"; else pass; fi
 
 # Terminal-escape injection: the escapes fixture puts literal ESC/BEL/C1 and
 # the backslash forms `printf %b` expands (\033, \e, \x1b, \a) into the

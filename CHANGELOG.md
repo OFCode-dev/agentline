@@ -21,6 +21,10 @@
   replaying the probe cache expanded a remote like
   `https://git.sr.ht/~root/x` to `/root/x`. The writer now escapes a leading
   `~` and any `:~` or `=~` itself, as bash 5 does.
+- An integer of more than 4300 digits in the payload no longer costs the
+  whole payload. On Python 3.11+ `json.loads` raised on it, and every
+  segment from the payload was replaced by "⚠ payload". Such a literal now
+  decodes as infinity, and only its own segment disappears.
 - A render that misses the render cache starts two `python3` instead of
   three, or four for a Fable/Mythos model. That is the render an active turn
   pays about once a second, and each `python3` start costs ~20 ms of CPU.

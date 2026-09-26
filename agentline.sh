@@ -259,8 +259,15 @@ import json, math, os, re, shlex, sys
 # upstream -- and neither is valid JSON that simply lacks fields.
 raw = os.environ.get('PAYLOAD', '')
 payload_err = ''
+# Python 3.11+ refuses to convert an integer literal of more than 4300 digits
+# (ValueError), and json.loads raised it for the whole payload: one absurd
+# token count cost every field and showed "⚠ payload". A literal that long is
+# decoded as infinity instead, which num() then drops like any other number
+# that does not fit.
+def _int(s):
+    return int(s) if len(s) < 4000 else float('inf')
 try:
-    d = json.loads(raw) if raw.strip() else {}
+    d = json.loads(raw, parse_int=_int) if raw.strip() else {}
 except Exception:
     d, payload_err = {}, '1'
 if not isinstance(d, dict):
