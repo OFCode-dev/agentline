@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- `S:` and `W:` show their pace. "S:60%" alone does not say whether the
+  window resets in 30 minutes or in 4 hours. The window start follows from
+  `resets_at` (5 hours or 7 days earlier), so the share of it already
+  elapsed is known. An arrow shows used % minus elapsed %: `⇡12%` (yellow
+  from 5 points, red from 15) is burning faster than the window allows,
+  and a dim `⇣12%` is headroom. The percentage keeps its absolute 70/90
+  colour, because 92 % used near the reset is under pace yet close to the
+  limit. No arrow is shown within ±5 points, early in a window (the first
+  30 minutes of 5 hours, the first ~5 hours of 7 days, when a single
+  prompt swings the number), or when `resets_at` is missing, already past,
+  further off than the window or not an epoch. It is plain bash arithmetic
+  with no extra fork, and `AGENTLINE_PACE=0` turns it off. The 5-hour
+  countdown also stopped forking `date` for the current time.
 - A repository can no longer run code through the status line. agentline,
   its hooks and the installer run in the project directory, and
   `python3 -c` puts that directory first on the import path, so a repo

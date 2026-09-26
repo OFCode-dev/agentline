@@ -556,6 +556,46 @@ printf '\n%s\n' "active_mcps=\$(touch $MARK)" >> "$(cbase inject-0001).probes"
 render "$T/inject2.json" 120
 check "probe cache: an extra body line is not eval'd" [ ! -e "$MARK" ]
 
+# Pace arrows (C01): used% − elapsed% beside S:/W:, elapsed inferred from
+# resets_at − window length. Timestamps are taken now, so the elapsed share
+# is stable to the second: +9000 s is 50% of 5 h, +302400 s 50% of 7 d.
+pace() {  # pace <five_hour-json> <seven_day-json> [VAR=val...] -> raw $T/out, line 1 in $T/pl
+  local f="$1" s="$2"; shift 2
+  printf '{"session_id":"pace-0001","cwd":"%s","model":{"id":"claude-opus-5"},"rate_limits":{"five_hour":%s,"seven_day":%s}}\n' \
+    "$WORK" "$f" "$s" > "$T/pace.json"
+  prepare minimal "$T/pace.json"
+  render "$T/pace.json" 300 ${1+"$@"}
+  normalize "$T/out" "$T/pn"; head -n 1 "$T/pn" > "$T/pl"
+}
+pnow=$(date +%s)
+pace "{\"used_percentage\":80.5,\"resets_at\":$((pnow + 9000))}" "{\"used_percentage\":58,\"resets_at\":$((pnow + 302400))}"
+check "pace: exit 0 (got $rc)" [ "$rc" = 0 ]
+check "pace: stderr empty" [ ! -s "$T/err" ]
+check "pace: 5h over pace ⇡30%, before the reset" grep -qF 'S:80% ⇡30% ↻2h' "$T/pl"
+check "pace: 5h ⇡ red from 15 points" grep -q "${ESC}\[1;31m⇡30%" "$T/out"
+check "pace: week over pace ⇡8%, yellow" grep -q "${ESC}\[1;33m⇡8%" "$T/out"
+check "pace: week arrow sits after W:" grep -qF 'W:58% ⇡8% ↻' "$T/pl"
+check "pace: S: keeps its absolute colour" grep -q "${ESC}\[1;33mS:80%" "$T/out"
+pace "{\"used_percentage\":20,\"resets_at\":$((pnow + 3600))}" "{\"used_percentage\":94,\"resets_at\":$((pnow + 3600))}"
+check "pace: 5h under pace ⇣60%, dim" grep -q "${ESC}\[2m⇣60%" "$T/out"
+# 94% used at 99% elapsed is under pace, and still red: the wall is near.
+check "pace: under pace at 94% stays red" grep -q "${ESC}\[1;31mW:94%" "$T/out"
+check "pace: -5 exactly shows ⇣5%" grep -qF 'W:94% ⇣5%' "$T/pl"
+pace "{\"used_percentage\":52,\"resets_at\":$((pnow + 9000))}" "{\"used_percentage\":46,\"resets_at\":$((pnow + 302400))}"
+if grep -qE '⇡|⇣' "$T/pl"; then fail "pace: within ±5 points shows no arrow"; else pass; fi
+# Early in a window (<10% of 5 h, <3% of 7 d), expired, further off than a
+# window, ISO or missing resets_at: no arrow, whatever the delta.
+pace "{\"used_percentage\":40,\"resets_at\":$((pnow + 17000))}" "{\"used_percentage\":30,\"resets_at\":$((pnow + 600000))}"
+if grep -qE '⇡|⇣' "$T/pl"; then fail "pace: early window shows no arrow"; else pass; fi
+pace "{\"used_percentage\":40,\"resets_at\":$((pnow - 10))}" "{\"used_percentage\":30,\"resets_at\":$((pnow + 700000))}"
+if grep -qE '⇡|⇣' "$T/pl"; then fail "pace: expired or out-of-window reset shows no arrow"; else pass; fi
+check "pace: expired reset still shows S:" grep -qF 'S:40%' "$T/pl"
+pace '{"used_percentage":90,"resets_at":"2026-09-26T20:00:00Z"}' '{"used_percentage":90}'
+if grep -qE '⇡|⇣' "$T/pl"; then fail "pace: ISO or missing resets_at shows no arrow"; else pass; fi
+check "pace: ISO resets_at, exit 0 (got $rc)" [ "$rc" = 0 ]
+pace "{\"used_percentage\":80.5,\"resets_at\":$((pnow + 9000))}" "{\"used_percentage\":58,\"resets_at\":$((pnow + 302400))}" AGENTLINE_PACE=0
+if grep -qE '⇡|⇣' "$T/pl"; then fail "pace: AGENTLINE_PACE=0 turns it off"; else pass; fi
+
 # ===========================================================================
 # 3. Render-cache fast path
 # ===========================================================================

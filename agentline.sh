@@ -986,9 +986,10 @@ fmt_reset() {
   case "$ts" in
     ''|*[!0-9]*) fmt_epoch "$ts" "%H:%M"; return ;;
   esac
-  local now diff h m
-  now=$(date +%s)
-  diff=$(( ts - now ))
+  # $_now_epoch is already set (_tick_now, at startup): a `date +%s` here
+  # was one more fork on every full render for a number the script had.
+  local diff h m
+  diff=$(( ts - _now_epoch ))
   [ "$diff" -le 0 ] && return
   h=$((diff / 3600)); m=$(((diff % 3600) / 60))
   if [ $h -gt 0 ]; then echo "${h}h${m}m"; else echo "${m}m"; fi
@@ -1001,6 +1002,48 @@ fmt_reset_week() {
 }
 five_hour_reset_fmt=$(fmt_reset "$five_hour_reset")
 seven_day_reset_fmt=$(fmt_reset_week "$seven_day_reset")
+
+# Pace: "S:60%" says nothing on its own — at 30 minutes to the reset it is
+# plenty of room, at 4 hours to go it is a wall. The window started
+# resets_at − window_len ago (the 5-hour window opens at first use, the week
+# is rolling), so elapsed% is known and used% − elapsed% says whether usage
+# runs ahead of the clock: ⇡12% = burning 12 points faster than a flat pace
+# (yellow from 5, red from 15), ⇣12% = that much headroom (dim — good news
+# needs no colour). Within ±5 there is nothing to say and nothing is shown.
+#
+# It sits beside the percentage, never instead of its colour: 92% used at 96%
+# elapsed is a dim ⇣4 at best, yet the wall is 8 points away, so the absolute
+# 90/70 colour on S:/W: stays as it was.
+#
+# Only a window proven to be this one gets an arrow: resets_at all digits
+# (an ISO string, which fmt_reset still formats, gets none) and 0 < resets −
+# now <= the window — a reset already past, or further off than a window
+# lasts, is a stale or foreign number. And none early on: in the first
+# <min_elapsed>% of a window (30 min of 5 h, ~5 h of 7 d) a single prompt is
+# a large positive delta that means nothing.
+#
+# Pure bash arithmetic on $_now_epoch, returned in $_pace_out rather than
+# printed: no subshell, no awk (color_pct forks one), so the pace costs no
+# fork. used% is a float ("23.5"); ${u%.*} truncates it. AGENTLINE_PACE=0
+# turns it off.
+pace_arrow() {  # pace_arrow <used%> <resets_epoch> <window_secs> <min_elapsed%> -> $_pace_out
+  local u="${1%.*}" ts="$2" win="$3" rem el d
+  _pace_out=""
+  [ "${AGENTLINE_PACE:-1}" = 0 ] && return
+  case "$u" in ''|-*|*[!0-9]*) return ;; esac
+  case "$ts" in ''|*[!0-9]*) return ;; esac
+  # Ten digits is an epoch until 2286; anything longer would only overflow.
+  [ ${#ts} -gt 12 ] && return
+  rem=$(( ts - _now_epoch ))
+  [ "$rem" -gt 0 ] && [ "$rem" -le "$win" ] || return
+  el=$(( (win - rem) * 100 / win ))
+  [ "$el" -ge "$4" ] || return
+  d=$(( 10#$u - el ))  # 10#: a "08" is decimal, not bad octal
+  if [ "$d" -ge 15 ]; then _pace_out="${RED}⇡${d}%${RESET}"
+  elif [ "$d" -ge 5 ]; then _pace_out="${YELLOW}⇡${d}%${RESET}"
+  elif [ "$d" -le -5 ]; then _pace_out="${DIM}⇣$(( -d ))%${RESET}"
+  fi
+}
 
 thinking_icon=""
 [ "$thinking" = "True" ] && thinking_icon="🧠"
@@ -1105,7 +1148,8 @@ fi
 if [ -n "$five_hour" ]; then
   c=$(color_pct "$five_hour" 90 70)
   reset_part=""; [ -n "$five_hour_reset_fmt" ] && reset_part="${DIM}↻${five_hour_reset_fmt}${RESET}"
-  _seg 5h "${c}S:$(printf '%.0f' $five_hour)%${RESET}${reset_part:+ }${reset_part}"
+  pace_arrow "$five_hour" "$five_hour_reset" 18000 10
+  _seg 5h "${c}S:$(printf '%.0f' $five_hour)%${RESET}${_pace_out:+ }${_pace_out}${reset_part:+ }${reset_part}"
 fi
 # === Fable weekly limit — opt-in network source ===
 # When the payload carried no per-model bucket (the normal case on 2.1.x, see
@@ -1275,6 +1319,10 @@ week_body=""
 if [ -n "$seven_day" ]; then
   c=$(color_pct "$seven_day" 90 70)
   week_body="${c}W:$(printf '%.0f' $seven_day)%${RESET}"
+  # The pace follows W: directly, before F: — it is the account-wide
+  # window's pace; the Fable share has no reset of its own in the payload.
+  pace_arrow "$seven_day" "$seven_day_reset" 604800 3
+  week_body="${week_body}${_pace_out:+ }${_pace_out}"
 fi
 case "$seven_day_top" in
   ''|*[!0-9.]*) ;;
