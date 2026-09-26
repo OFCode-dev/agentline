@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- Text from other people's bytes no longer breaks sed or grep on macOS. The
+  git remote URL, the subagent labels and the session transcript go through
+  `sed`/`grep`. Under a UTF-8 locale, BSD sed stops at the first byte that
+  is not valid UTF-8 ("illegal byte sequence") and prints nothing. GNU grep
+  can hold back a matching line for the same reason. Every sed, grep and tr
+  now runs under `LC_ALL=C`, which is safe because their patterns are all
+  ASCII. A lint in the test suite keeps it that way. The subagent list also
+  lost its sed fork. A session name longer than 30 characters is now
+  shortened by characters: under a C/POSIX locale it used to be cut at byte
+  27, which could split a character in half. The macOS CI job is green
+  again. Its three failures came from the test harness, not the script.
 - A new line-1 segment, `cache`, says when the prompt cache is about to
   cost you. It reads Claude Code's `prompt_cache` object (2.1.251+; the
   miss cause needs 2.1.260+). It stays hidden while the cache is warm,

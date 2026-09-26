@@ -472,6 +472,11 @@ if isinstance(pc, dict) and pc.get('caching_observed') is not False:
         pc_recache = str(int(r)) if r < 1000 else f'{r / 1000:.0f}k' if r < 1e6 else f'{r / 1e6:.1f}m'
     pc_cause = cause(pc.get('last_miss_cause'))
 
+# The session name is shortened here, by characters. bash used to do it
+# with a substring expansion, which counts bytes under C/POSIX (common on
+# servers) and cut a multibyte character in half at byte 27.
+sname = clean(g('session_name'))
+
 fields = {
     # cwd stays raw: it is a filesystem path (git, the probe-cache key, the
     # transcript lookup). Its displayed form, $folder, is built from this
@@ -509,7 +514,8 @@ fields = {
     'tokens_in': num(g('context_window', 'total_input_tokens')),
     'tokens_out': num(g('context_window', 'total_output_tokens')),
     'thinking': g('thinking', 'enabled'),
-    'session_name': clean(g('session_name')),
+    'session_name': sname,
+    'session_name_fmt': sname if len(sname) <= 30 else sname[:27] + '...',
     # session_id is also a path component (the transcript fallback), so it
     # stays raw; the resume command shows a cleaned copy.
     'session_id': g('session_id'),
@@ -586,6 +592,16 @@ _run_to() {
   if [ -n "$_TIMEOUT" ]; then "$_TIMEOUT" "$secs" "$@"; else "$@"; fi
 }
 
+# Every sed, grep and tr in this file runs under LC_ALL=C (tests/run.sh
+# lints it). Their input is often someone else's bytes — a remote URL, a
+# transcript, a label — and under a UTF-8 locale BSD sed and tr stop at the
+# first invalid sequence ("illegal byte sequence", empty output), and GNU
+# grep treats such input as binary and holds back a matching line that holds
+# one (older releases printed "Binary file matches" instead). The patterns
+# are ASCII, so the C locale matches exactly what they mean. awk is left in the user's
+# locale: no awk aborts on invalid bytes, and length()/substr() count
+# characters there instead of bytes (the agent-label truncation).
+
 # === Host probe cache ===
 # The clock ticks once a second, but CPU, RAM, disk, ports, services, MCP and
 # git do not change at that rate — and re-running `top -bn1`, `df`, `ss`,
@@ -638,9 +654,9 @@ if [ "$_probes_fresh" != 1 ]; then
 # CPU: BSD top has no `-b`, and Linux top has no "CPU usage:" idle line.
 cpu_usage=""
 if [ "$OS" = "Darwin" ]; then
-  cpu_line=$(top -l 1 -n 0 2>/dev/null | grep "CPU usage")
+  cpu_line=$(top -l 1 -n 0 2>/dev/null | LC_ALL=C grep "CPU usage")
   if [ -n "$cpu_line" ]; then
-    idle=$(echo "$cpu_line" | awk -F',' '{print $3}' | grep -oE '[0-9]+(\.[0-9]+)?')
+    idle=$(echo "$cpu_line" | awk -F',' '{print $3}' | LC_ALL=C grep -oE '[0-9]+(\.[0-9]+)?')
     [ -n "$idle" ] && cpu_usage=$(awk -v idle="$idle" 'BEGIN {printf "%d%%", 100 - idle}')
   fi
 else
@@ -734,7 +750,7 @@ if [ -n "$cwd" ] && [ -d "$cwd" ]; then
   # remotes; stays empty when there is no origin.
   if [ -n "$git_branch" ]; then
     git_repo=$(_run_to 1 git --no-optional-locks -C "$cwd" remote get-url origin 2>/dev/null \
-      | sed -E 's#^git@[^:]+:#/#; s#^[a-z]+://[^/]+/#/#; s#\.git$##; s#^/##')
+      | LC_ALL=C sed -E 's#^git@[^:]+:#/#; s#^[a-z]+://[^/]+/#/#; s#\.git$##; s#^/##')
   fi
 fi
 
@@ -792,7 +808,10 @@ if [ -f "$AGENTS_FILE" ]; then
       if (length(label) > 25) label = substr(label,1,22) "..."
       printf "%s · ", label
     }
-  }' "$AGENTS_FILE" | sed 's/ · $//')
+  }' "$AGENTS_FILE")
+  # The trailing separator goes by expansion: a sed here was one more fork,
+  # and one that BSD sed aborted on a label with an invalid byte.
+  active_agents="${active_agents% · }"
 fi
 
 # Home-relative path (~/projects/agentline) rather than the bare folder name.
@@ -1040,10 +1059,14 @@ case "$effort_raw" in
     ultracode=""
     tp="$payload_transcript"
     if [ ! -f "$tp" ] && [ -n "$session_id" ]; then
-      tp="$HOME/.claude/projects/$(printf '%s' "$cwd" | sed 's|[^a-zA-Z0-9]|-|g')/${session_id}.jsonl"
+      # The one sed left in the user's locale, as Claude Code names the
+      # directory: one "-" per character (per UTF-16 unit), which the C
+      # locale would make one per byte. stderr: BSD sed rejecting a cwd that
+      # is not UTF-8 — the transcript is then simply not found.
+      tp="$HOME/.claude/projects/$(printf '%s' "$cwd" | sed 's|[^a-zA-Z0-9]|-|g' 2>/dev/null)/${session_id}.jsonl"  # locale-ok
     fi
     if [ -f "$tp" ]; then
-      marker=$(revcat "$tp" | grep -m1 -oE '"attachment":\{"type":"ultra_effort_(enter|exit)"|<local-command-stdout>Set effort level to [a-z]+')
+      marker=$(revcat "$tp" | LC_ALL=C grep -m1 -oE '"attachment":\{"type":"ultra_effort_(enter|exit)"|<local-command-stdout>Set effort level to [a-z]+')
       case "$marker" in
         *ultra_effort_enter*|*"to ultracode") ultracode=1 ;;
       esac
@@ -1100,7 +1123,7 @@ fmt_reset_week() {
   # Zero-padded %d/%m is the only form both GNU and BSD date support (the
   # GNU-only %-d no-pad flag breaks on macOS); strip the padding afterwards.
   local ts="$1"; [ -z "$ts" ] && return
-  fmt_epoch "$ts" "%d/%m" | sed 's/^0//; s#/0#/#'
+  fmt_epoch "$ts" "%d/%m" | LC_ALL=C sed 's/^0//; s#/0#/#'
 }
 five_hour_reset_fmt=$(fmt_reset "$five_hour_reset")
 seven_day_reset_fmt=$(fmt_reset_week "$seven_day_reset")
@@ -1173,11 +1196,6 @@ case "$model_raw" in
   claude-sonnet*) model_color="$CYAN" ;;
   claude-haiku*) model_color="$GREEN" ;;
 esac
-
-session_name_fmt=""
-if [ -n "$session_name" ]; then
-  [ ${#session_name} -gt 30 ] && session_name_fmt="${session_name:0:27}..." || session_name_fmt="$session_name"
-fi
 
 lines_fmt=""
 if [ -n "$lines_added" ] || [ -n "$lines_removed" ]; then

@@ -50,7 +50,8 @@ case "$event" in
     owned="${AGENTLINE_AGENT_FILE}.owned.${session}"
     agentline_agent add "$label"
     # Remember what this session owns so Stop can clear only its own rows.
-    grep -qxF "$label" "$owned" 2>/dev/null || printf '%s\n' "$label" >>"$owned"
+    # LC_ALL=C: an exact byte comparison, whatever the label's bytes are.
+    LC_ALL=C grep -qxF "$label" "$owned" 2>/dev/null || printf '%s\n' "$label" >>"$owned"
     ;;
   CLEAR)
     session=$rest

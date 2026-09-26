@@ -330,6 +330,66 @@ for s in apostrophe dquote backtick paren earlier case; do
 done
 if msg=$(python3 "$T/heredoc_guard.py" "$G/clean.sh" 2>&1); then pass; else fail "heredoc guard false alarm: $msg"; fi
 
+# Portability lint: every sed, grep and tr the runtime runs must carry an
+# LC_ALL=C prefix. Under a UTF-8 locale BSD sed and tr abort at the first
+# invalid byte ("illegal byte sequence") and GNU grep treats such input as
+# binary, and their input is often someone else's bytes (a remote URL, a
+# transcript, a label). macOS CI only sees the bytes its fixtures happen to
+# carry, so the rule is enforced by spelling rather than by running.
+#
+# Its limits, deliberately: it reads spelling, not data flow, so it cannot
+# tell trusted ASCII input from untrusted input and asks for the prefix on
+# all of them (it costs nothing). A call written as `LC_ALL=C; sed`, an
+# exported locale, a command run through a variable or `env` goes unseen,
+# as does anything in a heredoc body (the python programs). awk is out of
+# scope: no awk aborts on invalid bytes, and pinning it would make
+# length()/substr() count bytes. A line that must keep the user's locale says
+# so with a `# locale-ok` comment and its reason above it.
+cat > "$T/locale_lint.py" <<"PYEOF"
+import re, sys
+HEREDOC = re.compile(r"<<-?\s*([\"']?)(\w+)\1")
+CMD = re.compile(r"(?:^|[|;&(`]|\$\(|\b(?:if|elif|while|until|then|do|else)\s|!\s)\s*"
+                 r"((?:[A-Za-z_][A-Za-z0-9_]*=\S*\s+)*)(sed|grep|tr)(?=\s|$)")
+bad = []
+for path in sys.argv[1:]:
+    tag = None
+    for n, line in enumerate(open(path, encoding="utf-8").read().split("\n"), 1):
+        if tag:
+            if line.strip() == tag:
+                tag = None
+            continue
+        h = HEREDOC.search(line)
+        if h and "<<<" not in line:
+            tag = h.group(2)
+        if line.lstrip().startswith("#") or "# locale-ok" in line:
+            continue
+        code = re.sub(r"\s#\s.*$", "", line)
+        for m in CMD.finditer(code):
+            if "LC_ALL=C" not in m.group(1).split():
+                bad.append("%s:%d: %s without LC_ALL=C" % (path.rsplit("/", 1)[-1], n, m.group(2)))
+print("\n".join(bad))
+sys.exit(1 if bad else 0)
+PYEOF
+if python3 "$T/locale_lint.py" "$ROOT/agentline.sh" "$ROOT/install.sh" "$ROOT"/hooks/*.sh > "$T/lint" 2>&1; then
+  pass
+else
+  fail "locale lint: $(tr '\n' ' ' < "$T/lint")"
+fi
+# Self-test: each unpinned spelling is flagged; pinned calls, comments, a
+# locale-ok line and a heredoc body are not.
+printf 'x=$(echo a | sed s/a/b/)\n' > "$G/l-pipe.sh"
+printf 'if grep -q a f; then :; fi\n' > "$G/l-if.sh"
+printf 'y=$(tr -d x < f)\n' > "$G/l-subst.sh"
+printf 'a=1; ! grep -q a f\n' > "$G/l-bang.sh"
+printf 'LANG=C sed -n p f\n' > "$G/l-wrongvar.sh"
+printf '%s\n' 'x=$(echo a | LC_ALL=C sed s/a/b/)' 'LC_ALL=C grep -q a f || LC_ALL=C tr -d x < f' \
+  '# | sed s/x/y/ in a comment' 'z=$(sed s/a/b/ f)  # locale-ok' "cat <<'EOF'" 'echo | sed x' 'EOF' \
+  'untr=1; grep_x=2; sed_y=3' > "$G/l-clean.sh"
+for s in pipe if subst bang wrongvar; do
+  if python3 "$T/locale_lint.py" "$G/l-$s.sh" > /dev/null 2>&1; then fail "locale lint misses: $s"; else pass; fi
+done
+if msg=$(python3 "$T/locale_lint.py" "$G/l-clean.sh" 2>&1); then pass; else fail "locale lint false alarm: $msg"; fi
+
 # ===========================================================================
 # 2. Golden renders: every fixture at every width
 # ===========================================================================
@@ -1976,6 +2036,39 @@ if grep -nE '(^|[^-A-Za-z_])python3( |$)' "$ROOT/agentline.sh" "$ROOT/install.sh
 else
   pass
 fi
+
+# ===========================================================================
+# 7. Locales: the suite renders under LC_ALL=C, users mostly do not
+# ===========================================================================
+# A UTF-8 locale as the host names it (C.utf8 on Linux, en_US.UTF-8 on macOS).
+UTF8_LC=$(locale -a 2>/dev/null | LC_ALL=C grep -iE '^(c|en_us)\.utf-?8$' | head -n 1)
+if [ -z "$UTF8_LC" ]; then
+  skip "locale: no UTF-8 locale installed"
+else
+  # The full render is the same in a UTF-8 locale (refilled: its reset
+  # countdowns are relative to the fill time).
+  fill "$FIX/payloads/full.json" "$PAY/full.json"
+  prepare full "$PAY/full.json"; render "$PAY/full.json" 120; normalize "$T/out" "$T/want"
+  prepare full "$PAY/full.json"; render "$PAY/full.json" 120 LC_ALL="$UTF8_LC"; normalize "$T/out" "$T/got"
+  check "locale: $UTF8_LC render = C render" cmp -s "$T/got" "$T/want"
+  check "locale: $UTF8_LC stderr empty" [ ! -s "$T/err" ]
+  # An invalid byte on the marker line itself, read in a UTF-8 locale: the
+  # grep that finds the marker must still find it (GNU grep suppresses an
+  # output line holding an encoding error, BSD grep may reject the input).
+  printf '{"type":"user","message":{"content":"caf\351"}}\n{"type":"attachment","attachment":{"type":"ultra_effort_enter"},"note":"caf\351"}\n' > "$T/badbyte.jsonl"
+  printf '{"session_id":"lc-0001","cwd":"%s","transcript_path":"%s","model":{"id":"claude-opus-5"},"effort":{"level":"xhigh"}}\n' \
+    "$WORK" "$T/badbyte.jsonl" > "$T/lc.json"
+  prepare minimal "$T/lc.json"; render "$T/lc.json" 120 LC_ALL="$UTF8_LC"; normalize "$T/out" "$T/got"
+  check "locale: an invalid transcript byte still finds ultracode" grep -q 'ultracode' "$T/got"
+fi
+# The session name is shortened by characters, not bytes: under LC_ALL=C
+# bash cut the 27th byte, halfway through a two-byte "ç".
+sn=$(printf '%040d' 0 | sed 's/0/ç/g')
+printf '{"session_id":"lc-0002","cwd":"%s","session_name":"%s","model":{"id":"claude-opus-5"}}\n' "$WORK" "$sn" > "$T/lc.json"
+prepare minimal "$T/lc.json"; render "$T/lc.json" 120
+check "locale: long session name cut at 27 characters" grep -qF "🏷️  $(printf '%027d' 0 | sed 's/0/ç/g')..." "$T/out"
+check "locale: long session name output is valid UTF-8" \
+  python3 -c 'import sys; open(sys.argv[1], "rb").read().decode("utf-8")' "$T/out"
 
 # ===========================================================================
 echo "agentline tests (bash $TEST_BASH_MAJOR): $n_pass passed, $n_fail failed, $n_skip skipped"
