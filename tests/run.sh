@@ -130,6 +130,15 @@ PYEOF
 # writes: epoch, cwd, then one `var=<printf %q>` line per PROBE_VARS entry.
 seed_probes() {  # seed_probes <sid> <set-name>
   (
+    # %q under the C locale, as the script itself writes it in the suite. The
+    # harness runs in the CI runner's locale, and bash 3.2's %q decides
+    # byte by byte with isprint(3) whether to spell a byte as \ooo: macOS
+    # counts 0xE2 as printable (â) in a UTF-8 locale but not the C1-range
+    # continuation bytes, so "│" came out as a raw E2 followed by \224\202.
+    # eval turns that back into the right bytes, but the file is no longer
+    # UTF-8, and the tests that patch it with sed ("illegal byte sequence")
+    # or python (UnicodeDecodeError) failed on macOS only.
+    LC_ALL=C
     for _v in $PROBE_VARS; do eval "$_v="; done
     # shellcheck source=/dev/null
     . "$FIX/probes/$2.sh"
@@ -174,9 +183,11 @@ render() {  # render <payload> <width|-> [VAR=val...] -> $T/out $T/err $rc
 }
 
 # ANSI stripped, clock and date masked. BSD sed has no \x1b, hence $ESC.
+# LC_ALL=C: some renders carry deliberately invalid bytes, which BSD sed
+# refuses under a UTF-8 locale; the patterns are all ASCII.
 normalize() {  # normalize <in> <out>
-  sed -e "s/${ESC}\[[0-9;]*m//g" "$1" \
-    | sed -E -e 's/[0-9]{2}:[0-9]{2}:[0-9]{2}/HH:MM:SS/g' \
+  LC_ALL=C sed -e "s/${ESC}\[[0-9;]*m//g" "$1" \
+    | LC_ALL=C sed -E -e 's/[0-9]{2}:[0-9]{2}:[0-9]{2}/HH:MM:SS/g' \
              -e 's#[0-9]{2}/[0-9]{2}/[0-9]{4} [A-Z][a-z]{2}#DD/MM/YYYY Day#g' > "$2"
   # The script prints no trailing newline; the golden files end with one.
   if [ -s "$2" ] && [ -n "$(tail -c 1 "$2")" ]; then echo >> "$2"; fi
@@ -835,7 +846,11 @@ if msg=$(rows_fit "$T/got" 78 2>&1); then pass; else fail "layout: COLUMNS=80 re
 # line wrapped all the same, its second row 60 cells short.
 long_branch="feature/an-unusually-long-branch-name-for-narrow-x"
 prepare full "$p"
-sed "s#^git_branch=.*#git_branch=$long_branch#" "$(cbase "$(sid_of "$p")").probes" > "$T/probes.tmp"
+check "probe cache seeded as valid UTF-8 in any harness locale" \
+  python3 -c 'import sys; open(sys.argv[1], "rb").read().decode("utf-8")' "$(cbase "$(sid_of "$p")").probes"
+# LC_ALL=C: a cache file is bytes, and BSD sed rejects a byte that is not
+# UTF-8 under a UTF-8 locale instead of copying it.
+LC_ALL=C sed "s#^git_branch=.*#git_branch=$long_branch#" "$(cbase "$(sid_of "$p")").probes" > "$T/probes.tmp"
 cat "$T/probes.tmp" > "$(cbase "$(sid_of "$p")").probes"
 render "$p" - COLUMNS=100; normalize "$T/out" "$T/got"
 check "layout: COLUMNS=100 long branch shown" has "$T/got" "$long_branch"
@@ -935,9 +950,9 @@ prepare full "$p"
 python3 - "$(cbase "$(sid_of "$p")").probes" <<'PYEOF'
 import sys
 path = sys.argv[1]
-lines = open(path).read().split('\n')
-lines = ['dev_ports=' + 'node\\(3000\\)\\ ' * 13000 if l.startswith('dev_ports=') else l for l in lines]
-open(path, 'w').write('\n'.join(lines))
+lines = open(path, 'rb').read().split(b'\n')
+lines = [b'dev_ports=' + b'node\\(3000\\)\\ ' * 13000 if l.startswith(b'dev_ports=') else l for l in lines]
+open(path, 'wb').write(b'\n'.join(lines))
 PYEOF
 render "$p" 120; normalize "$T/out" "$T/got"
 check "140 KB of segments: exit 0 (got $rc)" [ "$rc" = 0 ]
