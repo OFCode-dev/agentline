@@ -780,6 +780,13 @@ check "sweep: aged stale dir removed" [ ! -e "$LOCKD.stale.1.2" ]
 check "sweep: fresh stale dir kept" [ -d "$LOCKD.stale.3.4" ]
 check "sweep: flock file kept" [ -f "$LOCKF" ]
 rm -rf "$LOCKD.stale.3.4"
+# Once a sweep finds nothing to wait for, it marks the lock file, and later
+# writes skip the directory listing (and the glob/shutil imports) entirely.
+: > "$LOCKF"
+reg add "sweep marker"
+check "sweep: clean pass marks the lock file" [ "$(cat "$LOCKF")" = 2 ]
+check "sweep marker: write still lands" grep -q 'sweep marker' "$REG"
+check "sweep marker: no temp file left" sh -c "! ls '$REG'.[0-9]* >/dev/null 2>&1"
 
 # A label cannot inject a second row.
 reg add "$(printf 'two\nlines')"

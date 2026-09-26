@@ -70,7 +70,11 @@ agentline_agent() {
     return 0
   fi
   python3 - "$op" "$label" "$file" "$AGENTLINE_AGENT_WINDOW" "$AGENTLINE_AGENT_CAP" <<'PYEOF'
-import errno, fcntl, glob, os, re, shutil, stat, sys, tempfile, time
+# Only what every write needs is imported up front: this runs on every
+# subagent start and stop and every heartbeat, and glob, shutil and tempfile
+# together were most of its start-up (a write took 44 ms against 25 ms for
+# the mkdir lock). The sweep imports its own modules when it has work.
+import errno, fcntl, os, re, sys, time
 
 op, label, path, win, cap = sys.argv[1:6]
 win = int(win) if win.isdigit() else 300
@@ -131,10 +135,13 @@ rows = rows[-cap:] if cap > 0 else []
 
 # Temp file beside the registry, then an atomic rename: the reader, which
 # takes no lock, sees the old file or the new one, never a half-written one.
+# The name is unique to this process (pid + random) and opened O_EXCL |
+# O_NOFOLLOW, which is all tempfile.mkstemp added, without its import.
 tmp = None
 try:
-    tfd, tmp = tempfile.mkstemp(dir=os.path.dirname(path) or '.',
-                                prefix=os.path.basename(path) + '.')
+    name = f"{path}.{os.getpid()}.{os.urandom(4).hex()}"
+    tfd = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
+    tmp = name
     with os.fdopen(tfd, 'wb') as f:
         f.write(''.join(r + '\n' for r in rows).encode('utf-8', 'surrogateescape'))
     os.chmod(tmp, 0o644)
@@ -156,18 +163,33 @@ finally:
 # running elsewhere might hold a fresh one. <file>.lock itself is never
 # removed: unlinking a flock file while someone holds it lets the next writer
 # lock a new inode and walk straight past them.
-cutoff = time.time() - 60
-for p in [path + '.d'] + glob.glob(glob.escape(path) + '.d.stale.*'):
-    try:
-        st = os.lstat(p)
-        if st.st_uid != os.getuid() or st.st_mtime > cutoff:
-            continue
-        if stat.S_ISDIR(st.st_mode):
-            shutil.rmtree(p, ignore_errors=True)
-        else:
-            os.unlink(p)
-    except OSError:
-        pass
+#
+# Listing the directory (a shared /tmp can be large) is not paid on every
+# write: the sweep runs while <file>.d exists, or until it has once found
+# nothing left to wait for, which it records by writing one byte into the
+# lock file (its content means nothing to flock).
+if os.path.lexists(path + '.d') or os.fstat(fd).st_size == 0:
+    import glob, shutil, stat
+    cutoff, pending = time.time() - 60, False
+    for p in [path + '.d'] + glob.glob(glob.escape(path) + '.d.stale.*'):
+        try:
+            st = os.lstat(p)
+            if st.st_uid != os.getuid():
+                continue
+            if st.st_mtime > cutoff:
+                pending = True  # possibly live: look again on a later write
+                continue
+            if stat.S_ISDIR(st.st_mode):
+                shutil.rmtree(p, ignore_errors=True)
+            else:
+                os.unlink(p)
+        except OSError:
+            pass
+    if not pending:
+        try:
+            os.pwrite(fd, b'2', 0)
+        except OSError:
+            pass
 PYEOF
 }
 
