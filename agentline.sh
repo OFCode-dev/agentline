@@ -703,8 +703,18 @@ fi
 # HEAD that cannot be read. It runs with --no-optional-locks (a status line
 # must never take or wait on the index lock) under a 1 s timeout, so a git
 # stuck on NFS or a huge repo costs one second a probe, not the render.
-# (One difference from git: a repo owned by another user, which git refuses
-# as "dubious ownership", still shows its branch.)
+#
+# A file read is not guarded the way git is, so it is only trusted with a
+# HEAD (and a `.git` gitfile) that is a regular file owned by this user, and
+# for at most 1024 characters. The read used to take any HEAD: a FIFO blocked
+# it forever and a symlink to /dev/zero spun forever, neither under the
+# timeout; a 2 MB HEAD was shown whole; and another local user who planted
+# /tmp/.git (the CVE-2022-24765 setup, which git's safe.directory refuses as
+# "dubious ownership") chose the branch every repo-less session under /tmp
+# showed, Claude scratchpads included. Now a HEAD someone else owns, or one
+# the cap cuts short, goes to git, which applies safe.directory; a HEAD that
+# is not a file at all (FIFO, device, directory) is no repository, and
+# nothing is asked.
 git_branch=""
 git_repo=""
 if [ -n "$cwd" ] && [ -d "$cwd" ]; then
@@ -723,9 +733,16 @@ if [ -n "$cwd" ] && [ -d "$cwd" ]; then
       _d="$_up"
     done
   fi
+  # A .git that is neither file nor directory (a FIFO, a device) is no
+  # repository either, and git would block opening it as a gitfile.
+  if [ -n "$_gd" ] && [ ! -f "$_gd" ] && [ ! -d "$_gd" ]; then _gd=""; _git_ask=0; fi
   if [ -n "$_gd" ] && [ -f "$_gd" ]; then
     # A worktree or submodule: "gitdir: <path>", relative to the .git file.
-    _l=""; IFS= read -r _l < "$_gd"
+    _l=""
+    # 2>/dev/null first: redirections apply in order, and the open error of
+    # an unreadable file would otherwise reach stderr before it is silenced.
+    [ -O "$_gd" ] && IFS= read -r -n 1024 _l 2>/dev/null < "$_gd"
+    [ ${#_l} -ge 1024 ] && _l=""
     case "$_l" in
       "gitdir: "/*) _gd="${_l#gitdir: }" ;;
       "gitdir: "?*) _gd="$_d/${_l#gitdir: }" ;;
@@ -734,7 +751,12 @@ if [ -n "$cwd" ] && [ -d "$cwd" ]; then
   fi
   if [ -n "$_gd" ]; then
     _h=""
-    [ -r "$_gd/HEAD" ] && IFS= read -r _h < "$_gd/HEAD"
+    if [ -e "$_gd/HEAD" ] && [ ! -f "$_gd/HEAD" ]; then
+      _h="-"  # not a file: no branch, and no git asked to open it either
+    elif [ -O "$_gd/HEAD" ]; then
+      IFS= read -r -n 1024 _h 2>/dev/null < "$_gd/HEAD"
+      [ ${#_h} -ge 1024 ] && _h=""
+    fi
     case "$_h" in
       "ref: refs/heads/.invalid") _git_ask=1 ;;
       "ref: refs/heads/"?*) git_branch="${_h#ref: refs/heads/}" ;;

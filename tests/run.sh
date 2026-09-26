@@ -91,9 +91,12 @@ check() {  # check <name> <command...> — pass when the command succeeds
 }
 
 # === Helpers ===
+# The script renders under LC_ALL=C unless AGENTLINE_TEST_LC names another
+# locale (e.g. C.UTF-8): the suite also passes with the script in a UTF-8
+# locale, which is where most users run it.
 run_env() {  # run a command in the hermetic environment; extra VAR=val first
   env -i PATH="$PATH_F" HOME="$HOME_F" TMPDIR="$TMP_F" AGENTLINE_TMP="$SIDE" \
-    TZ=UTC LC_ALL=C AGENTLINE_PROBE_TTL=3600 "$@"
+    TZ=UTC LC_ALL="${AGENTLINE_TEST_LC:-C}" AGENTLINE_PROBE_TTL=3600 "$@"
 }
 
 # The session id exactly as agentline.sh derives it — parameter expansion on
@@ -1233,6 +1236,47 @@ EOF
   else
     skip "git: no timeout/gtimeout for the hang guard"
   fi
+  # HEAD is only read when it is a regular file this user owns, and for at
+  # most 1024 characters. These renders run under an outer timeout of their
+  # own: before, a FIFO HEAD blocked the read forever and a HEAD symlinked
+  # to /dev/zero spun forever, and a regression would hang the suite.
+  OUTER_TO=$(command -v timeout || command -v gtimeout)
+  gtrender() {  # gtrender <cwd> -> as grender, killed after 10 s
+    printf '{"session_id":"git-0001","cwd":"%s"}\n' "$1" > "$T/git.json"
+    prepare minimal "$T/git.json"; rm -f "$T/git-calls"
+    ( cd "$WORK" && run_env AGENTLINE_WIDTH=120 PATH="$HSHIM:$PATH_F" AGENTLINE_PROBE_TTL=0 AGENTLINE_LAYOUT=git \
+        "$OUTER_TO" 10 "$TEST_BASH" "$ROOT/agentline.sh" < "$T/git.json" > "$T/out" 2> "$T/err" )
+    rc=$?; normalize "$T/out" "$T/got"
+  }
+  if [ -n "$OUTER_TO" ] && command -v mkfifo >/dev/null 2>&1; then
+    mkdir -p "$G/fifo/.git" "$G/zero/.git" "$G/fifogit"
+    mkfifo "$G/fifo/.git/HEAD" "$G/fifogit/.git"
+    ln -s /dev/zero "$G/zero/.git/HEAD"
+    for c in fifo zero fifogit; do
+      gtrender "$G/$c"
+      check "git [$c HEAD]: render finishes (rc $rc)" [ "$rc" = 0 ]
+      check "git [$c HEAD]: no branch" [ ! -s "$T/got" ]
+      check "git [$c HEAD]: no git call (got $(git_calls))" [ "$(git_calls)" = 0 ]
+    done
+  else
+    skip "git: no timeout/gtimeout or mkfifo for the FIFO HEAD tests"
+  fi
+  # A 2 MB HEAD is not shown whole: past the cap, git is asked instead.
+  mkdir -p "$G/huge/.git"
+  { printf 'ref: refs/heads/'; printf '%02000000d' 0; echo; } > "$G/huge/.git/HEAD"
+  grender "$G/huge"
+  check "git [2 MB HEAD]: asks git" grep -q 'branch --show-current' "$T/git-calls"
+  check "git [2 MB HEAD]: not displayed (got $(wc -c < "$T/got") bytes)" [ "$(wc -c < "$T/got")" -lt 2000 ]
+  # An unreadable .git gitfile: no "Permission denied" on stderr.
+  mkdir -p "$G/unr"; printf 'gitdir: ../repo/.git\n' > "$G/unr/.git"; chmod 000 "$G/unr/.git"
+  if [ -r "$G/unr/.git" ]; then
+    skip "git: running as root, an unreadable gitfile cannot be made"
+  else
+    grender "$G/unr"
+    check "git [unreadable gitfile]: exit 0 (got $rc)" [ "$rc" = 0 ]
+    check "git [unreadable gitfile]: stderr empty" [ ! -s "$T/err" ]
+  fi
+  chmod 600 "$G/unr/.git"
 else
   skip "git: git not installed"
 fi

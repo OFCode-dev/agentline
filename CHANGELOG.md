@@ -109,7 +109,12 @@
   repo costs no git fork at all. git still answers for bare and reftable
   repositories and under `$GIT_DIR`. It and the origin-URL lookup now run
   with `--no-optional-locks` (never touching the index lock) under a 1 s
-  timeout (`timeout`, or `gtimeout` on macOS with coreutils).
+  timeout (`timeout`, or `gtimeout` on macOS with coreutils). `HEAD` and a
+  `.git` file are read only when they are regular files you own, and only
+  up to 1024 characters. Anything else is left to git, which applies
+  `safe.directory`, so a `/tmp/.git` planted by another user cannot choose
+  the branch your sessions under `/tmp` show. A FIFO or device in their
+  place means no branch, instead of a status line that blocks forever.
 - `bench/bench.sh` measures CPU per call over 100 calls on each render path:
   the cached tick, a payload change with fresh probes (Opus and Fable), and
   a cold probe. It uses the shell's own `time`, so it needs no GNU
