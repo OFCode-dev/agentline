@@ -38,6 +38,11 @@ _AL_TOK=$'\x02'
 CLOCK_TOKEN="@@${_AL_TOK}AGENTLINE_CLOCK@@"
 ANIM_MAX_TOKEN="@@${_AL_TOK}AGENTLINE_ANIM_MAX@@"
 ANIM_ULTRA_TOKEN="@@${_AL_TOK}AGENTLINE_ANIM_ULTRA@@"
+# The prompt-cache countdown carries its own expiry: "${PCEXP_TOKEN}<epoch>@@".
+# A fixed token would need the epoch stored beside the cached body, i.e. a
+# cache format change and another read per tick; inside the token it is one
+# parameter expansion away.
+PCEXP_TOKEN="@@${_AL_TOK}AGENTLINE_PCEXP:"
 CACHE_TTL="${AGENTLINE_CACHE_TTL:-5}"
 # ASCII unit and record separators: segment builders emit name<US>text<RS>
 # records for the layout pass (see "Layout"). Like the \x02 above, no cleaned
@@ -185,6 +190,22 @@ _anim_frame() {
   _anim_out="${frame}\033[0m"
 }
 
+# -> $_pc_out: $1 with the prompt-cache countdown filled in as "1m05s" /
+# "45s" from $_now_epoch. Pure parameter expansion and arithmetic, like the
+# clock, so a cached tick counts the cache down without a fork. Past the
+# expiry it holds at 0s: Claude Code re-runs the status line itself when a
+# warm cache reaches expires_at, and that new payload says cold.
+_pc_fill() {
+  local s="$1" e rem sec
+  _pc_out="$s"
+  e="${s#*"$PCEXP_TOKEN"}"; e="${e%%@@*}"
+  case "$e" in ''|*[!0-9]*) return ;; esac
+  rem=$(( e - _now_epoch )); [ "$rem" -lt 0 ] && rem=0
+  sec=$(( rem % 60 )); [ "$sec" -lt 10 ] && sec="0$sec"
+  if [ "$rem" -ge 60 ]; then rem="$(( rem / 60 ))m${sec}s"; else rem="${rem}s"; fi
+  _pc_out="${s//"${PCEXP_TOKEN}${e}@@"/$rem}"
+}
+
 _tick_now
 # The cache key is the payload plus every setting the layout reads from the
 # environment. COLUMNS is the one that changes under a running session — a
@@ -230,6 +251,9 @@ if [ -n "$_prev_payload" ] && [ "$_prev_payload" = "$_cache_key" ] && [ -f "${CA
           *"$ANIM_ULTRA_TOKEN"*)
             _anim_frame ultracode violet
             _tick_out="${_tick_out//$ANIM_ULTRA_TOKEN/$_anim_out}" ;;
+        esac
+        case "$_tick_out" in
+          *"$PCEXP_TOKEN"*) _pc_fill "$_tick_out"; _tick_out="$_pc_out" ;;
         esac
         printf "%b" "$_tick_out"
         exit 0
@@ -376,6 +400,78 @@ def over(v, limit):
 size = g('context_window', 'context_window_size')
 warn_200k = '1' if d.get('exceeds_200k_tokens') is True and over(size, 200000) else ''
 
+# Prompt cache (Claude Code 2.1.251+; last_miss_cause 2.1.260+). The object
+# is absent until the first API response, and caching_observed false means
+# the provider reports no caching at all -- both hide the segment. There is
+# no fallback for older versions: transcript mtime + 5 min guesses the TTL
+# (it can be 1h) and moves on tool results, not just on API responses.
+#
+# expires_at is reduced to epoch seconds here, whatever its spelling -- epoch
+# seconds, epoch milliseconds or an ISO 8601 time with a zone -- so bash only
+# ever sees digits. A zoneless ISO time is ambiguous and dropped.
+def epoch(v):
+    if isinstance(v, bool):
+        return ''
+    if isinstance(v, str):
+        s = v.strip()
+        if not re.fullmatch(r'[0-9]+(\.[0-9]+)?', s):
+            # Imported here: this parse runs on every full render, and only
+            # an ISO spelling needs datetime.
+            from datetime import datetime
+            try:
+                t = datetime.fromisoformat(s.replace('Z', '+00:00'))
+            except ValueError:
+                return ''
+            return str(int(t.timestamp())) if t.tzinfo else ''
+        v = s
+    if not isinstance(v, (int, float, str)):
+        return ''
+    try:
+        f = float(v)
+    except (OverflowError, ValueError):
+        return ''
+    if not math.isfinite(f) or f <= 0:
+        return ''
+    if f > 1e11:
+        f /= 1000  # milliseconds: 1e11 s is the year 5138
+    return str(int(f)) if f < 1e12 else ''
+
+# The miss cause is an object, {"causes": [...], "tools_added", ...}, with
+# snake_case names; the first cause is shown, shortened the way ailine does
+# it: ttl_expired_5m -> ttl, tools_changed -> tools, model_changed -> model.
+# An unknown name passes through (cleaned, capped), a null cause is none.
+CAUSES = {'system_prompt_changed': 'prompt', 'likely_server_side': 'server'}
+def cause(v):
+    cs = v.get('causes') if isinstance(v, dict) else None
+    if not isinstance(cs, list) or not cs or not isinstance(cs[0], str):
+        return ''
+    c = cs[0]
+    if c.startswith('ttl_expired'):
+        return 'ttl'
+    c = CAUSES.get(c, c[:-8] if c.endswith('_changed') and len(c) > 8 else c)
+    return clean(c)[:16]
+
+pc = d.get('prompt_cache')
+pc_state = pc_exp = pc_ttl = pc_hit = pc_recache = pc_cause = ''
+if isinstance(pc, dict) and pc.get('caching_observed') is not False:
+    # Only a strict JSON bool is a state; anything else hides the segment.
+    w = pc.get('warm')
+    pc_state = 'warm' if w is True else 'cold' if w is False else ''
+    pc_exp = epoch(pc.get('expires_at'))
+    pc_ttl = pc.get('ttl') if pc.get('ttl') in ('5m', '1h') else ''
+    # hit_ratio is the session-wide ratio, 0-1; a value past 1 is taken as
+    # a percentage already. Shown only with AGENTLINE_CACHE_VERBOSE=1.
+    h = num(pc.get('hit_ratio'))
+    if h != '' and float(h) >= 0:
+        h = float(h)
+        pc_hit = str(int(round(h * 100 if h <= 1 else min(h, 100))))
+    # What going cold costs: the tokens the next turn re-writes to the cache.
+    r = num(pc.get('recache_tokens_if_cold'))
+    if r != '' and float(r) > 0:
+        r = float(r)
+        pc_recache = str(int(r)) if r < 1000 else f'{r / 1000:.0f}k' if r < 1e6 else f'{r / 1e6:.1f}m'
+    pc_cause = cause(pc.get('last_miss_cause'))
+
 fields = {
     # cwd stays raw: it is a filesystem path (git, the probe-cache key, the
     # transcript lookup). Its displayed form, $folder, is built from this
@@ -421,6 +517,12 @@ fields = {
     'version': clean(g('version')),
     'payload_email': clean(g('account', 'email')),
     'payload_transcript': g('transcript_path'),
+    'pc_state': pc_state,
+    'pc_exp': pc_exp,
+    'pc_ttl': pc_ttl,
+    'pc_hit': pc_hit,
+    'pc_recache': pc_recache,
+    'pc_cause': pc_cause,
 }
 # Encoded here, not by print(): stdout's encoding follows the locale, and any
 # surrogate left in a raw field would make print() raise and take every field
@@ -1332,6 +1434,42 @@ if [ -n "$week_body" ]; then
   reset_part=""; [ -n "$seven_day_reset_fmt" ] && reset_part="${DIM}↻${seven_day_reset_fmt}${RESET}"
   _seg week "${week_body}${reset_part:+ }${reset_part}"
 fi
+
+# === Prompt cache ===
+# Whether the next turn pays full input price. A warm cache is the normal
+# case and says nothing, so like ailine the segment hides while warm and
+# appears only when there is something to act on:
+#   - warm, with at most AGENTLINE_CACHE_WARN seconds left (default 60 on a
+#     5m TTL, 300 on 1h): a yellow "🗄️ ↻1m12s", ticking live — the countdown
+#     is a PCEXP_TOKEN placeholder filled in at print time (_pc_fill), so a
+#     cached tick counts it down like the clock. Whether it shows at all is
+#     decided per full render, which comes at least every
+#     AGENTLINE_CACHE_TTL seconds, so it appears at most that late.
+#   - cold: a red "🗄️ cold·tools" naming the first miss cause, plus the dim
+#     "~45k" tokens going cold re-writes, when the payload says.
+# AGENTLINE_CACHE_VERBOSE=1 adds the session hit ratio in any state, red
+# below 25, yellow below 75. All bash tests on parser-made digits: no fork.
+if [ -n "$pc_state" ]; then
+  pc_body=""
+  if [ "$pc_state" = cold ]; then
+    pc_body="${RED}cold${pc_cause:+·${pc_cause}}${RESET}${pc_recache:+ ${DIM}~${pc_recache}${RESET}}"
+  elif [ -n "$pc_exp" ]; then
+    pc_warn=60; [ "$pc_ttl" = 1h ] && pc_warn=300
+    case "${AGENTLINE_CACHE_WARN-}" in
+      ''|*[!0-9]*|??????*) ;;
+      *) pc_warn=$(( 10#$AGENTLINE_CACHE_WARN )) ;;
+    esac
+    pc_rem=$(( pc_exp - _now_epoch ))
+    if [ "$pc_rem" -gt 0 ] && [ "$pc_rem" -le "$pc_warn" ]; then
+      pc_body="${YELLOW}↻${PCEXP_TOKEN}${pc_exp}@@${RESET}"
+    fi
+  fi
+  if [ "${AGENTLINE_CACHE_VERBOSE:-0}" = 1 ] && [ -n "$pc_hit" ]; then
+    if [ "$pc_hit" -lt 25 ]; then c="$RED"; elif [ "$pc_hit" -lt 75 ]; then c="$YELLOW"; else c="$GREEN"; fi
+    pc_body="${c}${pc_hit}%${RESET}${pc_body:+ }${pc_body}"
+  fi
+  [ -n "$pc_body" ] && _seg cache "🗄️ ${pc_body}"
+fi
 [ -n "$cost_fmt" ]       && _seg cost "💰 \$${cost_fmt}"
 [ -n "$duration_fmt" ]   && _seg dur "⏱️  ${duration_fmt}"
 [ -n "$tokens_in_fmt" ]  && _seg tok_in "📥 ${tokens_in_fmt}"
@@ -1531,11 +1669,13 @@ fi
 # the output is used as-is. It is written as bytes through os.fsencode, which
 # reverses exactly how python decoded argv: a byte the locale cannot decode
 # round-trips instead of raising on the way out.
-AGENTLINE_LAYOUT_DEFAULT="model,effort,fast,ctx,5h,week,cost,dur,tok_in,tok_out,words,lines,cpu,mem,disk / version,dir,git,session,email,date,clock / mcp,agents,resume / services,ssh,cron,ports"
+AGENTLINE_LAYOUT_DEFAULT="model,effort,fast,ctx,5h,week,cache,cost,dur,tok_in,tok_out,words,lines,cpu,mem,disk / version,dir,git,session,email,date,clock / mcp,agents,resume / services,ssh,cron,ports"
 # cpu, mem and disk close the list: they are host readings, the least a line
 # about the session needs, and without them a busy line 1 at COLUMNS≈122
 # still overflowed by a few cells and wrapped them onto a row of their own.
-AGENTLINE_DROP_DEFAULT="tok_in,tok_out,words,dur,date,version,email,lines,cpu,mem,disk"
+# cache (the prompt-cache warning) goes last of all: it only shows when it
+# is about to cost something, and then it outranks any host reading.
+AGENTLINE_DROP_DEFAULT="tok_in,tok_out,words,dur,date,version,email,lines,cpu,mem,disk,cache"
 # Leading zeros and absurd lengths are refused: bash arithmetic reads "08" as
 # bad octal, and a width is never six digits.
 _cols="${COLUMNS-}"
@@ -1558,6 +1698,9 @@ width, sep, layout, default_layout = max(1, int(sys.argv[1])), sys.argv[2], sys.
 fitting, drop_spec = sys.argv[5] == '1', sys.argv[6]
 placeholders = dict(zip(sys.argv[7:10], ('00:00:00', 'max', 'ultracode')))
 grad_re = re.compile(re.escape(sys.argv[10]) + '(.*?)' + re.escape(sys.argv[11]), re.S)
+# The prompt-cache countdown carries its epoch: measured as "0m00s", as
+# wide as it prints under ten minutes and wider than "45s".
+pcexp_re = re.compile(re.escape(sys.argv[12]) + '[0-9]*@@')
 # The segment records come on stdin (a here-string: one trailing newline).
 segs = sys.stdin.buffer.read().decode('utf-8', 'surrogateescape')
 if segs.endswith('\n'):
@@ -1605,6 +1748,7 @@ def vis(s):
     # substituted after layout; count them at the width they will print at.
     for tok, shown in placeholders.items():
         s = s.replace(tok, shown)
+    s = pcexp_re.sub('0m00s', s)
     # Colour codes are mostly still in backslash-escape form here (rendered
     # later by printf %b), so strip the literal \033[..m sequences before
     # measuring — and real ESC ones too, which color_pct prints already
@@ -1688,7 +1832,7 @@ PYEOF
 # lines vanished. A here-string costs no fork.
 out=$(python3 -I -c "$_AL_PY" "$STATUSLINE_WIDTH" "$P" "${AGENTLINE_LAYOUT:-$AGENTLINE_LAYOUT_DEFAULT}" \
   "$AGENTLINE_LAYOUT_DEFAULT" "$_fit" "${AGENTLINE_DROP-$AGENTLINE_DROP_DEFAULT}" \
-  "$CLOCK_TOKEN" "$ANIM_MAX_TOKEN" "$ANIM_ULTRA_TOKEN" "$GRAD_OPEN" "$GRAD_CLOSE" <<< "$SEGS")
+  "$CLOCK_TOKEN" "$ANIM_MAX_TOKEN" "$ANIM_ULTRA_TOKEN" "$GRAD_OPEN" "$GRAD_CLOSE" "$PCEXP_TOKEN" <<< "$SEGS")
 _layout_rc=$?
 
 # If the layout pass failed, bash lays the lines out itself: each line of
@@ -1777,5 +1921,8 @@ case "$out" in
   *"$ANIM_ULTRA_TOKEN"*)
     _anim_frame ultracode violet
     out="${out//$ANIM_ULTRA_TOKEN/$_anim_out}" ;;
+esac
+case "$out" in
+  *"$PCEXP_TOKEN"*) _pc_fill "$out"; out="$_pc_out" ;;
 esac
 printf "%b" "$out"

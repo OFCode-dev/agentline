@@ -40,7 +40,10 @@ Set variables in the `env` block of `~/.claude/settings.json`:
 |---|---|---|
 | `AGENTLINE_SERVICES` | `~/.claude/agentline-services.conf` | Path to the service list |
 | `AGENTLINE_LAYOUT` | the four default lines | Segment order and grouping: `/` starts a line, `,` separates names, an omitted name is hidden (names listed in the README's "Layout and narrow terminals"). Use this rather than editing `agentline.sh`, which an upgrade replaces |
-| `AGENTLINE_DROP` | `tok_in,tok_out,words,dur,date,version,email,lines,cpu,mem,disk` | Segments dropped first, in order, from a line too wide for the terminal; `model`, `ctx`, `5h`, `week` never drop. Empty = wrap only |
+| `AGENTLINE_DROP` | `tok_in,tok_out,words,dur,date,version,email,lines,cpu,mem,disk,cache` | Segments dropped first, in order, from a line too wide for the terminal; `model`, `ctx`, `5h`, `week` never drop. Empty = wrap only |
+| `AGENTLINE_PACE` | `1` | `0` hides the `⇡`/`⇣` pace arrows after `S:`/`W:` |
+| `AGENTLINE_CACHE_WARN` | `60` (5m TTL), `300` (1h) | Seconds before a warm prompt cache expires at which the `🗄️ ↻` countdown appears |
+| `AGENTLINE_CACHE_VERBOSE` | unset | `1` always shows the prompt-cache hit ratio |
 | `AGENTLINE_WIDTH` | `COLUMNS`−2, else `120` | Column budget; overrides the live width Claude Code ≥ 2.1.153 passes as `COLUMNS`. Normally leave unset |
 | `AGENTLINE_TZ` | system timezone | Pin the clock, e.g. `Europe/Istanbul` on a UTC server |
 | `AGENTLINE_USAGE_API` | unset | Set to `1` to fetch the Fable weekly share (`F:`) from `/api/oauth/usage` when the payload has no per-model bucket — the only network call agentline can make, opt-in only. Reads `$CLAUDE_CONFIG_DIR/.credentials.json` (default `~/.claude`) and caches per profile; does nothing on macOS, where the token is in the Keychain |

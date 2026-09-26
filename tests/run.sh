@@ -355,7 +355,7 @@ for tpl in "$FIX"/payloads/*.json; do
       diff -u "$g" "$T/got" | head -n 20 | sed 's/^/    /'
     fi
     if msg=$(check_wrap "$T/got" "$T/wide" "$w" 2>&1); then pass; else fail "$label: wrap: $msg"; fi
-    if grep -qE 'AGENTLINE_(CLOCK|ANIM)' "$T/got" || grep -q "$(printf '\002')" "$T/out"; then
+    if grep -qE 'AGENTLINE_(CLOCK|ANIM|PCEXP)' "$T/got" || grep -q "$(printf '\002')" "$T/out"; then
       fail "$label: placeholder leaked"
     else
       pass
@@ -595,6 +595,60 @@ if grep -qE '⇡|⇣' "$T/pl"; then fail "pace: ISO or missing resets_at shows n
 check "pace: ISO resets_at, exit 0 (got $rc)" [ "$rc" = 0 ]
 pace "{\"used_percentage\":80.5,\"resets_at\":$((pnow + 9000))}" "{\"used_percentage\":58,\"resets_at\":$((pnow + 302400))}" AGENTLINE_PACE=0
 if grep -qE '⇡|⇣' "$T/pl"; then fail "pace: AGENTLINE_PACE=0 turns it off"; else pass; fi
+
+# Prompt cache (C02): hidden while warm, a live countdown near expiry, the
+# first miss cause when cold, nothing when the object is absent or the
+# provider reports no caching. The cold case is also a golden fixture.
+pcache() {  # pcache <prompt_cache-json> [VAR=val...] -> raw $T/out, line 1 in $T/pl
+  local pc="$1"; shift
+  printf '{"session_id":"pcache-0002","cwd":"%s","model":{"id":"claude-opus-5"},"prompt_cache":%s}\n' \
+    "$WORK" "$pc" > "$T/pcache.json"
+  prepare minimal "$T/pcache.json"
+  render "$T/pcache.json" 300 ${1+"$@"}
+  normalize "$T/out" "$T/pn"; head -n 1 "$T/pn" > "$T/pl"
+}
+pnow=$(date +%s)
+pcache "{\"warm\":true,\"ttl\":\"5m\",\"expires_at\":$((pnow + 200)),\"hit_ratio\":0.9}"
+check "cache: exit 0 (got $rc)" [ "$rc" = 0 ]
+check "cache: stderr empty" [ ! -s "$T/err" ]
+if grep -q '🗄️' "$T/pl"; then fail "cache: warm and far from expiry is hidden"; else pass; fi
+pcache "{\"warm\":true,\"ttl\":\"5m\",\"expires_at\":$((pnow + 45))}"
+check "cache: warm within 60 s shows a countdown" grep -qE '🗄️ ↻(4[0-5]|3[0-9])s' "$T/pl"
+check "cache: countdown is yellow" grep -q "${ESC}\[1;33m↻" "$T/out"
+check "cache: no placeholder left" [ -z "$(tr -cd '\002' < "$T/out")" ]
+# A cached tick fills the countdown in from its own epoch, fork-free: point
+# the cached token at +125 s and the tick must print it.
+python3 -c '
+import re, sys
+p, t = sys.argv[1], sys.argv[2]
+b = open(p, "rb").read()
+open(p, "wb").write(re.sub(rb"AGENTLINE_PCEXP:[0-9]+@@", b"AGENTLINE_PCEXP:" + t.encode() + b"@@", b))
+' "$(cbase pcache-0002).render" "$(( $(date +%s) + 125 ))"
+render "$T/pcache.json" 300
+check "cache: a cached tick re-fills the countdown" grep -qE '↻2m0[0-5]s' "$T/out"
+pcache "{\"warm\":true,\"ttl\":\"1h\",\"expires_at\":$((pnow + 250))}"
+check "cache: a 1h TTL warns from 5 minutes" grep -qE '🗄️ ↻4m[0-9]{2}s' "$T/pl"
+pcache "{\"warm\":true,\"ttl\":\"5m\",\"expires_at\":$((pnow + 200))}" AGENTLINE_CACHE_WARN=300
+check "cache: AGENTLINE_CACHE_WARN widens the window" grep -qE '🗄️ ↻3m[0-9]{2}s' "$T/pl"
+pcache "{\"warm\":true,\"ttl\":\"5m\",\"expires_at\":$(( (pnow + 50) * 1000 ))}"
+check "cache: expires_at in milliseconds" grep -qE '🗄️ ↻[0-9]+s' "$T/pl"
+pcache "{\"warm\":true,\"ttl\":\"5m\",\"expires_at\":$((pnow - 5))}"
+if grep -q '🗄️' "$T/pl"; then fail "cache: warm but already past expiry is hidden"; else pass; fi
+pcache '{"warm":false,"last_miss_cause":{"causes":["ttl_expired_5m"]}}'
+check "cache: cold, ttl cause" grep -qF '🗄️ cold·ttl' "$T/pl"
+check "cache: cold is red" grep -q "${ESC}\[1;31mcold" "$T/out"
+pcache '{"warm":false,"last_miss_cause":null,"recache_tokens_if_cold":812}'
+check "cache: cold, no cause, recache cost" grep -qF '🗄️ cold ~812' "$T/pl"
+pcache '{"warm":false,"last_miss_cause":{"causes":["model_changed"]}}'
+check "cache: *_changed shortens to its subject" grep -qF '🗄️ cold·model' "$T/pl"
+pcache '{"warm":false,"caching_observed":false}'
+if grep -q '🗄️' "$T/pl"; then fail "cache: caching_observed false hides it"; else pass; fi
+pcache '{"warm":"yes","expires_at":"soon"}'
+if grep -q '🗄️' "$T/pl"; then fail "cache: a non-bool warm hides it"; else pass; fi
+check "cache: garbage fields, exit 0 (got $rc)" [ "$rc" = 0 ]
+pcache "{\"warm\":true,\"ttl\":\"5m\",\"expires_at\":$((pnow + 200)),\"hit_ratio\":0.2}" AGENTLINE_CACHE_VERBOSE=1
+check "cache: verbose shows the hit ratio" grep -qF '🗄️ 20%' "$T/pl"
+check "cache: a low hit ratio is red" grep -q "${ESC}\[1;31m20%" "$T/out"
 
 # ===========================================================================
 # 3. Render-cache fast path

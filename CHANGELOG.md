@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- A new line-1 segment, `cache`, says when the prompt cache is about to
+  cost you. It reads Claude Code's `prompt_cache` object (2.1.251+; the
+  miss cause needs 2.1.260+). It stays hidden while the cache is warm,
+  because warm is the normal case. With at most 60 seconds left (300 on a
+  1-hour TTL, or `AGENTLINE_CACHE_WARN`) it shows a yellow `🗄️ ↻1m12s`
+  that counts down live on cached ticks, with no fork. Once the cache has
+  gone cold it shows a red `🗄️ cold·tools`, naming the first miss cause
+  (`ttl`, `tools`, `prompt`, `model`, …), plus the dim `~45k` tokens that
+  going cold re-writes, when reported. This is the one place to learn
+  that connecting an MCP server mid-session just invalidated the cache.
+  `AGENTLINE_CACHE_VERBOSE=1` adds the session hit ratio. The segment is
+  hidden on older Claude Code and when the provider reports no caching.
+  There is deliberately no guess from the transcript's modification time,
+  because the TTL can be an hour and the file also changes on tool
+  results. `cache` is the last name in the default `AGENTLINE_DROP`.
 - `S:` and `W:` show their pace. "S:60%" alone does not say whether the
   window resets in 30 minutes or in 4 hours. The window start follows from
   `resets_at` (5 hours or 7 days earlier), so the share of it already
