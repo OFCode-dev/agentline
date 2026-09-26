@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+- `agentline.sh --doctor` prints a diagnostic report instead of the status
+  line. It lists every segment as shown or hidden, with where its data comes
+  from ("absent: cost.total_cost_usd" when the payload lacked the field), and
+  every host probe's value. It gives the wall time of each phase of one cold
+  render (parse, the two probe blocks, agents, segments, layout) and the
+  effective width, layout and drop list. It says whether the cache directory
+  passed its trust check, and whether `settings.json` wires the status line,
+  `refreshInterval` and each hook event. From a terminal it renders a
+  built-in sample payload, because reading stdin there would wait forever;
+  piped, it diagnoses the payload given. It bypasses and writes none of the
+  caches, so the timings are real and a sample never replaces the live line.
+  The timer uses `$EPOCHREALTIME` on bash 5 and `python3` elsewhere (BSD
+  `date` has no `%N`). The normal path gains only builtin tests. Version
+  gates are reported only where the statusline docs state one
+  (`prompt_cache` 2.1.251, its miss cause 2.1.260), and the README gains a
+  Troubleshooting section with that table.
 - The 🤖 agent tracker follows Claude Code's subagent lifecycle. It used to
   add a row on the Agent/Task tool call and clear every row only at the end
   of the turn, so a finished subagent stayed listed until its siblings were

@@ -297,6 +297,33 @@ The status line runs up to once a second in every open session, so the number th
 
 The previous release measured 133 / 153 / 297 ms for the last three rows on the same host (bash 5.2). Its payload-change render booted `python3` three times, four for Fable, and a cold probe booted it five times and called `systemctl` twice per service unit. The floor is honest rather than impressive: one `python3` start costs about 20 ms of CPU, and a full render needs two, one for the JSON payload and one for the width-aware layout. The rest is short `awk`/`date` calls. Sub-10 ms is only the cached tick.
 
+## Troubleshooting
+
+`agentline.sh --doctor` prints a diagnostic report instead of the status line. Run from a terminal it uses a built-in sample payload (the host layer is real). Pipe a payload in to diagnose that one:
+
+```bash
+bash ~/.claude/agentline/agentline.sh --doctor
+echo '{"model":{"id":"claude-opus-5"},"version":"2.1.169"}' | bash ~/.claude/agentline/agentline.sh --doctor
+```
+
+It reports:
+- the bash, OS, `python3` and `timeout` it found;
+- the effective width, layout and drop list;
+- the cache directory, and whether it passed the owner/symlink check that caching depends on;
+- whether `settings.json` wires the status line, `refreshInterval` and each hook event (a missing `SubagentStart` means re-run `install.sh --with-hooks`);
+- the wall time of each phase of one cold render;
+- every host probe's value;
+- every segment, as `shown` or `hidden` with where its data comes from ("absent: cost.total_cost_usd" means the payload did not carry that field).
+
+Doctor mode bypasses both caches and writes none of them, so the timings are real and a sample never replaces the live line.
+
+Some fields only exist in newer Claude Code releases. Only the version gates the [statusline documentation](https://code.claude.com/docs/en/statusline) states are listed here and used by `--doctor`. For any other field the report says the field was absent and does not guess at a version:
+
+| Field | Needs Claude Code |
+|---|---|
+| `prompt_cache` (the `🗄️` segment) | 2.1.251 |
+| `prompt_cache.last_miss_cause` (the cause after `cold·`) | 2.1.260 |
+
 ## Development / tests
 
 ```bash

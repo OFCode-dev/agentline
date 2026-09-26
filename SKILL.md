@@ -63,6 +63,17 @@ echo '{"model":{"id":"claude-fable-5"},"cwd":"'$HOME'","context_window":{"used_p
 
 Expect a gradient `✦ Fable 5`, a green `📊 42%`, and no errors. Segments that cannot be measured disappear silently — that is by design, not a fault.
 
+## Troubleshoot
+
+When a segment is missing or the line is slow, run the doctor before reading the script:
+
+```bash
+bash ~/.claude/agentline/agentline.sh --doctor            # from a terminal: built-in sample payload
+echo '{}' | bash ~/.claude/agentline/agentline.sh --doctor # or pipe the payload in question
+```
+
+It lists every segment as shown or hidden, with its data source ("absent: …" = the payload lacked the field; "probe" = the host command returned nothing). It also gives per-phase render times, the cache directory's trust state, and which hook events `settings.json` wires. A hook event reported `NO` is fixed by re-running `bash install.sh --with-hooks`. It writes no cache, so it is safe to run at any time.
+
 ## Update
 
 ```bash

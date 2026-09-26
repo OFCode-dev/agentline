@@ -2063,6 +2063,99 @@ check "no python3: exit 0 (got $lrc)" [ "$lrc" = 0 ]
 check "no python3: says skipped" grep -q 'python3 not found' "$T/rerr"
 check "no python3: file untouched" cmp -s "$REG" "$T/reg.before"
 
+# --- --doctor -----------------------------------------------------------------
+# A report instead of the status line: phases timed, every segment shown or
+# hidden with its source, cache and hook state. It must bypass both caches —
+# a warm render cache would otherwise be replayed as the "report" — and must
+# not block when stdin is a terminal.
+doctor() {  # doctor <payload-file> [VAR=val...] -> $T/dout (ANSI stripped), $rc
+  local p="$1"; shift
+  ( cd "$WORK" && run_env ${1+"$@"} "$TEST_BASH" "$ROOT/agentline.sh" --doctor < "$p" > "$T/dout.raw" 2> "$T/derr" )
+  rc=$?
+  LC_ALL=C sed "s/${ESC}\[[0-9;]*m//g" "$T/dout.raw" > "$T/dout"
+}
+dhas() { grep -qE -- "$1" "$T/dout"; }
+printf '%s' '{"session_id":"doc-1","cwd":"'"$WORK"'","model":{"id":"claude-opus-5"},"version":"2.1.100","context_window":{"used_percentage":12}}' > "$T/doc.json"
+prepare minimal "$PAY/minimal.json"
+render "$T/doc.json" 120  # a normal render first: the caches are now warm
+ls -l "$CACHE_DIR" > "$T/cache.before"
+cp "$(cbase doc-1).render" "$T/render.before"
+doctor "$T/doc.json"
+check "doctor: exit 0 (got $rc)" [ "$rc" = 0 ]
+check "doctor: stderr empty" [ ! -s "$T/derr" ]
+check "doctor: a report, not the cached line" dhas '^agentline doctor$'
+check "doctor: phases timed" dhas '^  parse +[0-9]+\.[0-9]$'
+check "doctor: total timed" dhas '^  total +[0-9]+\.[0-9]$'
+check "doctor: payload read from stdin" dhas '^  payload +stdin, [0-9]+ bytes$'
+check "doctor: version reported" dhas '^  claude code +2\.1\.100$'
+check "doctor: shown segment" dhas '^  model +shown +payload model\.id'
+check "doctor: hidden segment says absent" dhas '^  cost +hidden +absent: cost\.total_cost_usd$'
+check "doctor: prompt_cache version gate" dhas 'cache +hidden +absent: prompt_cache: needs Claude Code >= 2\.1\.251, this is 2\.1\.100'
+# The probes ran live (the seeded probe cache is bypassed too), so only the
+# row is asserted, not its value.
+check "doctor: host probe values listed" dhas '^  cpu_usage( |$)'
+check "doctor: cache dir trusted" dhas 'trusted: caching on'
+check "doctor: no settings.json reported" dhas '\(no .*/\.claude/settings\.json\)'
+check "doctor: render included" dhas '^Opus 5 │ 📊 12%'
+check "doctor: caches not written" cmp -s "$(cbase doc-1).render" "$T/render.before"
+ls -l "$CACHE_DIR" > "$T/cache.after"
+check "doctor: cache dir listing unchanged" cmp -s "$T/cache.before" "$T/cache.after"
+# A newer Claude Code with no prompt_cache object is no version problem.
+printf '%s' '{"session_id":"doc-2","model":{"id":"claude-opus-5"},"version":"2.1.300"}' > "$T/doc2.json"
+doctor "$T/doc2.json"
+check "doctor: prompt_cache absent on a new version" dhas 'absent: prompt_cache: absent \(no API response yet'
+doctor "$T/doc2.json" AGENTLINE_LAYOUT="model,cost"
+check "doctor: segment not in AGENTLINE_LAYOUT" dhas '^  clock +shown +always \[not in AGENTLINE_LAYOUT\]$'
+# Hooks: which events agentline's hooks are wired for.
+mkdir -p "$HOME_F/.claude"
+printf '%s\n' '{"statusLine":{"type":"command","command":"/x/agentline.sh","refreshInterval":1},' \
+  '"hooks":{"PreToolUse":[{"matcher":"Agent|Task","hooks":[{"type":"command","command":"/x/agent-tracker-hook.sh"}]}],' \
+  '"Stop":[{"matcher":"","hooks":[{"type":"command","command":"/x/agent-tracker-hook.sh"}]}]}}' > "$HOME_F/.claude/settings.json"
+doctor "$T/doc2.json"
+check "doctor: statusLine reported" dhas '^  statusLine +/x/agentline\.sh$'
+check "doctor: hook events wired / missing" dhas 'agent-tracker-hook\.sh PreToolUse yes, SubagentStart NO, SubagentStop NO, Stop yes'
+check "doctor: wordcount hook missing" dhas 'wordcount-hook\.sh +PostToolUse NO, Stop NO'
+rm -f "$HOME_F/.claude/settings.json"
+# An untrusted cache dir (a symlink) is reported as such.
+mkdir -p "$T/dtmp/real"; ln -s "$T/dtmp/real" "$T/dtmp/agentline-${EUID:-0}"
+doctor "$T/doc2.json" TMPDIR="$T/dtmp"
+check "doctor: untrusted cache dir reported" dhas 'FAILED the owner/symlink check'
+check "doctor: nothing written into it" [ -z "$(ls -A "$T/dtmp/real")" ]
+rm -rf "$T/dtmp"
+# stdin a terminal: the built-in sample, never a hang.
+python3 - "$T/dpty" "$WORK" "$PATH_F" "$HOME_F" "$TMP_F" "$SIDE" "$TEST_BASH" "$ROOT/agentline.sh" <<'PYEOF'
+import os, pty, select, sys
+out_path, cwd, path, home, tmp, side, bash, script = sys.argv[1:9]
+pid, fd = pty.fork()
+if pid == 0:
+    os.chdir(cwd)
+    os.execve(bash, [bash, script, '--doctor'], {'PATH': path, 'HOME': home, 'TMPDIR': tmp,
+              'AGENTLINE_TMP': side, 'TZ': 'UTC', 'LC_ALL': 'C'})
+out, hung = b'', False
+while True:
+    r, _, _ = select.select([fd], [], [], 30)
+    if not r:
+        hung = True
+        os.kill(pid, 9)
+        break
+    try:
+        chunk = os.read(fd, 65536)
+    except OSError:
+        chunk = b''
+    if not chunk:
+        break
+    out += chunk
+_, st = os.waitpid(pid, 0)
+status = 'timeout' if hung else 'exit %d' % (os.WEXITSTATUS(st) if os.WIFEXITED(st) else -1)
+open(out_path, 'wb').write(out + ('\n%s\n' % status).encode())
+PYEOF
+check "doctor on a tty: no hang, exit 0" grep -qx 'exit 0' "$T/dpty"
+check "doctor on a tty: built-in sample" grep -q 'built-in sample' "$T/dpty"
+# The normal path ignores anything but --doctor, and --doctor never leaks
+# into a normal render.
+render "$T/doc2.json" 120
+check "no --doctor: the status line" sh -c "! grep -q 'agentline doctor' '$T/out'"
+
 # ===========================================================================
 # 5. install.sh, end to end against a fixture HOME
 # ===========================================================================

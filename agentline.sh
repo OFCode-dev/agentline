@@ -12,7 +12,44 @@
 # out, or a directory that loses its mode, still does not expose session JSON
 # or account data. `umask` is a builtin, so the fast path stays fork-free.
 umask 077
-input=$(cat)
+
+# === Doctor ===
+# `agentline.sh --doctor` prints a diagnostic report instead of the status
+# line: how long each phase of a render took, which segments rendered and why
+# the others did not, the effective width and layout, the cache directory's
+# state, and whether the hooks are wired. "Why is my status line slow" and
+# "why is X missing" are otherwise answered by reading 2000 lines of bash.
+#
+# It is decided before stdin is read: run from a terminal, `input=$(cat)`
+# would wait forever for a payload nobody sends. From a terminal it renders a
+# built-in sample payload (the host layer is real, the payload layer mostly
+# empty); `... | agentline.sh --doctor` diagnoses a saved or live payload.
+# Doctor mode bypasses both caches, reading and writing: a warm cache would
+# report every probe at ~0 ms, and a sample render must never be replayed as
+# the real one. On the normal path this costs one `case` and, further down, a
+# handful of `[ -n ]` tests: builtins, no fork.
+_AL_DOCTOR=""
+_dt_sample=""
+case "${1:-}" in --doctor) _AL_DOCTOR=1 ;; esac
+if [ -n "$_AL_DOCTOR" ] && [ -t 0 ]; then
+  _dt_sample=1
+  input='{"session_id":"agentline-doctor","model":{"id":"claude-sonnet-5","display_name":"Sonnet 5"}}'
+else
+  input=$(cat)
+fi
+# Phase timer, doctor mode only: microseconds from $EPOCHREALTIME on bash >=
+# 5 (its decimal point follows the locale, so either separator is dropped;
+# it always has six decimals), else from python3, which is already a
+# dependency — BSD date has no %N, so `date +%s%N` is no fallback on macOS.
+_dt_log=""
+_dt_mark() {  # _dt_mark <phase> — record the time a phase ended
+  local t
+  if [ "${BASH_VERSINFO[0]:-0}" -ge 5 ]; then t="${EPOCHREALTIME//[.,]/}"
+  else t=$(python3 -I -c 'import time; print(int(time.time() * 1e6))' 2>/dev/null)
+  fi
+  _dt_log="${_dt_log}$1 ${t}"$'\n'
+}
+[ -n "$_AL_DOCTOR" ] && _dt_mark start
 
 # === Live clock fast path ===
 # Claude Code re-invokes this script every `statusLine.refreshInterval`
@@ -103,7 +140,7 @@ esac
 # create intermediate levels keeps the write path shallow and predictable.
 CACHE_DIR="${TMPDIR:-/tmp}/agentline-${EUID:-0}"
 CACHE_BASE=""
-[ -d "$CACHE_DIR" ] || mkdir -m 700 "$CACHE_DIR" 2>/dev/null
+[ -d "$CACHE_DIR" ] || [ -n "$_AL_DOCTOR" ] || mkdir -m 700 "$CACHE_DIR" 2>/dev/null
 # CACHE_FORMAT is part of every cache name, and is bumped whenever what the
 # caches hold changes meaning, so a render right after an upgrade never
 # replays a body written by the old release. Format 2: placeholders carry a
@@ -116,6 +153,12 @@ CACHE_FORMAT=2
 if [ -d "$CACHE_DIR" ] && [ ! -L "$CACHE_DIR" ] && [ -O "$CACHE_DIR" ]; then
   CACHE_BASE="${CACHE_DIR}/render_${_sid}.v${CACHE_FORMAT}"
 fi
+# Doctor mode reports whether the directory passed, then renders without it
+# (see "Doctor"): with CACHE_BASE empty nothing is read from or written to
+# any cache, the probe, compaction, e-mail and usage caches included.
+_dt_cache_ok=0
+[ -n "$CACHE_BASE" ] && _dt_cache_ok=1
+[ -n "$_AL_DOCTOR" ] && CACHE_BASE=""
 
 # === Animated effort gradients ===
 # The /effort picker animates "max" and ultracode live; a statusline can't
@@ -587,6 +630,7 @@ def line(k, v):
 sys.stdout.buffer.write(b'\n'.join(line(k, v) for k, v in fields.items()))
 PYEOF
 eval "$(PAYLOAD="$input" python3 -I -c "$_AL_PARSER")"
+[ -n "$_AL_DOCTOR" ] && _dt_mark parse
 # Only a pwd fallback may seed the displayed path from the raw one (it is
 # host data, cleaned with the other host strings via $folder). A payload cwd
 # whose cleaned form is empty — nothing but control bytes, say "\x9b\x1b" —
@@ -930,6 +974,7 @@ PYEOF
 active_mcps=$(python3 -I -c "$_AL_PY" "$cwd")
 
 fi  # end of throttled host probes (part 1)
+[ -n "$_AL_DOCTOR" ] && _dt_mark probes:cpu,mem,git,mcp
 
 # Side files written by the optional hooks (hooks/*.sh) live in one shared
 # directory, /tmp unless $AGENTLINE_TMP names another. The hooks resolve the
@@ -984,6 +1029,7 @@ if [ -f "$AGENTS_FILE" ]; then
   agents_done="${active_agents#*"$_US"}"
   active_agents="${active_agents%%"$_US"*}"
 fi
+[ -n "$_AL_DOCTOR" ] && _dt_mark agents
 
 # Home-relative path (~/projects/agentline) rather than the bare folder name.
 # Paths outside $HOME are shown absolute.
@@ -1137,6 +1183,7 @@ if command -v systemctl >/dev/null 2>&1 && [ -r "$SVC_CONFIG" ]; then
 fi
 
 fi  # end of throttled host probes (part 2)
+[ -n "$_AL_DOCTOR" ] && _dt_mark probes:ssh,cron,ports,disk,services
 
 # Persist the probe results for the next $PROBE_TTL seconds. `printf -v %q` is
 # a builtin, so quoting the values costs no fork, and it round-trips the ANSI
@@ -2032,6 +2079,7 @@ if [ -n "$cron_count" ] && [ "$cron_count" -gt 0 ]; then
 fi
 [ -n "$dev_ports" ] && _seg ports "🌐 ${DIM}${dev_ports}${RESET}"
 
+[ -n "$_AL_DOCTOR" ] && _dt_mark segments
 # === Layout ===
 # One python pass turns the segment records into rows. $AGENTLINE_LAYOUT is
 # the order: "/" starts a line, "," separates segment names, and a name left
@@ -2240,6 +2288,7 @@ out=$(python3 -I -c "$_AL_PY" "$STATUSLINE_WIDTH" "$P" "${AGENTLINE_LAYOUT:-$AGE
   "$AGENTLINE_LAYOUT_DEFAULT" "$_fit" "${AGENTLINE_DROP-$AGENTLINE_DROP_DEFAULT}" \
   "$CLOCK_TOKEN" "$ANIM_MAX_TOKEN" "$ANIM_ULTRA_TOKEN" "$GRAD_OPEN" "$GRAD_CLOSE" "$PCEXP_TOKEN" "$_WARNED" "$pc_meas" <<< "$SEGS")
 _layout_rc=$?
+[ -n "$_AL_DOCTOR" ] && _dt_mark layout
 
 # If the layout pass failed, bash lays the lines out itself: each line of
 # the layout string, its segments joined with the separator in order — no
@@ -2331,4 +2380,176 @@ esac
 case "$out" in
   *"$PCEXP_TOKEN"*) _pc_fill "$out"; out="$_pc_out" ;;
 esac
+
+# === Doctor report ===
+# Everything below runs only for --doctor (see "Doctor"), after a full cold
+# render, and prints plain text in place of the status line. Forks are fine
+# here; the normal path has already printed and never gets this far.
+#
+# "Hidden" is explained by where a segment's data comes from: a payload
+# field that was absent, a host probe that returned nothing, a hook side file
+# that is missing. Claude Code version gates are only stated where the
+# statusline docs give one (prompt_cache); for every other field the report
+# says "absent in the payload" rather than guess at a version.
+IFS= read -r -d '' _AL_DOCTOR_PY <<'PYEOF'
+import json, sys
+path = sys.argv[1]
+try:
+    d = json.load(open(path))
+except FileNotFoundError:
+    print('  (no %s)' % path)
+    sys.exit()
+except Exception as e:
+    print('  %s does not parse: %s' % (path, e))
+    sys.exit()
+d = d if isinstance(d, dict) else {}
+sl = d.get('statusLine') if isinstance(d.get('statusLine'), dict) else {}
+print('  statusLine       %s' % (sl.get('command') or '(none)'))
+print('  refreshInterval  %s' % (sl.get('refreshInterval') if sl.get('refreshInterval') is not None
+                                 else 'unset: the clock only ticks on conversation events'))
+hooks = d.get('hooks') if isinstance(d.get('hooks'), dict) else {}
+WANT = (('agent-tracker-hook.sh', ('PreToolUse', 'SubagentStart', 'SubagentStop', 'Stop')),
+        ('wordcount-hook.sh', ('PostToolUse', 'Stop')))
+for name, events in WANT:
+    got = []
+    for ev in events:
+        groups = hooks.get(ev) if isinstance(hooks.get(ev), list) else []
+        ok = any(name in str(h.get('command') or '')
+                 for g in groups if isinstance(g, dict)
+                 for h in (g.get('hooks') or []) if isinstance(h, dict))
+        got.append(ev + (' yes' if ok else ' NO'))
+    print('  %-16s %s' % (name, ', '.join(got)))
+PYEOF
+_ver_ge() {  # _ver_ge <have> <want> — dotted versions; 2 when <have> is no version
+  local IFS=. i x y
+  local -a a b
+  a=($1); b=($2)
+  for i in 0 1 2; do
+    x="${a[$i]:-0}"; x="${x%%[!0-9]*}"; y="${b[$i]:-0}"
+    [ -n "$x" ] || return 2
+    [ ${#x} -le 9 ] || return 2
+    [ $(( 10#$x )) -gt $(( 10#$y )) ] && return 0
+    [ $(( 10#$x )) -lt $(( 10#$y )) ] && return 1
+  done
+  return 0
+}
+_dt_have() { case "${_RS}${SEGS}" in *"${_RS}$1${_US}"*) return 0 ;; esac; return 1; }
+_dt_why() {  # _dt_why <segment> — where its data comes from
+  case "$1" in
+    model)    echo "payload model.id / model.display_name" ;;
+    effort)   echo "payload effort.level" ;;
+    fast)     echo "payload fast_mode" ;;
+    ctx)      echo "payload context_window.used_percentage" ;;
+    compact)  echo "compact_boundary lines in transcript_path (not counted by --doctor: it needs the cache)" ;;
+    5h)       echo "payload rate_limits.five_hour.used_percentage" ;;
+    week)     echo "payload rate_limits.seven_day.used_percentage (F: seven_day_overage_included, or AGENTLINE_USAGE_API=1)" ;;
+    cache)
+      if [ -n "$pc_state" ]; then echo "payload prompt_cache: hidden while warm and not about to expire"
+      elif [ -n "$version" ] && _ver_ge "$version" 2.1.251; then echo "payload prompt_cache: absent (no API response yet, or no caching reported)"
+      elif [ -n "$version" ]; then echo "payload prompt_cache: needs Claude Code >= 2.1.251, this is $version (https://code.claude.com/docs/en/statusline)"
+      else echo "payload prompt_cache (Claude Code >= 2.1.251; miss cause >= 2.1.260)"
+      fi ;;
+    cost)     echo "payload cost.total_cost_usd" ;;
+    dur)      echo "payload cost.total_duration_ms" ;;
+    tok_in)   echo "payload context_window.total_input_tokens" ;;
+    tok_out)  echo "payload context_window.total_output_tokens" ;;
+    words)    echo "wordcount hook: $AGENTLINE_TMP/claude_wordcount.txt$([ -f "$AGENTLINE_TMP/claude_wordcount.txt" ] || echo ' (missing)')" ;;
+    lines)    echo "payload cost.total_lines_added / total_lines_removed" ;;
+    cpu)      echo "probe: top" ;;
+    mem)      [ "$OS" = Darwin ] && echo "probe: vm_stat + sysctl" || echo "probe: /proc/meminfo" ;;
+    disk)     echo "probe: df -P /" ;;
+    version)  echo "payload version" ;;
+    dir)      echo "payload cwd, else pwd" ;;
+    git)      echo "probe: .git/HEAD (git on the odd case); none outside a repo or on a detached HEAD" ;;
+    pr)       echo "payload pr.number" ;;
+    worktree) echo "payload workspace.git_worktree / worktree.name" ;;
+    session)  echo "payload session_name" ;;
+    email)    echo "payload account.email (the claude auth status fallback is skipped by --doctor)" ;;
+    date|clock) echo "always" ;;
+    mcp)      echo "~/.claude.json mcpServers: remote, or with a running process" ;;
+    agents)   echo "agent registry: $AGENTS_FILE$([ -f "$AGENTS_FILE" ] || echo ' (missing)')" ;;
+    resume)   echo "payload session_id / session_name" ;;
+    services)
+      if ! command -v systemctl >/dev/null 2>&1; then echo "systemctl not installed (Linux only)"
+      elif [ ! -r "$SVC_CONFIG" ]; then echo "no service list: $SVC_CONFIG"
+      else echo "systemctl show, units from $SVC_CONFIG"
+      fi ;;
+    ssh)      echo "probe: who (remote logins)" ;;
+    cron)     echo "probe: crontab -l" ;;
+    ports)    [ "$OS" = Darwin ] && echo "probe: lsof, listeners on 3000-9999" || echo "probe: ss, listeners on 3000-9999" ;;
+    *)        echo "" ;;
+  esac
+}
+if [ -n "$_AL_DOCTOR" ]; then
+  echo "agentline doctor"
+  echo
+  echo "environment"
+  printf '  %-16s %s\n' script "$0" \
+    bash "${BASH_VERSION}$([ "$_fast_time" = 1 ] || echo ' (< 5.0: a cached tick forks date twice)')" \
+    os "$OS" \
+    python3 "$(command -v python3 || echo 'NOT FOUND: payload parse and layout fail')" \
+    timeout "${_TIMEOUT:-none: git status counts are skipped, probes run unguarded}" \
+    locale "LC_ALL=${LC_ALL-} LANG=${LANG-}" \
+    COLUMNS "${COLUMNS:-unset (Claude Code sets it for the status line)}" \
+    width "$STATUSLINE_WIDTH$([ "$_fit" = 1 ] && echo ', fit mode' || echo ', no fit: lines 1-2 are never trimmed')" \
+    layout "${AGENTLINE_LAYOUT:-default}" \
+    drop "${AGENTLINE_DROP-default}" \
+    links "$([ "$_links" = 1 ] && echo on || echo 'off (AGENTLINE_LINKS=0 or a multiplexer)')"
+  _dt_pl="stdin, ${#input} bytes"
+  [ -n "$_dt_sample" ] && _dt_pl="built-in sample (stdin is a terminal; pipe a payload in to diagnose it)"
+  [ -z "$input" ] && _dt_pl="empty stdin"
+  [ -n "$payload_err" ] && _dt_pl="$_dt_pl — does NOT decode as a JSON object"
+  printf '  %-16s %s\n' payload "$_dt_pl" "claude code" "${version:-absent in the payload}"
+  echo
+  echo "cache"
+  if [ -d "$CACHE_DIR" ]; then
+    _dt_ls=$(ls -ld "$CACHE_DIR" 2>/dev/null)
+    printf '  %-16s %s\n' dir "$CACHE_DIR" "state" "${_dt_ls%% *}, $([ "$_dt_cache_ok" = 1 ] && echo 'trusted: caching on' || echo 'FAILED the owner/symlink check: caching off, every tick is a full render')"
+  else
+    printf '  %-16s %s\n' dir "$CACHE_DIR (missing; the next render creates it)"
+  fi
+  printf '  %-16s %s\n' ttl "render ${CACHE_TTL}s, host probes ${PROBE_TTL}s (both bypassed by --doctor)"
+  echo
+  echo "settings (${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json)"
+  python3 -I -c "$_AL_DOCTOR_PY" "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json" 2>/dev/null
+  echo
+  echo "timings (one cold render, ms)"
+  _dt_prev=""; _dt_first=""
+  while read -r _dt_n _dt_t; do
+    case "$_dt_t" in ''|*[!0-9]*) continue ;; esac
+    if [ -n "$_dt_prev" ]; then
+      _dt_us=$(( _dt_t - _dt_prev ))
+      printf '  %-36s %4d.%d\n' "$_dt_n" $(( _dt_us / 1000 )) $(( _dt_us % 1000 / 100 ))
+    else
+      _dt_first="$_dt_t"
+    fi
+    _dt_prev="$_dt_t"
+  done <<< "$_dt_log"
+  if [ -n "$_dt_first" ]; then
+    _dt_us=$(( _dt_prev - _dt_first ))
+    printf '  %-36s %4d.%d\n' total $(( _dt_us / 1000 )) $(( _dt_us % 1000 / 100 ))
+  fi
+  [ "${BASH_VERSINFO[0]:-0}" -ge 5 ] || echo "  (bash < 5: each mark starts a python3, ~20 ms, counted in the phase it ends)"
+  echo
+  echo "host probes (empty: the probe returned nothing)"
+  for _v in $PROBE_VARS active_agents agents_done; do
+    printf '  %-16s %b\n' "$_v" "${!_v}"
+  done
+  echo
+  echo "segments (shown = emitted; at a narrow width the layout may still drop it, see AGENTLINE_DROP)"
+  _dt_lay=",${AGENTLINE_LAYOUT:-$AGENTLINE_LAYOUT_DEFAULT},"; _dt_lay="${_dt_lay//[\/ ]/,}"
+  for _n in ${AGENTLINE_LAYOUT_DEFAULT//[\/,]/ }; do
+    _dt_s=hidden; _dt_have "$_n" && _dt_s=shown
+    _dt_note=""
+    case "$_dt_lay" in *",$_n,"*) ;; *) _dt_note=" [not in AGENTLINE_LAYOUT]" ;; esac
+    _dt_w=$(_dt_why "$_n")
+    # A hidden payload segment: its field was not in the payload.
+    case "$_dt_s:$_dt_w" in "hidden:payload "*) _dt_w="absent: ${_dt_w#payload }" ;; esac
+    printf '  %-9s %-7s %s%s\n' "$_n" "$_dt_s" "$_dt_w" "$_dt_note"
+  done
+  echo
+  echo "render"
+  printf '%b\n' "$out"
+  exit 0
+fi
 printf "%b" "$out"
