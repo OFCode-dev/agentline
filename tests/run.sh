@@ -401,12 +401,23 @@ fi
 # urlopen, so every other python3 the render runs is unaffected.
 mkdir -p "$T/usagehook"
 cat > "$T/usagehook/sitecustomize.py" <<'EOF'
-import io, json, os, time, urllib.request
+import errno, io, json, os, time, urllib.request
 def _fake(req, timeout=None):
+    if os.environ.get('FAKE_USAGE_LOG'):
+        with open(os.environ['FAKE_USAGE_LOG'], 'a') as f:
+            f.write('fetch\n')
     time.sleep(float(os.environ.get('FAKE_USAGE_DELAY', '0')))
     return io.BytesIO(json.dumps({'limits': [{'kind': 'weekly_scoped',
         'scope': {'model': {'display_name': 'Fable'}}, 'percent': 63}]}).encode())
 urllib.request.urlopen = _fake
+# FAKE_REPLACE_FAIL=1: the rename of the fetched result fails (a full disk).
+if os.environ.get('FAKE_REPLACE_FAIL'):
+    _real_replace = os.replace
+    def _fail(src, dst, *a, **k):
+        if '/usage.' in str(dst):
+            raise OSError(errno.ENOSPC, 'No space left on device', str(dst))
+        return _real_replace(src, dst, *a, **k)
+    os.replace = _fail
 EOF
 mkdir -p "$HOME_F/.claude"
 echo '{"claudeAiOauth": {"accessToken": "fake-token"}}' > "$HOME_F/.claude/.credentials.json"
@@ -451,6 +462,29 @@ echo $(( $(date +%s) - 60 )) > "$UCLAIM"
 prepare minimal "$p"
 urender
 check "usage: abandoned claim is retaken" wait_for 8 cache_is 63
+
+# A result that cannot be written keeps its claim, so the renders after it
+# do not each fetch again (8 fetches in 8 renders before the fix).
+prepare minimal "$p"; rm -f "$UCLAIM" "$T/fetches"
+printf 37 > "$UCACHE"; age_file "$UCACHE" 310
+for i in 1 2 3 4 5; do
+  prepare minimal "$p"
+  urender FAKE_REPLACE_FAIL=1 FAKE_USAGE_LOG="$T/fetches"
+  [ "$i" = 1 ] && wait_for 5 [ -s "$T/fetches" ]
+done
+sleep 1
+check "usage: failed cache write, one fetch not $(wc -l < "$T/fetches" 2>/dev/null | tr -d ' ')" \
+  [ "$(wc -l < "$T/fetches" 2>/dev/null | tr -d ' ')" = 1 ]
+check "usage: failed cache write keeps the claim" [ -f "$UCLAIM" ]
+check "usage: failed cache write leaves no temp file" sh -c "! ls '$UCACHE'.[0-9]* >/dev/null 2>&1"
+# A claim that cannot be written starts no fetch at all.
+rm -f "$UCLAIM" "$T/fetches"; mkdir "$UCLAIM"
+prepare minimal "$p"
+urender FAKE_USAGE_LOG="$T/fetches"
+sleep 1
+check "usage: unwritable claim starts no fetch" [ ! -e "$T/fetches" ]
+check "usage: unwritable claim, stderr quiet" [ ! -s "$T/err" ]
+rmdir "$UCLAIM"
 
 # Past TTL + 60 s grace an unconfirmed figure is hidden.
 prepare minimal "$p"

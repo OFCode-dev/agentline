@@ -884,8 +884,12 @@ if [ -z "$seven_day_top" ] && [ "${AGENTLINE_USAGE_API:-0}" = "1" ] && [ -n "$CA
     claimed_at=0
     [ -f "$usage_claim" ] && read -r claimed_at < "$usage_claim"
     case "$claimed_at" in ''|*[!0-9]*) claimed_at=0 ;; esac
-    if [ $(( _now_epoch - claimed_at )) -ge 30 ]; then
-      printf '%s\n' "$_now_epoch" > "$usage_claim" 2>/dev/null
+    # A claim that cannot be written (full disk, read-only cache dir) starts
+    # no fetch: without it every full render would fetch again, and the
+    # result could not be cached either. 2>/dev/null comes first so the
+    # shell's own "cannot create" message for the failed redirect is muted.
+    if [ $(( _now_epoch - claimed_at )) -ge 30 ] &&
+       printf '%s\n' "$_now_epoch" 2>/dev/null > "$usage_claim"; then
       python3 - "$_cfg_dir" "$usage_cache" "$usage_claim" >/dev/null 2>&1 <<'PYEOF' &
 import json, os, signal, sys, urllib.request
 cfg, cache, claim = sys.argv[1:4]
@@ -918,6 +922,10 @@ try:
 except Exception:
     pass
 signal.alarm(0)
+# The claim is dropped only once the result is in place. After a failed
+# write the cache is still expired, and dropping the claim anyway made the
+# very next full render fetch again — once per render for as long as the
+# disk stayed full. Left in place, the claim holds retries to one per 30 s.
 tmp = '%s.%d' % (cache, os.getpid())
 try:
     with open(tmp, 'w') as f:
@@ -928,10 +936,11 @@ except OSError:
         os.unlink(tmp)
     except OSError:
         pass
-try:
-    os.unlink(claim)
-except OSError:
-    pass
+else:
+    try:
+        os.unlink(claim)
+    except OSError:
+        pass
 PYEOF
     fi
   fi

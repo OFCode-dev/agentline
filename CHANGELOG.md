@@ -84,7 +84,10 @@
   epoch, which ages out after 30 s, and the fetch runs as a detached python
   in its own session that renames its result into place, so the render
   neither waits for it nor can take it down. The old figure stays up at most
-  a minute past its TTL while the refresh is in flight.
+  a minute past its TTL while the refresh is in flight. The claim is dropped
+  only after the result has been renamed into place. If the cache cannot be
+  written (a full disk), retries are held to one every 30 s instead of one
+  per render, and a claim that cannot be written starts no fetch at all.
 - Cache file modes are repaired. `umask 077` only covers new files: a
   cache file an older release left at 644 stayed 644 through every `>`
   rewrite. The daily sweep now sets surviving files to 600 and the
