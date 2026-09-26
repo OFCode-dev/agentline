@@ -16,7 +16,11 @@
   a C/POSIX locale or an unset `LANG` (common on servers) bash's
   `[[:cntrl:]]` does not match them, yet git allows them in a branch name
   and xterm-class terminals act on them. Other text is untouched: Turkish
-  letters, emoji and `©` survive in every locale.
+  letters, emoji and `©` survive in every locale. Lone surrogates in the
+  payload are dropped too. A `"session_name":"\ud800"` used to crash the
+  parser's output, so the model and context segments vanished and a
+  traceback went to stderr. `"\udc9b"` came out as a raw `0x9B`, the 8-bit
+  CSI. The parser now writes its own UTF-8.
 - Payload robustness and a truthful context warning. A payload that does not
   decode, or decodes to something other than an object, used to become `{}`:
   the model and context segments vanished with no hint why. It now shows a

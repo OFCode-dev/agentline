@@ -197,7 +197,7 @@ fi
 # the hottest path in the script. shlex.quote makes the eval safe for any
 # payload value (quotes, spaces, newlines).
 eval "$(PAYLOAD="$input" python3 - <<'PYEOF'
-import json, math, os, re, shlex
+import json, math, os, re, shlex, sys
 # The decode is its own step so a broken payload is reported, not just
 # survived: before, any failure became {} and the model and context segments
 # vanished with nothing on screen to say why. payload_err drives a dim
@@ -239,8 +239,14 @@ def num(v):
 # string is cleaned here: C0 controls, DEL, C1 controls (U+0080-U+009F, which
 # some terminals honour as CSI/OSC) and the backslash itself. Host-derived
 # strings get the same treatment in bash, after the probes.
+#
+# Lone surrogates (U+D800-U+DFFF) go too. JSON may spell one ("\ud800"), and
+# a raw invalid byte in the payload arrives as one (\udc80-\udcff, the
+# surrogateescape decoding of the environment). The first made the encode
+# of the output raise, which lost the whole parse. The second was written
+# back as the raw byte: "\udc9b" became a bare 0x9B, the 8-bit CSI.
 def clean(v):
-    return re.sub(r'[\x00-\x1f\x7f-\x9f\\]', '', str(v))
+    return re.sub(r'[\x00-\x1f\x7f-\x9f\\\ud800-\udfff]', '', str(v))
 
 # The model field has been both an object {id, display_name} and a bare id
 # string across Claude Code versions (other status lines crashed on the flip,
@@ -314,7 +320,22 @@ fields = {
     'payload_email': clean(g('account', 'email')),
     'payload_transcript': g('transcript_path'),
 }
-print('\n'.join(f'{k}={shlex.quote(str(v))}' for k, v in fields.items()))
+# Encoded here, not by print(): stdout's encoding follows the locale, and any
+# surrogate left in a raw field would make print() raise and take every field
+# down with it. Displayed fields are clean() already. Of the raw ones, the two
+# paths keep their exact bytes (surrogateescape) so a non-UTF-8 directory
+# still resolves. Everything else, and a path that cannot round-trip, gets
+# '?' for what cannot be encoded.
+RAW_PATHS = ('cwd', 'payload_transcript')
+def line(k, v):
+    s = f'{k}={shlex.quote(str(v))}'
+    if k in RAW_PATHS:
+        try:
+            return s.encode('utf-8', 'surrogateescape')
+        except UnicodeEncodeError:
+            pass
+    return s.encode('utf-8', 'replace')
+sys.stdout.buffer.write(b'\n'.join(line(k, v) for k, v in fields.items()))
 PYEOF
 )"
 [ -z "$cwd" ] && cwd="$(pwd)"

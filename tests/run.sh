@@ -335,6 +335,31 @@ PYEOF
 ); then pass; else fail "escapes [$loc]: $msg"; fi
 done
 
+# Lone surrogates in the payload: "\ud800" used to crash the output encode
+# and lose every payload field (no model, no context, a traceback), and
+# "\udc9b" came out as a raw 0x9B byte, the 8-bit CSI. Now both are dropped
+# and the rest of the payload renders; the output is valid UTF-8.
+for loc in $esc_locales; do
+ctx_raw surrogates
+render "$PAY/surrogates.json" 120 LC_ALL="$loc"
+check "surrogates [$loc]: stderr empty" [ ! -s "$T/err" ]
+if msg=$(python3 - "$T/out" <<'PYEOF' 2>&1
+import re, sys
+b = open(sys.argv[1], 'rb').read()
+try:
+    s = b.decode('utf-8')
+except UnicodeDecodeError as e:
+    sys.exit('output is not valid UTF-8: %s' % e)
+rest = re.sub(r'\x1b\[[0-9;]*m', '', s)
+if any(0x80 <= ord(c) <= 0x9f for c in rest):
+    sys.exit('C1 survived')
+for want in ('Opus 5', '30%', 'ab[31mc', 'v2.1'):
+    if want not in rest:
+        sys.exit('segment missing: %r' % want)
+PYEOF
+); then pass; else fail "surrogates [$loc]: $msg"; fi
+done
+
 # ===========================================================================
 # 3. Render-cache fast path
 # ===========================================================================
