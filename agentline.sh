@@ -565,6 +565,9 @@ fields = {
     # Code's own worktree sessions, so the first is preferred.
     'git_worktree': text('workspace', 'git_worktree'),
     'wt_name': text('worktree', 'name'),
+    # Where the session was launched; differs from cwd once it has cd'd
+    # away. Only its last component is shown (the breadcrumb on line 2).
+    'project_dir': text('workspace', 'project_dir'),
 }
 # Encoded here, not by print(): stdout's encoding follows the locale, and any
 # surrogate left in a raw field would make print() raise and take every field
@@ -651,7 +654,7 @@ _run_to() {
 # `active_agents` is excluded on purpose — it is one awk over a small file, and
 # the live subagent list is the thing worth watching in real time.
 PROBE_TTL="${AGENTLINE_PROBE_TTL:-15}"
-PROBE_VARS="active_mcps cpu_usage cron_count dev_ports disk_pct git_branch git_repo git_url mem_used_gb ssh_count svc_panel"
+PROBE_VARS="active_mcps cpu_usage cron_count dev_ports disk_pct git_ab git_branch git_dirty git_repo git_url mem_used_gb ssh_count svc_panel"
 #
 # The file is line-oriented and its body is eval'd, so nothing may reach it
 # that could add a line. The cwd comes from the payload and used to be stored
@@ -754,6 +757,8 @@ fi
 git_branch=""
 git_repo=""
 git_url=""
+git_ab=""
+git_dirty=""
 if [ -n "$cwd" ] && [ -d "$cwd" ]; then
   _git_ask=0; _gd=""
   if [ -n "${GIT_DIR-}${GIT_WORK_TREE-}${GIT_CEILING_DIRECTORIES-}" ]; then
@@ -852,6 +857,44 @@ if [ -n "$cwd" ] && [ -d "$cwd" ]; then
           *) git_url="https://${_h}/${_u%.git}" ;;
         esac ;;
     esac
+  fi
+  # Ahead/behind and uncommitted work: "↑2↓1" and "±3 ?2 ✖1" (changed,
+  # untracked, conflicted) beside the branch — the two git facts worth a
+  # glance while an agent edits files. One `git status --porcelain=v2
+  # --branch` answers both, parsed by a read loop (no awk, no fork). It
+  # runs here, behind the probe cache, so once per AGENTLINE_PROBE_TTL at
+  # most, never on the per-second tick; the counts can therefore trail an
+  # edit by up to that long.
+  #
+  # Unlike the branch read above, this cannot be done from files, and on a
+  # large repository the untracked scan alone can take seconds. So it only
+  # runs under the 1 s timeout, and without a timeout binary (macOS with no
+  # Homebrew coreutils) it does not run at all: the segment degrades to the
+  # branch alone rather than risk a render that blocks. A timeout, or any
+  # failure, discards the output — a half-written answer would under-count.
+  # AGENTLINE_GIT_UNTRACKED=0 skips the untracked scan (-uno), and
+  # AGENTLINE_GIT_STATUS=0 turns the call off. Detached HEAD shows no branch
+  # segment, so it is not asked either.
+  if [ -n "$git_branch" ] && [ -n "$_TIMEOUT" ] && [ "${AGENTLINE_GIT_STATUS:-1}" != 0 ]; then
+    _uflag="-unormal"; [ "${AGENTLINE_GIT_UNTRACKED:-1}" = 0 ] && _uflag="-uno"
+    if _st=$("$_TIMEOUT" 1 git --no-optional-locks -C "$cwd" status --porcelain=v2 --branch "$_uflag" 2>/dev/null); then
+      _ahead=0; _behind=0; _chg=0; _unt=0; _cfl=0
+      while IFS= read -r _l; do
+        case "$_l" in
+          "# branch.ab +"*" -"*)
+            _ahead="${_l#\# branch.ab +}"; _behind="${_ahead#* -}"; _ahead="${_ahead%% *}" ;;
+          "1 "*|"2 "*) _chg=$(( _chg + 1 )) ;;
+          "u "*) _cfl=$(( _cfl + 1 )) ;;
+          "? "*) _unt=$(( _unt + 1 )) ;;
+        esac
+      done <<< "$_st"
+      case "$_ahead$_behind" in *[!0-9]*) _ahead=0; _behind=0 ;; esac
+      [ "$_ahead" != 0 ] && git_ab="↑${_ahead}"
+      [ "$_behind" != 0 ] && git_ab="${git_ab}↓${_behind}"
+      [ "$_chg" -gt 0 ] && git_dirty="±${_chg}"
+      [ "$_unt" -gt 0 ] && git_dirty="${git_dirty:+${git_dirty} }?${_unt}"
+      [ "$_cfl" -gt 0 ] && git_dirty="${git_dirty:+${git_dirty} }✖${_cfl}"
+    fi
   fi
 fi
 
@@ -1121,7 +1164,7 @@ _clean() {  # _clean <varname> -- strip control characters and backslashes
   v="${v//\\/}"
   printf -v "$1" '%s' "$v"
 }
-for _v in git_branch git_repo git_url folder active_mcps active_agents dev_ports; do
+for _v in git_branch git_repo git_url git_ab git_dirty folder active_mcps active_agents dev_ports; do
   _clean "$_v"
 done
 
@@ -1781,10 +1824,22 @@ fi
 
 # Line 2: env info
 [ -n "$version" ]          && _seg version "${DIM}v${version}${RESET}"
-[ -n "$folder" ]           && _seg dir "${BLUE}${folder}${RESET}"
+# Breadcrumb: when the session has cd'd away from where it was launched
+# (workspace.project_dir), the launch folder's name leads the path, dim:
+# "↖ agentline ~/src/other". Trailing slashes aside, the same directory
+# shows nothing. The name comes by expansion, no fork.
+_pd="${project_dir%/}"; _cd="${cwd_disp%/}"
+if [ -n "$folder" ] && [ -n "$_pd" ] && [ "$_pd" != "$_cd" ] && [ -n "${_pd##*/}" ]; then
+  _seg dir "${DIM}↖ ${_pd##*/}${RESET} ${BLUE}${folder}${RESET}"
+else
+  [ -n "$folder" ] && _seg dir "${BLUE}${folder}${RESET}"
+fi
+# The branch, then how far it is from its upstream ("↑2↓1") and the
+# uncommitted work, dim ("±3 ?2 ✖1") — both from the throttled git status
+# probe, and each simply absent when zero or not measured.
 if [ -n "$git_branch" ]; then
   _link "$git_url" "$git_repo"
-  _seg git "${MAGENTA}🌿 ${RESET}${DIM}${git_repo:+${_link_out}@}${RESET}${MAGENTA}${git_branch}${RESET}"
+  _seg git "${MAGENTA}🌿 ${RESET}${DIM}${git_repo:+${_link_out}@}${RESET}${MAGENTA}${git_branch}${RESET}${git_ab:+ ${git_ab}}${git_dirty:+ ${DIM}${git_dirty}${RESET}}"
 fi
 # Pull request: "🔀 ✅ #1234" (a GitLab MR is !1234), the review state first.
 # The footer already shows the PR number; what this adds is the review

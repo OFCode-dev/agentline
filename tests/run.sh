@@ -902,6 +902,67 @@ bnd 999999 > "$TR.new"; mv "$TR.new" "$TR"
 cmp_render
 if grep -q '📊' "$T/l1"; then fail "compact: estimate over 100% is dropped"; else pass; fi
 
+# Git ahead/behind and dirty counts (C14), against a real repository: the
+# probe runs because the payload cwd is not the seeded one. main is one
+# commit ahead of origin/main and one behind, mid-merge with one conflicted
+# file, one changed tracked file and two untracked ones.
+if ! command -v git >/dev/null 2>&1; then
+  skip "git status: no git"
+elif ! command -v timeout >/dev/null 2>&1 && ! command -v gtimeout >/dev/null 2>&1; then
+  # Without a timeout binary the call is skipped by design (branch only).
+  skip "git status: no timeout/gtimeout, the counts are off by design"
+else
+  gq() { git -c user.name=t -c user.email=t@example.com -c init.defaultBranch=main \
+           -c commit.gpgsign=false -c advice.detachedHead=false "$@" >/dev/null 2>&1; }
+  GB="$T/git-bare.git"; GS="$T/git-seed"; GR="$T/git-repo"; GO="$T/git-other"
+  gq init --bare "$GB"; gq init "$GS"
+  printf 'a\n' > "$GS/f"; printf 'b\n' > "$GS/t"
+  gq -C "$GS" add f t; gq -C "$GS" commit -m base; gq -C "$GS" push "$GB" HEAD:main
+  gq clone "$GB" "$GR"; gq clone "$GB" "$GO"
+  printf 'o\n' > "$GO/o"; gq -C "$GO" add o; gq -C "$GO" commit -m other; gq -C "$GO" push origin main
+  gq -C "$GR" fetch
+  gq -C "$GR" checkout -b side; printf 'x\n' > "$GR/f"; gq -C "$GR" commit -am side
+  gq -C "$GR" checkout main; printf 'y\n' > "$GR/f"; gq -C "$GR" commit -am mine
+  gq -C "$GR" merge side
+  printf 'z\n' > "$GR/t"; : > "$GR/new1"; : > "$GR/new2"
+  gst() {  # gst <repo> [VAR=val...] -> line 2 in $T/g2
+    local r="$1"; shift
+    printf '{"session_id":"gst-0001","cwd":"%s","model":{"id":"claude-opus-5"}}\n' "$r" > "$T/gst.json"
+    prepare minimal "$T/gst.json"; rm -f "$(cbase gst-0001).probes"
+    render "$T/gst.json" 300 ${1+"$@"}
+    normalize "$T/out" "$T/gn"; sed -n 2p "$T/gn" > "$T/g2"
+  }
+  gst "$GR"
+  check "git status: exit 0 (got $rc)" [ "$rc" = 0 ]
+  check "git status: stderr empty" [ ! -s "$T/err" ]
+  check "git status: ↑1↓1 ±1 ?2 ✖1 after the branch" grep -qF '@main ↑1↓1 ±1 ?2 ✖1' "$T/g2"
+  check "git status: dirty counts are dim" grep -q "${ESC}\[2m±1 ?2 ✖1" "$T/out"
+  gst "$GR" AGENTLINE_GIT_UNTRACKED=0
+  check "git status: AGENTLINE_GIT_UNTRACKED=0 skips untracked" grep -qF '@main ↑1↓1 ±1 ✖1' "$T/g2"
+  gst "$GR" AGENTLINE_GIT_STATUS=0
+  check "git status: AGENTLINE_GIT_STATUS=0 leaves the branch alone" grep -qE '@main( │|$)' "$T/g2"
+  gst "$GO"
+  check "git status: a clean, even repo shows the branch alone" grep -qE '@main( │|$)' "$T/g2"
+  # The counts ride the probe cache: a third untracked file appears, and a
+  # second render in the same cwd within the TTL still shows the cached ?2.
+  gst "$GR"
+  : > "$GR/new3"
+  rm -f "$(cbase gst-0001).render" "$(cbase gst-0001).payload"
+  render "$T/gst.json" 300
+  normalize "$T/out" "$T/gn"
+  check "git status: replayed from the probe cache" grep -qF '@main ↑1↓1 ±1 ?2 ✖1' "$T/gn"
+fi
+
+# Breadcrumb (C14): project_dir differing from cwd leads the path, dim.
+printf '{"session_id":"crumb-0001","cwd":"%s","workspace":{"project_dir":"/src/launch/"}}\n' "$WORK" > "$T/crumb.json"
+prepare minimal "$T/crumb.json"
+render "$T/crumb.json" 300; normalize "$T/out" "$T/cr"
+check "breadcrumb: launch folder leads the path" grep -qF '↖ launch ~/work' "$T/cr"
+check "breadcrumb: dim" grep -q "${ESC}\[2m↖ launch" "$T/out"
+printf '{"session_id":"crumb-0001","cwd":"%s","workspace":{"project_dir":"%s/"}}\n' "$WORK" "$WORK" > "$T/crumb.json"
+render "$T/crumb.json" 300; normalize "$T/out" "$T/cr"
+if grep -q '↖' "$T/cr"; then fail "breadcrumb: same dir (trailing slash) shows none"; else pass; fi
+
 # ===========================================================================
 # 3. Render-cache fast path
 # ===========================================================================
@@ -1402,7 +1463,10 @@ EOF
     local c="$1"; shift
     printf '{"session_id":"git-0001","cwd":"%s"}\n' "$c" > "$T/git.json"
     prepare minimal "$T/git.json"; rm -f "$T/git-calls"
-    render "$T/git.json" 120 PATH="$HSHIM:$PATH_F" AGENTLINE_PROBE_TTL=0 AGENTLINE_LAYOUT=git ${1+"$@"}
+    # The status call (C14) is off here: these tests count the calls the
+    # branch and remote reads make; it has checks of its own below.
+    render "$T/git.json" 120 PATH="$HSHIM:$PATH_F" AGENTLINE_PROBE_TTL=0 AGENTLINE_LAYOUT=git \
+      AGENTLINE_GIT_STATUS=0 ${1+"$@"}
     normalize "$T/out" "$T/got"
   }
   git_calls() { if [ -f "$T/git-calls" ]; then wc -l < "$T/git-calls" | tr -d ' '; else echo 0; fi; }
@@ -1412,6 +1476,17 @@ EOF
     check "git [$c]: one git call, for the origin URL (got $(git_calls))" [ "$(git_calls)" = 1 ]
   done
   check "git: runs with --no-optional-locks" grep -q -- '--no-optional-locks .*remote get-url origin' "$T/git-calls"
+  # With the status call on: one more git, lock-free, and none outside a
+  # repo or on a detached HEAD.
+  if command -v timeout >/dev/null 2>&1 || command -v gtimeout >/dev/null 2>&1; then
+    grender "$G/repo" AGENTLINE_GIT_STATUS=1
+    check "git status: one call beside the origin URL (got $(git_calls))" [ "$(git_calls)" = 2 ]
+    check "git status: runs with --no-optional-locks" grep -q -- '--no-optional-locks .*status --porcelain=v2 --branch' "$T/git-calls"
+    grender "$G/det" AGENTLINE_GIT_STATUS=1
+    check "git status: detached HEAD, no call (got $(git_calls))" [ "$(git_calls)" = 0 ]
+    grender "$G/plain" AGENTLINE_GIT_STATUS=1
+    check "git status: not a repo, no call (got $(git_calls))" [ "$(git_calls)" = 0 ]
+  fi
   grender "$G/wt"
   check "git [worktree]: gitdir: file followed" grep -qF 'wt-branch' "$T/got"
   grender "$G/det"

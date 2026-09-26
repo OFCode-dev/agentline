@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- The git segment says how far the branch is from its upstream and how much
+  work is uncommitted: `🌿 owner/repo@main ↑2↓1 ±3 ?2 ✖1` (ahead, behind,
+  then dim changed, untracked, conflicted), each part hidden at zero. One
+  `git status --porcelain=v2 --branch`, parsed by a read loop, runs in the
+  throttled host probe: once per `AGENTLINE_PROBE_TTL` at most, never on
+  the per-second tick. It takes no locks and has a 1 s timeout, and a
+  timed-out answer is discarded rather than under-counted. The branch
+  itself is still read from HEAD with no fork, so this is one new git call
+  per probe. Without a `timeout`/`gtimeout` binary (stock macOS) the call is
+  skipped and the segment shows the branch alone. `AGENTLINE_GIT_UNTRACKED=0`
+  skips the untracked scan, and `AGENTLINE_GIT_STATUS=0` skips the call.
+  When the session has changed directory away from where Claude Code was
+  launched, a dim breadcrumb with the launch folder's name leads the path
+  (`↖ agentline ~/src/other`, from `workspace.project_dir`).
 - Line 1 counts compactions: a dim `🔄 2` after the context figure, hidden
   at 0. The count comes from the `compact_boundary` entries Claude Code
   writes into the session transcript. It needs no hook: a PreCompact hook
