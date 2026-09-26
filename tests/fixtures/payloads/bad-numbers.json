@@ -1,0 +1,1 @@
+{"session_id":"badnum-0001","cwd":"@@CWD@@","model":{"id":"claude-sonnet-5"},"context_window":{"used_percentage":"lots","total_input_tokens":{"n":1},"context_window_size":"huge"},"exceeds_200k_tokens":"yes","cost":{"total_cost_usd":true,"total_duration_ms":"NaN"},"rate_limits":{"five_hour":{"used_percentage":[]}}}

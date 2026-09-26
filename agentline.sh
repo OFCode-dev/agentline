@@ -191,13 +191,22 @@ fi
 # the hottest path in the script. shlex.quote makes the eval safe for any
 # payload value (quotes, spaces, newlines).
 eval "$(PAYLOAD="$input" python3 - <<'PYEOF'
-import json, os, re, shlex
+import json, math, os, re, shlex
+# The decode is its own step so a broken payload is reported, not just
+# survived: before, any failure became {} and the model and context segments
+# vanished with nothing on screen to say why. payload_err drives a dim
+# "⚠ payload" marker on line 1; everything that does not come from the
+# payload (host, git, clock) still renders. Empty stdin is not an error --
+# that is a manual run (`bash agentline.sh </dev/null`), not a broken
+# upstream -- and neither is valid JSON that simply lacks fields.
+raw = os.environ.get('PAYLOAD', '')
+payload_err = ''
 try:
-    d = json.loads(os.environ.get('PAYLOAD', '') or '{}')
+    d = json.loads(raw) if raw.strip() else {}
 except Exception:
-    d = {}
+    d, payload_err = {}, '1'
 if not isinstance(d, dict):
-    d = {}
+    d, payload_err = {}, '1'
 
 def g(*keys):
     v = d
@@ -205,26 +214,57 @@ def g(*keys):
         v = v.get(k) if isinstance(v, dict) else None
     return '' if v is None else v
 
-# Model ids carry variant and build suffixes: "claude-opus-5[1m]" (1M context
-# window) and dated builds like "claude-haiku-4-5-20251001". The match is
-# therefore left-anchored only -- anchoring the tail made the [1m] variant fall
-# through and print the raw id. Falls back to the payload's display_name, then
-# to the raw id.
-mid = str(g('model', 'id'))
+# Every numeric field reaches awk and `printf %.0f`, which print "0" and
+# complain on stderr for anything else. A number, or a string that is one,
+# passes through unchanged (str(83) and str(83.5) as before); anything else
+# -- a bool, an object, garbage -- becomes '' and the segment disappears.
+def num(v):
+    if isinstance(v, bool):
+        return ''
+    if isinstance(v, (int, float)):
+        return str(v) if math.isfinite(v) else ''
+    v = str(v)
+    return v if re.fullmatch(r'-?\d+(\.\d+)?', v) else ''
+
+# The model field has been both an object {id, display_name} and a bare id
+# string across Claude Code versions (other status lines crashed on the flip,
+# CCometixLine#118); accept either. Model ids carry variant and build
+# suffixes: "claude-opus-5[1m]" (1M context window) and dated builds like
+# "claude-haiku-4-5-20251001". The match is therefore left-anchored only --
+# anchoring the tail made the [1m] variant fall through and print the raw id.
+# Falls back to the payload's display_name, then to the raw id.
+mobj = d.get('model')
+if isinstance(mobj, str):
+    mid, disp = mobj, ''
+elif isinstance(mobj, dict):
+    mid, disp = str(mobj.get('id') or ''), str(mobj.get('display_name') or '')
+else:
+    mid, disp = '', ''
 m = re.match(r'claude-([a-z]+)-(\d+)(?:-(\d+))?', mid)
 if m:
     ver = m.group(2) if m.group(3) is None else f'{m.group(2)}.{m.group(3)}'
     model = f'{m.group(1).capitalize()} {ver}'
 else:
-    model = str(g('model', 'display_name')) or mid
+    model = disp or mid
+
+# Window size as a plain integer, so the context block can compare it with
+# the `[` builtin instead of forking awk.
+size = num(g('context_window', 'context_window_size'))
+ctx_size = str(int(float(size))) if size else ''
 
 fields = {
     'cwd': g('cwd'),
     'model_raw': mid,
     'model': model,
-    'used_pct': g('context_window', 'used_percentage'),
-    'five_hour': g('rate_limits', 'five_hour', 'used_percentage'),
-    'seven_day': g('rate_limits', 'seven_day', 'used_percentage'),
+    'used_pct': num(g('context_window', 'used_percentage')),
+    # exceeds_200k_tokens is Claude Code's own fixed-threshold flag (input +
+    # output of the last response > 200k, whatever the window). Only a strict
+    # JSON true counts.
+    'exceeds_200k': '1' if d.get('exceeds_200k_tokens') is True else '',
+    'ctx_size': ctx_size,
+    'payload_err': payload_err,
+    'five_hour': num(g('rate_limits', 'five_hour', 'used_percentage')),
+    'seven_day': num(g('rate_limits', 'seven_day', 'used_percentage')),
     # Per-model weekly bucket. Claude Code forwards the whole rate_limits
     # object verbatim (`...(D.five_hour||D.seven_day)&&{rate_limits:D}`), but
     # it builds that object from four response-header buckets only (2.1.x:
@@ -235,17 +275,17 @@ fields = {
     # Accounts whose responses carry neither key can opt into the /usage
     # endpoint (AGENTLINE_USAGE_API=1, see the weekly segment below).
     'seven_day_top': (lambda a, b: a if a != '' else b)(
-        g('rate_limits', 'seven_day_overage_included', 'used_percentage'),
-        g('rate_limits', 'seven_day_opus', 'used_percentage')),
+        num(g('rate_limits', 'seven_day_overage_included', 'used_percentage')),
+        num(g('rate_limits', 'seven_day_opus', 'used_percentage'))),
     'five_hour_reset': g('rate_limits', 'five_hour', 'resets_at'),
     'seven_day_reset': g('rate_limits', 'seven_day', 'resets_at'),
     'effort_raw': g('effort', 'level'),
-    'cost': g('cost', 'total_cost_usd'),
-    'duration_ms': g('cost', 'total_duration_ms'),
-    'lines_added': g('cost', 'total_lines_added'),
-    'lines_removed': g('cost', 'total_lines_removed'),
-    'tokens_in': g('context_window', 'total_input_tokens'),
-    'tokens_out': g('context_window', 'total_output_tokens'),
+    'cost': num(g('cost', 'total_cost_usd')),
+    'duration_ms': num(g('cost', 'total_duration_ms')),
+    'lines_added': num(g('cost', 'total_lines_added')),
+    'lines_removed': num(g('cost', 'total_lines_removed')),
+    'tokens_in': num(g('context_window', 'total_input_tokens')),
+    'tokens_out': num(g('context_window', 'total_output_tokens')),
     'thinking': g('thinking', 'enabled'),
     'session_name': g('session_name'),
     'session_id': g('session_id'),
@@ -699,18 +739,35 @@ fi
 # === Build Output ===
 P=" ${DIM}│${RESET} "
 
-# Line 1: model first, then stats
+# Line 1: model first, then stats. A payload that did not decode leads with a
+# dim marker instead of silently losing the model and context segments; it is
+# prepended, not a replacement, because the host and session-independent
+# segments after it are still correct.
 line1=""
+[ -n "$payload_err" ] && line1="${DIM}⚠ payload${RESET}"
 if [ -n "$model" ]; then
-  line1="${model_color}${model}${thinking_icon:+ ${thinking_icon}}${RESET}"
+  line1="${line1:+${line1}${P}}${model_color}${model}${thinking_icon:+ ${thinking_icon}}${RESET}"
 fi
 [ -n "$effort" ]         && line1="${line1:+${line1}${P}}${effort}"
 [ -n "$fast_icon" ]      && line1="${line1:+${line1}${P}}${YELLOW}${fast_icon}${RESET}"
 if [ -n "$used_pct" ]; then
   c=$(color_pct "$used_pct" 80 60)
   ctx_icon="📊"
-  awk -v p="$used_pct" 'BEGIN {exit !(p >= 80)}' && ctx_icon="⚠️ "
-  line1="${line1:+${line1}${P}}${c}${ctx_icon} $(printf '%.0f' $used_pct)%${RESET}"
+  ctx_tag=""
+  if awk -v p="$used_pct" 'BEGIN {exit !(p >= 80)}'; then
+    ctx_icon="⚠️ "
+  elif [ -n "$exceeds_200k" ] && [ "${ctx_size:-0}" -gt 200000 ]; then
+    # On a 1M-window model 25% is already past 200k tokens — where long-context
+    # pricing and quality change — yet the percentage alone reads as harmless.
+    # Claude Code's exceeds_200k_tokens flag says so directly, so it forces
+    # the warning, in yellow (this branch is below the 80% red), with a tag
+    # saying why. On a 200k window the flag is just "about 100%" again, so it
+    # is ignored there.
+    ctx_icon="⚠️ "
+    c="$YELLOW"
+    ctx_tag=" ${DIM}>200k${RESET}"
+  fi
+  line1="${line1:+${line1}${P}}${c}${ctx_icon} $(printf '%.0f' "$used_pct")%${RESET}${ctx_tag}"
 fi
 if [ -n "$five_hour" ]; then
   c=$(color_pct "$five_hour" 90 70)

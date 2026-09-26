@@ -1,0 +1,1 @@
+{"session_id":"onem-0002","cwd":"@@CWD@@","model":{"id":"claude-opus-5[1m]","display_name":"Opus 5 (1M context)"},"exceeds_200k_tokens":true,"context_window":{"used_percentage":25,"total_input_tokens":250000,"total_output_tokens":1200,"context_window_size":1000000}}

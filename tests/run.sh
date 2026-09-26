@@ -274,6 +274,27 @@ for f in pwned pwned2 pwned3 pwned4; do
 done
 check "claude CLI fallback never ran" [ ! -e "$T/claude-calls" ]
 
+# Colour is stripped from the goldens, so the context warning's colour is
+# asserted on the raw render: exceeds_200k_tokens on a 1M window forces the
+# yellow ⚠️ at 25%; on a 200k window the same flag is ignored (green 📊).
+ctx_raw() {  # ctx_raw <fixture> -> raw render in $T/out
+  fill "$FIX/payloads/$1.json" "$PAY/$1.json"
+  prepare "$1" "$PAY/$1.json"
+  render "$PAY/$1.json" 120
+}
+ctx_raw one-million-over-200k
+check "1M window over 200k: yellow warning" grep -q "${ESC}\[1;33m⚠️  25%" "$T/out"
+ctx_raw standard-window
+check "200k window: exceeds flag ignored, green" grep -q "${ESC}\[1;32m📊 30%" "$T/out"
+# Garbage in numeric fields hides those segments instead of printing "0%"
+# (stderr staying empty is already checked by the golden loop).
+ctx_raw bad-numbers
+if grep -qE '📊|⚠️ |💰|⏱️|📥|S:' "$T/out"; then
+  fail "non-numeric fields leaked a segment"
+else
+  pass
+fi
+
 # ===========================================================================
 # 3. Render-cache fast path
 # ===========================================================================

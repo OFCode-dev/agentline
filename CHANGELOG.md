@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- Payload robustness and a truthful context warning. A payload that does not
+  decode, or decodes to something other than an object, used to become `{}`:
+  the model and context segments vanished with no hint why. It now shows a
+  dim `⚠ payload` first on line 1, and the host segments still render.
+  `model` is read both as an object and as a bare id string, because the
+  shape has flipped between Claude Code versions and crashed other status
+  lines. Before, a string model dropped the name without notice. Numeric fields that
+  are not numbers are dropped instead of reaching awk and `printf` (stray
+  stderr and a false `0%`). On a window larger than 200k, the payload's
+  `exceeds_200k_tokens` now forces a yellow `⚠️ … >200k` even at a low
+  percentage. A 1M model at 25 % is already past the long-context mark. A
+  compact-relative percentage was considered and left out, because the
+  payload exposes no auto-compact threshold.
 - A test suite and CI. `bash tests/run.sh` (bash + python3, no bats) runs
   the real script over a fixture set — full, minimal, `{}`, malformed and
   empty input, a null post-compact window, a 1M model, Fable + max, xhigh vs
