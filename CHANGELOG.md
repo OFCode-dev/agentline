@@ -115,7 +115,10 @@
   `safe.directory`, so a `/tmp/.git` planted by another user cannot choose
   the branch your sessions under `/tmp` show. A FIFO or device in their
   place means no branch, instead of a status line that blocks forever. A
-  symlinked `HEAD` (`core.preferSymlinkRefs`) is resolved by git too.
+  symlinked `HEAD` (`core.preferSymlinkRefs`) is resolved by git too. The
+  walk up to `.git` follows the physical path, as git does. A directory
+  reached through a symlink now shows the repository it really is in.
+  Unlike git, the walk still crosses filesystem boundaries.
 - `bench/bench.sh` measures CPU per call over 100 calls on each render path:
   the cached tick, a payload change with fresh probes (Opus and Fable), and
   a cold probe. It uses the shell's own `time`, so it needs no GNU

@@ -722,7 +722,18 @@ if [ -n "$cwd" ] && [ -d "$cwd" ]; then
   if [ -n "${GIT_DIR-}${GIT_WORK_TREE-}${GIT_CEILING_DIRECTORIES-}" ]; then
     _git_ask=1
   else
-    _d="$cwd"
+    # The walk follows the physical path, as git does. The payload's cwd is
+    # logical: a symlink into a repo subdirectory found no .git above it
+    # (no branch), and a symlink inside repo A pointing into repo B found
+    # A's .git while `git -C` (physical) named B's origin — A's branch
+    # beside B's repo. `cd -P` resolves it with builtins only; the caller's
+    # directory is restored at once. One difference remains: git stops at
+    # a filesystem boundary and this walk does not, since a device number
+    # takes a stat fork (a $HOME dotfiles repo shows on a separate mount).
+    _d="$cwd"; _opwd="$PWD"
+    if CDPATH= cd -P -- "$cwd" 2>/dev/null; then
+      _d="$PWD"; cd -- "$_opwd" 2>/dev/null
+    fi
     while :; do
       if [ -e "$_d/.git" ]; then _gd="$_d/.git"; break; fi
       if [ -f "$_d/HEAD" ] && [ -d "$_d/objects" ] && [ -d "$_d/refs" ]; then _git_ask=1; break; fi

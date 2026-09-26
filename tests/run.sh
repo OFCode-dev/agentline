@@ -1270,6 +1270,15 @@ EOF
   grender "$G/symhead"
   check "git [symlinked HEAD]: branch shown" grep -qF 'sym-branch' "$T/got"
   check "git [symlinked HEAD]: asks git" grep -q 'branch --show-current' "$T/git-calls"
+  # The walk follows the physical path. A symlink to a repo subdirectory
+  # used to find no .git, and a symlink inside one repo into another found
+  # the outer repo's branch.
+  ln -s "$G/repo/sub/deep" "$G/to-deep"
+  mkdir -p "$G/symhead/inner"; ln -s "$G/symhead/inner" "$G/repo/sub/to-other"
+  grender "$G/to-deep"
+  check "git [symlink into a repo]: branch shown" grep -qxF '🌿 octo/repo@feat/x' "$T/got"
+  grender "$G/repo/sub/to-other"
+  check "git [symlink into another repo]: that repo's branch" grep -qxF '🌿 sym-branch' "$T/got"
   # A 2 MB HEAD is not shown whole: past the cap, git is asked instead.
   mkdir -p "$G/huge/.git"
   { printf 'ref: refs/heads/'; printf '%02000000d' 0; echo; } > "$G/huge/.git/HEAD"
