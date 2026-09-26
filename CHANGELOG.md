@@ -47,6 +47,11 @@
   effort-animation placeholders. `@@AGENTLINE_CLOCK@@` in a session name
   used to be replaced by the live clock. The placeholders now contain a
   control byte, and no cleaned string can contain one.
+- Cache file names carry a format version (`render_<sid>.v2.*`). The first
+  renders after an upgrade therefore never replay a body the previous
+  release cached, which would print an old placeholder literally or
+  uncleaned service labels for a few seconds. Old files are left to the
+  daily prune.
 - Payload robustness and a truthful context warning. A payload that does not
   decode, or decodes to something other than an object, used to become `{}`:
   the model and context segments vanished with no hint why. It now shows a

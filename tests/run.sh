@@ -14,7 +14,7 @@
 # temp dir as TMPDIR, a fixture HOME (no ~/.claude.json, no services conf, no
 # local.sh), an empty non-git cwd, TZ=UTC and LC_ALL=C. The host layer — CPU,
 # RAM, disk, ports, services, MCP, git — is seeded through the script's own
-# probe cache (render_<sid>.probes, AGENTLINE_PROBE_TTL=3600), so none of the
+# probe cache (render_<sid>.v<N>.probes, AGENTLINE_PROBE_TTL=3600), so none of the
 # host probes run; the hook side files follow AGENTLINE_TMP into the temp dir;
 # and an empty cached e-mail plus a `claude` shim that only logs keep the CLI
 # fallback from ever reaching the real account. What is left in the output is
@@ -74,6 +74,10 @@ PATH_F="$SHIM:$PATH"
 # there is seeded (empty unless a probe set names it) rather than silently
 # re-enabling a real host command in the tests.
 PROBE_VARS=$(sed -n 's/^PROBE_VARS="\(.*\)"$/\1/p' "$ROOT/agentline.sh")
+# Cache names carry the script's format version (render_<sid>.v<N>.*); read
+# it the same way, so a bump needs no edit here.
+CACHE_FMT=$(sed -n 's/^CACHE_FORMAT=\([0-9][0-9]*\)$/\1/p' "$ROOT/agentline.sh")
+cbase() { printf '%s' "$CACHE_DIR/render_$1.v$CACHE_FMT"; }  # cbase <sid>
 ESC=$(printf '\033')
 
 # === Reporting ===
@@ -135,7 +139,7 @@ seed_probes() {  # seed_probes <sid> <set-name>
       body="${body}${_v}=${_q}"$'\n'
     done
     printf -v _wq '%q' "$WORK"  # the cwd is stored %q-quoted, like the values
-    printf '%s\n%s\n%s' "$(date +%s)" "$_wq" "$body" > "$CACHE_DIR/render_$1.probes"
+    printf '%s\n%s\n%s' "$(date +%s)" "$_wq" "$body" > "$(cbase "$1").probes"
   )
 }
 
@@ -450,7 +454,7 @@ check "probe cache: newline in cwd does not inject code" [ ! -e "$MARK" ]
 check "probe cache: injected render exit 0 (got $rc)" [ "$rc" = 0 ]
 # A body that is not exactly the PROBE_VARS lines is never eval'd.
 prepare minimal "$T/inject2.json"
-printf '\n%s\n' "active_mcps=\$(touch $MARK)" >> "$CACHE_DIR/render_inject-0001.probes"
+printf '\n%s\n' "active_mcps=\$(touch $MARK)" >> "$(cbase inject-0001).probes"
 render "$T/inject2.json" 120
 check "probe cache: an extra body line is not eval'd" [ ! -e "$MARK" ]
 
@@ -463,7 +467,7 @@ prepare full "$p"
 render "$p" 120
 # Prove a tick is served from the cache, not re-rendered: replace the cached
 # body with a marker and expect it back with the clock re-stamped.
-render_file="$CACHE_DIR/render_$sid.render"
+render_file="$(cbase "$sid").render"
 ts=$(head -n 1 "$render_file")
 CLOCK_TOK=$(printf '@@\002AGENTLINE_CLOCK@@')  # the script's CLOCK_TOKEN
 printf '%s\n%s' "$ts" "CACHED $CLOCK_TOK" > "$render_file"
@@ -478,6 +482,15 @@ printf '%s\n%s' "$(date +%s)" "CACHED $CLOCK_TOK" > "$render_file"
 sed 's/"used_percentage":42.4/"used_percentage":43/' "$p" > "$T/changed.json"
 render "$T/changed.json" 120
 check "payload change bypasses the cache" grep -q '43%' "$T/out"
+# Caches of an older format (pre-versioned names) are never read: an old body
+# holds the old plain placeholder, an old probe cache uncleaned labels.
+prepare full "$p"
+rm -f "$(cbase "$sid")".*
+printf '%s' "$(cat "$p")" > "$CACHE_DIR/render_$sid.payload"
+printf '%s\n%s' "$(date +%s)" 'OLD @@AGENTLINE_CLOCK@@' > "$CACHE_DIR/render_$sid.render"
+render "$p" 120
+check "old-format render cache is ignored" sh -c "! grep -q 'OLD' '$T/out' && grep -q 'Opus 5' '$T/out'"
+rm -f "$CACHE_DIR/render_$sid".*
 
 # Fork count. Only strace sees forks from $(...) and subshells — a PATH shim
 # sees execs alone — so this runs where strace exists (the Linux CI job).

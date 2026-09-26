@@ -94,8 +94,17 @@ esac
 CACHE_DIR="${TMPDIR:-/tmp}/agentline-${EUID:-0}"
 CACHE_BASE=""
 [ -d "$CACHE_DIR" ] || mkdir -m 700 "$CACHE_DIR" 2>/dev/null
+# CACHE_FORMAT is part of every cache name, and is bumped whenever what the
+# caches hold changes meaning, so a render right after an upgrade never
+# replays a body written by the old release. Format 2: placeholders carry a
+# C0 byte (an old body would print "@@AGENTLINE_CLOCK@@" literally for up to
+# $AGENTLINE_CACHE_TTL), the probe cache stores its cwd %q-quoted, and
+# svc_panel labels are cleaned before they are cached (an old probe cache
+# replayed uncleaned ones for up to $AGENTLINE_PROBE_TTL). Old-format files
+# are simply never read again and fall to the daily prune.
+CACHE_FORMAT=2
 if [ -d "$CACHE_DIR" ] && [ ! -L "$CACHE_DIR" ] && [ -O "$CACHE_DIR" ]; then
-  CACHE_BASE="${CACHE_DIR}/render_${_sid}"
+  CACHE_BASE="${CACHE_DIR}/render_${_sid}.v${CACHE_FORMAT}"
 fi
 
 # === Animated effort gradients ===
