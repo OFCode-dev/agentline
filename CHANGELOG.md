@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- Line 2 shows the branch's pull request and a linked worktree, both read
+  from the payload with no gh CLI, no network and no extra fork. `🔀 ✅ #1234`
+  puts the review state first (`📝` draft, `👀` pending, `🔴` changes
+  requested, `✅` approved); a GitLab merge request reads `!1234` (Claude
+  Code 2.1.234+). The footer already carries the number, so the state and
+  the link are what is new. `🌳 feat-login` appears only in a linked
+  worktree (`workspace.git_worktree`, or `worktree.name` in a Claude Code
+  worktree session), so parallel sessions can tell their checkouts apart.
+  The PR number and an https `owner/repo` are clickable OSC-8 links. There
+  is no terminal allowlist, since Claude Code already decides whether its
+  terminal takes links. They are plain text inside tmux, screen or zellij,
+  and with `AGENTLINE_LINKS=0`. The PR URL must be https. The repo link
+  drops any credentials in the remote URL, and the layout measures a link by
+  its text alone. New layout names: `pr`, `worktree`.
 - Text from other people's bytes no longer breaks sed or grep on macOS. The
   git remote URL, the subagent labels and the session transcript go through
   `sed`/`grep`. Under a UTF-8 locale, BSD sed stops at the first byte that

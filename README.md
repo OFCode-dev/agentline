@@ -92,7 +92,9 @@ Every `│`-separated segment below is independent: when its value cannot be mea
 |---|---|---|
 | `v3.0.24` | Claude Code version | Dim. |
 | `~/projects/agentline` | Working directory | Blue; home-relative (`~` at `$HOME`), absolute outside your home. |
-| `🌿 OFCode-dev/agentline@main` | Git branch | Branch in magenta, prefixed with the dim `owner/repo` its `origin` remote points at (SSH and HTTPS remotes both parsed) — so you always know *which* repo's `main` you are on. Repos without an origin show the branch alone; non-repos hide the segment. |
+| `🌿 OFCode-dev/agentline@main` | Git branch | Branch in magenta, prefixed with the dim `owner/repo` its `origin` remote points at (SSH and HTTPS remotes both parsed) — so you always know *which* repo's `main` you are on. Repos without an origin show the branch alone; non-repos hide the segment. With an `https://` origin the `owner/repo` part is a clickable link (see `AGENTLINE_LINKS`). |
+| `🔀 ✅ #1234` | Pull request | From Claude Code's `pr` object: the review state (`📝` draft, `👀` pending, `🔴` changes requested, `✅` approved; none for any other state), then the number, a clickable link to the PR. A GitLab merge request shows as `!1234` (needs Claude Code ≥ 2.1.234). The footer already shows the PR number; the review state and the link are what this adds. Hidden when the branch has no PR. |
+| `🌳 feat-login` | Linked worktree | Shown only when the session runs in a linked worktree (`git worktree add`, from `workspace.git_worktree`, or a Claude Code worktree session's `worktree.name`), so parallel sessions can tell their checkouts apart. Hidden in the main clone. |
 | `🏷️ session-name` | Named session | Truncated at 30 chars; hidden for unnamed sessions. |
 | `🤖 o****r@g***l.com` | Active Claude account | Always masked before display (first/last characters kept, middle starred). Taken from the payload when present, otherwise from `claude auth status` cached for 60 s — account switches appear within a minute. Hidden when neither source yields an address. |
 | `19/08/2026 Wed` | Date | `dd/mm/yyyy Day`, dim; the day abbreviation is pinned to English regardless of host locale. |
@@ -143,6 +145,7 @@ Everything is optional — agentline works with zero configuration.
 | `AGENTLINE_PACE` | `1` | Set to `0` to hide the `⇡`/`⇣` pace arrows after `S:` and `W:` |
 | `AGENTLINE_CACHE_WARN` | `60` (5m TTL), `300` (1h TTL) | Seconds before a warm prompt cache expires at which the `🗄️ ↻` countdown appears |
 | `AGENTLINE_CACHE_VERBOSE` | unset | Set to `1` to always show the prompt-cache hit ratio (`🗄️ 91%`) |
+| `AGENTLINE_LINKS` | `1` | Set to `0` for plain text instead of clickable OSC-8 links on the PR number and `owner/repo`. Links are off by themselves inside tmux, screen and zellij, which strip them. Whether the terminal itself takes links is Claude Code's call (`FORCE_HYPERLINK=1` forces it) |
 | `AGENTLINE_CACHE_TTL` | `5` | Seconds a cached render may serve clock ticks before the line is rebuilt |
 | `AGENTLINE_PROBE_TTL` | `15` | Seconds the host layer (CPU, RAM, disk, ports, services, MCP, git) may be reused. Independent of the render cache, and unaffected by payload changes — see below |
 | `AGENTLINE_USAGE_API` | unset | Set to `1` to fetch the Fable weekly share (`F:`) from `https://api.anthropic.com/api/oauth/usage` when the payload carries no per-model bucket. This is the **only** network call agentline can make, and only when you opt in. Uses the OAuth token from `.credentials.json` in your profile directory (`$CLAUDE_CONFIG_DIR`, default `~/.claude`); the token never leaves the python helper. The result is cached per profile, so two profiles never show each other's figure. Once the cache expires, only one of your open sessions makes the request, in the background so the render never waits on the network (the previous figure stays up meanwhile, for at most a minute past the TTL); it gives up after 20 s. On macOS the token lives in the Keychain rather than in `.credentials.json`, so `F:` stays hidden there |
@@ -163,7 +166,7 @@ Set them in the `env` block of `~/.claude/settings.json` so Claude Code passes t
 `AGENTLINE_LAYOUT` is one string: `/` starts a line, `,` separates segment names, and a segment you leave out is hidden. Order and grouping are exactly what you write; empty lines collapse, and unknown names are ignored. The default is today's four lines:
 
 ```
-model,effort,fast,ctx,5h,week,cache,cost,dur,tok_in,tok_out,words,lines,cpu,mem,disk / version,dir,git,session,email,date,clock / mcp,agents,resume / services,ssh,cron,ports
+model,effort,fast,ctx,5h,week,cache,cost,dur,tok_in,tok_out,words,lines,cpu,mem,disk / version,dir,git,pr,worktree,session,email,date,clock / mcp,agents,resume / services,ssh,cron,ports
 ```
 
 | Name | Segment | Name | Segment |
@@ -180,7 +183,8 @@ model,effort,fast,ctx,5h,week,cache,cost,dur,tok_in,tok_out,words,lines,cpu,mem,
 | `tok_in` / `tok_out` | 📥 / 📤 tokens | `resume` | ♻️ resume command |
 | `words` | 🔤 word counts | `services` | 🛡️ service health |
 | `lines` | 📝 lines changed | `ssh` / `cron` / `ports` | 🔐 / ⏰ / 🌐 |
-| `cpu` / `mem` / `disk` | 🔥 / 💾 / 💽 | | |
+| `cpu` / `mem` / `disk` | 🔥 / 💾 / 💽 | `pr` | 🔀 pull / merge request |
+| | | `worktree` | 🌳 linked worktree |
 
 A compact two-line bar, for example:
 

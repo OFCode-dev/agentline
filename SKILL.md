@@ -44,6 +44,7 @@ Set variables in the `env` block of `~/.claude/settings.json`:
 | `AGENTLINE_PACE` | `1` | `0` hides the `⇡`/`⇣` pace arrows after `S:`/`W:` |
 | `AGENTLINE_CACHE_WARN` | `60` (5m TTL), `300` (1h) | Seconds before a warm prompt cache expires at which the `🗄️ ↻` countdown appears |
 | `AGENTLINE_CACHE_VERBOSE` | unset | `1` always shows the prompt-cache hit ratio |
+| `AGENTLINE_LINKS` | `1` | `0` turns off the OSC-8 links on the PR number and `owner/repo` (always off under tmux/screen/zellij) |
 | `AGENTLINE_WIDTH` | `COLUMNS`−2, else `120` | Column budget; overrides the live width Claude Code ≥ 2.1.153 passes as `COLUMNS`. Normally leave unset |
 | `AGENTLINE_TZ` | system timezone | Pin the clock, e.g. `Europe/Istanbul` on a UTC server |
 | `AGENTLINE_USAGE_API` | unset | Set to `1` to fetch the Fable weekly share (`F:`) from `/api/oauth/usage` when the payload has no per-model bucket — the only network call agentline can make, opt-in only. Reads `$CLAUDE_CONFIG_DIR/.credentials.json` (default `~/.claude`) and caches per profile; does nothing on macOS, where the token is in the Keychain |

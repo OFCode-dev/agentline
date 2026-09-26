@@ -212,7 +212,7 @@ _tick_now
 # terminal resize — and it is not in the payload, so without it a resize kept
 # serving the old width's render until the TTL ran out. `+set:` tells an
 # empty AGENTLINE_DROP (drop nothing) from an unset one (the default list).
-_cache_key="${input}${_US}${COLUMNS-}|${AGENTLINE_WIDTH-}|${AGENTLINE_LAYOUT-}|${AGENTLINE_DROP+set:}${AGENTLINE_DROP-}"
+_cache_key="${input}${_US}${COLUMNS-}|${AGENTLINE_WIDTH-}|${AGENTLINE_LAYOUT-}|${AGENTLINE_DROP+set:}${AGENTLINE_DROP-}|${AGENTLINE_LINKS-}"
 # The cache files are read with the `read` builtin, not `$(<file)`: bash 5
 # serves `$(<file)` in-process, but bash 3.2 (macOS) forks a subshell for
 # each, which cost this path two forks a second.
@@ -355,6 +355,12 @@ def num(v):
 def clean(v):
     return re.sub(r'[\x00-\x1f\x7f-\x9f\\\ud800-\udfff]', '', str(v))
 
+# A display string that must be a JSON string: an object or a number where
+# a name belongs is garbage, and str() of it would be shown as "{...}".
+def text(*keys):
+    v = g(*keys)
+    return clean(v) if isinstance(v, str) else ''
+
 # The model field has been both an object {id, display_name} and a bare id
 # string across Claude Code versions (other status lines crashed on the flip,
 # CCometixLine#118); accept either. Model ids carry variant and build
@@ -476,6 +482,21 @@ if isinstance(pc, dict) and pc.get('caching_observed') is not False:
                       if round(r / 1000) < 1000 else f'{r / 1e6:.1f}m')
     pc_cause = cause(pc.get('last_miss_cause'))
 
+# Pull request (pr.*, mirroring the footer's PR badge; pr.kind "mr" for a
+# GitLab merge request needs Claude Code 2.1.234+). The number must be a
+# positive integer, the review state one of the four documented values (an
+# unknown one shows the number alone), and the URL plain https -- it ends up
+# inside an OSC-8 hyperlink, so anything else (javascript:, file:, a URL with
+# a space or a quote) is no link at all. clean() has already taken the
+# controls and backslashes that printf %b or the terminal would act on.
+pr = d.get('pr') if isinstance(d.get('pr'), dict) else {}
+pr_number = num(pr.get('number'))
+pr_number = pr_number if re.fullmatch(r'[1-9][0-9]{0,11}', pr_number) else ''
+pr_url = clean(pr.get('url') or '') if isinstance(pr.get('url'), str) else ''
+pr_url = pr_url if re.fullmatch(r'https://[^\s"<>`]+', pr_url) and len(pr_url) <= 2048 else ''
+pr_state = pr.get('review_state') if pr.get('review_state') in ('approved', 'pending', 'changes_requested', 'draft') else ''
+pr_kind = 'mr' if pr.get('kind') == 'mr' else ''
+
 # The session name is shortened here, by characters. bash used to do it
 # with a substring expansion, which counts bytes under C/POSIX (common on
 # servers) and cut a multibyte character in half at byte 27.
@@ -533,6 +554,15 @@ fields = {
     'pc_hit': pc_hit,
     'pc_recache': pc_recache,
     'pc_cause': pc_cause,
+    'pr_number': pr_number,
+    'pr_url': pr_url,
+    'pr_state': pr_state,
+    'pr_kind': pr_kind,
+    # A linked worktree: workspace.git_worktree is set for any `git worktree
+    # add` checkout (absent in the main clone), worktree.name only in Claude
+    # Code's own worktree sessions, so the first is preferred.
+    'git_worktree': text('workspace', 'git_worktree'),
+    'wt_name': text('worktree', 'name'),
 }
 # Encoded here, not by print(): stdout's encoding follows the locale, and any
 # surrogate left in a raw field would make print() raise and take every field
@@ -619,7 +649,7 @@ _run_to() {
 # `active_agents` is excluded on purpose — it is one awk over a small file, and
 # the live subagent list is the thing worth watching in real time.
 PROBE_TTL="${AGENTLINE_PROBE_TTL:-15}"
-PROBE_VARS="active_mcps cpu_usage cron_count dev_ports disk_pct git_branch git_repo mem_used_gb ssh_count svc_panel"
+PROBE_VARS="active_mcps cpu_usage cron_count dev_ports disk_pct git_branch git_repo git_url mem_used_gb ssh_count svc_panel"
 #
 # The file is line-oriented and its body is eval'd, so nothing may reach it
 # that could add a line. The cwd comes from the payload and used to be stored
@@ -721,6 +751,7 @@ fi
 # nothing is asked.
 git_branch=""
 git_repo=""
+git_url=""
 if [ -n "$cwd" ] && [ -d "$cwd" ]; then
   _git_ask=0; _gd=""
   if [ -n "${GIT_DIR-}${GIT_WORK_TREE-}${GIT_CEILING_DIRECTORIES-}" ]; then
@@ -796,9 +827,29 @@ if [ -n "$cwd" ] && [ -d "$cwd" ]; then
   # owner/repo from the origin remote, shown to the left of the branch so it is
   # obvious which repository the branch belongs to. Handles both SSH and HTTPS
   # remotes; stays empty when there is no origin.
+  #
+  # An https remote also gives the repo's web address, which the git segment
+  # links to (OSC 8, see "Hyperlinks"). Only https: an SSH remote names a
+  # host whose web address is anyone's guess. The user-info part goes, so a
+  # token in "https://x-access-token:TOKEN@github.com/..." never reaches the
+  # terminal, even inside an escape sequence nobody sees. The remote is
+  # captured once and cut with parameter expansion: the same forks as the
+  # pipe it replaces (one git, one sed).
   if [ -n "$git_branch" ]; then
-    git_repo=$(_run_to 1 git --no-optional-locks -C "$cwd" remote get-url origin 2>/dev/null \
-      | LC_ALL=C sed -E 's#^git@[^:]+:#/#; s#^[a-z]+://[^/]+/#/#; s#\.git$##; s#^/##')
+    _remote=$(_run_to 1 git --no-optional-locks -C "$cwd" remote get-url origin 2>/dev/null)
+    if [ -n "$_remote" ]; then
+      git_repo=$(printf '%s' "$_remote" \
+        | LC_ALL=C sed -E 's#^git@[^:]+:#/#; s#^[a-z]+://[^/]+/#/#; s#\.git$##; s#^/##')
+    fi
+    case "$_remote" in
+      https://?*/?*)
+        _u="${_remote#https://}"; _h="${_u%%/*}"; _h="${_h##*@}"; _u="${_u#*/}"
+        # Spelled out, not ranges: bash 3.2 matches [a-z] by collation order.
+        case "$_h$_u" in
+          *[!abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._~:/%+@=-]*|'') ;;
+          *) git_url="https://${_h}/${_u%.git}" ;;
+        esac ;;
+    esac
   fi
 fi
 
@@ -1068,7 +1119,7 @@ _clean() {  # _clean <varname> -- strip control characters and backslashes
   v="${v//\\/}"
   printf -v "$1" '%s' "$v"
 }
-for _v in git_branch git_repo folder active_mcps active_agents dev_ports; do
+for _v in git_branch git_repo git_url folder active_mcps active_agents dev_ports; do
   _clean "$_v"
 done
 
@@ -1296,6 +1347,29 @@ if [ -f "$AGENTLINE_TMP/claude_wordcount.txt" ]; then
     if (n >= 1000) printf "%.1fk", n/1000; else printf "%d", n
   }')
 fi
+
+# === Hyperlinks ===
+# The PR number and the repository are OSC-8 links: click (or cmd-click) to
+# open them. No terminal allowlist: Claude Code decides itself whether its
+# terminal takes hyperlinks (FORCE_HYPERLINK overrides it), so a second
+# guess here would only go stale. Two cases are known not to work and get
+# plain text: a multiplexer between Claude Code and the terminal (tmux,
+# screen, zellij strip or mangle the sequence) and AGENTLINE_LINKS=0.
+#
+# BEL terminates, not ESC \: the text goes through printf %b, where "\a"
+# is BEL and a backslash inside the ST form would need escaping of its own.
+# The URLs were checked where they were made (https, no controls, no
+# backslash). The layout pass strips the sequences before measuring widths.
+_links=1
+[ "${AGENTLINE_LINKS:-1}" = 0 ] && _links=0
+[ -n "${TMUX-}${STY-}${ZELLIJ-}" ] && _links=0
+_link() {  # _link <url> <text> -> $_link_out, the text alone when links are off
+  if [ "$_links" = 1 ] && [ -n "$1" ]; then
+    _link_out="\033]8;;${1}\a${2}\033]8;;\a"
+  else
+    _link_out="$2"
+  fi
+}
 
 # === Build Output ===
 P=" ${DIM}│${RESET} "
@@ -1612,7 +1686,30 @@ fi
 # Line 2: env info
 [ -n "$version" ]          && _seg version "${DIM}v${version}${RESET}"
 [ -n "$folder" ]           && _seg dir "${BLUE}${folder}${RESET}"
-[ -n "$git_branch" ]       && _seg git "${MAGENTA}🌿 ${RESET}${DIM}${git_repo:+${git_repo}@}${RESET}${MAGENTA}${git_branch}${RESET}"
+if [ -n "$git_branch" ]; then
+  _link "$git_url" "$git_repo"
+  _seg git "${MAGENTA}🌿 ${RESET}${DIM}${git_repo:+${_link_out}@}${RESET}${MAGENTA}${git_branch}${RESET}"
+fi
+# Pull request: "🔀 ✅ #1234" (a GitLab MR is !1234), the review state first.
+# The footer already shows the PR number; what this adds is the review
+# state at a glance and a link. An unknown state shows the number alone.
+if [ -n "$pr_number" ]; then
+  case "$pr_state" in
+    draft)             pr_glyph="📝 " ;;
+    pending)           pr_glyph="👀 " ;;
+    changes_requested) pr_glyph="🔴 " ;;
+    approved)          pr_glyph="✅ " ;;
+    *)                 pr_glyph="" ;;
+  esac
+  pr_ref="#${pr_number}"; [ "$pr_kind" = mr ] && pr_ref="!${pr_number}"
+  _link "$pr_url" "$pr_ref"
+  _seg pr "🔀 ${pr_glyph}${CYAN}${_link_out}${RESET}"
+fi
+# Linked worktree: "🌳 name", only when the session runs in one (the main
+# clone has neither field). The last path component, whether Claude Code
+# hands over a name or a path.
+wt="${git_worktree:-$wt_name}"; wt="${wt%/}"; wt="${wt##*/}"
+[ -n "$wt" ] && _seg worktree "🌳 ${GREEN}${wt}${RESET}"
 [ -n "$session_name_fmt" ] && _seg session "🏷️  ${session_name_fmt}"
 
 # Masked email. The payload's account.email is free; only when it is absent is
@@ -1789,7 +1886,7 @@ fi
 # the output is used as-is. It is written as bytes through os.fsencode, which
 # reverses exactly how python decoded argv: a byte the locale cannot decode
 # round-trips instead of raising on the way out.
-AGENTLINE_LAYOUT_DEFAULT="model,effort,fast,ctx,5h,week,cache,cost,dur,tok_in,tok_out,words,lines,cpu,mem,disk / version,dir,git,session,email,date,clock / mcp,agents,resume / services,ssh,cron,ports"
+AGENTLINE_LAYOUT_DEFAULT="model,effort,fast,ctx,5h,week,cache,cost,dur,tok_in,tok_out,words,lines,cpu,mem,disk / version,dir,git,pr,worktree,session,email,date,clock / mcp,agents,resume / services,ssh,cron,ports"
 # cpu, mem and disk close the list: they are host readings, the least a line
 # about the session needs, and without them a busy line 1 at COLUMNS≈122
 # still overflowed by a few cells and wrapped them onto a row of their own.
@@ -1878,6 +1975,10 @@ def vis(s):
     # measuring — and real ESC ones too, which color_pct prints already
     # expanded (the context, limit and disk segments).
     s = re.sub(r'(?:\\033|\x1b)\[[0-9;]*m', '', s)
+    # OSC-8 hyperlinks (the PR number, the repo) take no cells: only the
+    # text between opener and closer is drawn. The URL holds no backslash
+    # (cleaned where it was made), so the backslash-form BEL ends it.
+    s = re.sub(r'(?:\\033|\x1b)\]8;;[^\\\x07]*(?:\\a|\x07)', '', s)
     return sum(2 if unicodedata.east_asian_width(c) in ('W', 'F') else 1 for c in s)
 
 def wrap(texts):

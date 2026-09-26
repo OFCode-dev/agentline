@@ -187,9 +187,12 @@ render() {  # render <payload> <width|-> [VAR=val...] -> $T/out $T/err $rc
 
 # ANSI stripped, clock and date masked. BSD sed has no \x1b, hence $ESC.
 # LC_ALL=C: some renders carry deliberately invalid bytes, which BSD sed
-# refuses under a UTF-8 locale; the patterns are all ASCII.
+# refuses under a UTF-8 locale; the patterns are all ASCII. OSC-8 hyperlink
+# openers and closers go too (the link text stays), so the goldens hold
+# what is drawn; the links themselves are asserted on the raw render.
+BEL=$(printf '\007')
 normalize() {  # normalize <in> <out>
-  LC_ALL=C sed -e "s/${ESC}\[[0-9;]*m//g" "$1" \
+  LC_ALL=C sed -e "s/${ESC}\[[0-9;]*m//g" -e "s/${ESC}]8;;[^${BEL}]*${BEL}//g" "$1" \
     | LC_ALL=C sed -E -e 's/[0-9]{2}:[0-9]{2}:[0-9]{2}/HH:MM:SS/g' \
              -e 's#[0-9]{2}/[0-9]{2}/[0-9]{4} [A-Z][a-z]{2}#DD/MM/YYYY Day#g' > "$2"
   # The script prints no trailing newline; the golden files end with one.
@@ -765,6 +768,73 @@ check "cache: garbage fields, exit 0 (got $rc)" [ "$rc" = 0 ]
 pcache "{\"warm\":true,\"ttl\":\"5m\",\"expires_at\":$((pnow + 200)),\"hit_ratio\":0.2}" AGENTLINE_CACHE_VERBOSE=1
 check "cache: verbose shows the hit ratio" grep -qF '🗄️ 20%' "$T/pl"
 check "cache: a low hit ratio is red" grep -q "${ESC}\[1;31m20%" "$T/out"
+
+# PR badge, worktree and OSC-8 links (C03). The golden (pr-worktree) holds
+# the drawn text; the links are asserted here on the raw render.
+prw() {  # prw <extra-json-fields> [VAR=val...] -> raw $T/out, line 2 in $T/l2
+  local x="$1"; shift
+  printf '{"session_id":"prw-0001","cwd":"%s","model":{"id":"claude-opus-5"}%s}\n' "$WORK" "$x" > "$T/prw.json"
+  prepare minimal "$T/prw.json"
+  seed_probes prw-0001 busy
+  render "$T/prw.json" 300 ${1+"$@"}
+  normalize "$T/out" "$T/pn"; sed -n 2p "$T/pn" > "$T/l2"
+}
+PRURL='https://github.com/o/r/pull/7'
+prw ",\"pr\":{\"number\":7,\"url\":\"$PRURL\",\"review_state\":\"changes_requested\"}"
+check "pr: exit 0 (got $rc)" [ "$rc" = 0 ]
+check "pr: stderr empty" [ ! -s "$T/err" ]
+check "pr: badge after the branch, state first" grep -qF 'agentline@main │ 🔀 🔴 #7' "$T/l2"
+check "pr: number is an OSC-8 link" grep -qF "${ESC}]8;;${PRURL}${BEL}#7${ESC}]8;;${BEL}" "$T/out"
+check "pr: repo is an OSC-8 link" grep -qF "${ESC}]8;;https://github.com/OFCode-dev/agentline${BEL}OFCode-dev/agentline${ESC}]8;;${BEL}" "$T/out"
+for st in draft:📝 pending:👀 approved:✅; do
+  prw ",\"pr\":{\"number\":7,\"review_state\":\"${st%%:*}\"}"
+  check "pr: ${st%%:*} glyph" grep -qF "🔀 ${st#*:} #7" "$T/l2"
+done
+prw ',"pr":{"number":7,"review_state":"commented"}'
+check "pr: an undocumented state shows the number alone" grep -qF '🔀 #7 ' "$T/l2"
+prw ',"pr":{"number":42,"kind":"mr","url":"https://gitlab.com/o/r/-/merge_requests/42"}'
+check "pr: a GitLab MR is !N" grep -qF '🔀 !42' "$T/l2"
+# Links stay off under a multiplexer and with AGENTLINE_LINKS=0; the text
+# stays.
+for envv in TMUX=/tmp/tmux-1/default,1,0 STY=1.pts-0.h ZELLIJ=0 AGENTLINE_LINKS=0; do
+  prw ",\"pr\":{\"number\":7,\"url\":\"$PRURL\"}" "$envv"
+  if grep -qF "${ESC}]8;;" "$T/out"; then fail "pr: no OSC-8 with $envv"; else pass; fi
+  check "pr: text kept with $envv" grep -qF '🔀 #7' "$T/l2"
+done
+# Hostile or non-https URLs, a non-integer number: no link, or no badge.
+prw ',"pr":{"number":7,"url":"javascript:alert(1)"}'
+if grep -qF "${ESC}]8;;javascript" "$T/out"; then fail "pr: a javascript: URL is no link"; else pass; fi
+prw ',"pr":{"number":7,"url":"https://x/\u0007\u001b]8;;evil"}'
+check "pr: control bytes in the URL, exit 0 (got $rc)" [ "$rc" = 0 ]
+if grep -qF 'evil' "$T/out" && ! grep -qF "${ESC}]8;;https://x/]8;;evil${BEL}" "$T/out"; then
+  fail "pr: a URL with control bytes is cleaned before it is linked"
+else
+  pass
+fi
+prw ',"pr":{"number":"7; rm -rf /","url":"https://x/y"}'
+if grep -q '🔀' "$T/l2"; then fail "pr: a non-integer number shows no badge"; else pass; fi
+prw ',"pr":{"number":0}'
+if grep -q '🔀' "$T/l2"; then fail "pr: number 0 shows no badge"; else pass; fi
+# Worktree: workspace.git_worktree first, worktree.name as the fallback,
+# nothing in the main clone; a path shows its last component.
+prw ',"workspace":{"git_worktree":"wt-a"},"worktree":{"name":"wt-b"}'
+check "worktree: git_worktree wins" grep -qF '🌳 wt-a' "$T/l2"
+prw ',"worktree":{"name":"wt-b"}'
+check "worktree: worktree.name as fallback" grep -qF '🌳 wt-b' "$T/l2"
+prw ',"workspace":{"git_worktree":"/home/u/repo-wt/feat-x/"}'
+check "worktree: a path shows its last component" grep -qF '🌳 feat-x' "$T/l2"
+prw ',"workspace":{"current_dir":"/x"}'
+if grep -q '🌳' "$T/l2"; then fail "worktree: hidden in the main clone"; else pass; fi
+prw ',"workspace":{"git_worktree":{"x":1}}'
+if grep -q '🌳' "$T/l2"; then fail "worktree: a non-string is no name"; else pass; fi
+# The layout measures a linked segment by its text: at 80 columns line 2
+# still fits the same way with links on and off.
+prw ",\"pr\":{\"number\":7,\"url\":\"$PRURL\"},\"workspace\":{\"git_worktree\":\"wt-a\"},\"version\":\"3.0.24\""
+render "$T/prw.json" - COLUMNS=60
+normalize "$T/out" "$T/lk1"
+render "$T/prw.json" - COLUMNS=60 AGENTLINE_LINKS=0
+normalize "$T/out" "$T/lk0"
+check "links: layout identical with links on and off" cmp -s "$T/lk1" "$T/lk0"
 
 # ===========================================================================
 # 3. Render-cache fast path

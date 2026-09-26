@@ -11,6 +11,7 @@ dev_ports='node(3000) vite(5173) python3(8000) postgres(5432) redis-server(6379)
 disk_pct='41'
 git_branch='main'
 git_repo='OFCode-dev/agentline'
+git_url='https://github.com/OFCode-dev/agentline'
 mem_used_gb='6.2G'
 ssh_count='2'
 svc_panel='\033[2mWeb ✓\033[0m \033[2m·\033[0m \033[1;31mDB ✗\033[0m \033[2m·\033[0m \033[2mCache ✓\033[0m'
