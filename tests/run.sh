@@ -710,7 +710,78 @@ print(m and "".join([m[1], "*" * len(m[2]), m[3], m[4], m[5], "*" * len(m[6]), m
 done
 
 # ===========================================================================
-# 3c. Opt-in /usage fetch: claim file, detached refresh
+# 3c. Host probes: services panel, dev ports
+# ===========================================================================
+# The probes run for real here (AGENTLINE_PROBE_TTL=0), with shims in front
+# of the two whose answers the checks depend on. The systemctl shim answers
+# `show` the way systemd 255 does: one block per unit in argument order,
+# properties in its own order (not the order asked for), LoadState=not-found
+# for an unknown unit, and an abort at the first invalid name.
+HSHIM="$T/hostshim"; mkdir -p "$HSHIM"
+cat > "$HSHIM/systemctl" <<EOF
+#!/bin/sh
+echo "\$*" >> "$T/systemctl-calls"
+[ "\$1" = show ] || exit 1
+while [ \$# -gt 0 ] && [ "\$1" != -- ]; do shift; done; shift
+first=1
+for u in "\$@"; do
+  case "\$u" in *' '*) echo "Invalid unit name \$u" >&2; exit 1 ;; esac
+  case "\$u" in
+    web) l=loaded a=active ;; db) l=loaded a=failed ;; masked) l=masked a=inactive ;;
+    reload) l=loaded a=reloading ;; slow) exec sleep 5 ;; *) l=not-found a=inactive ;;
+  esac
+  [ \$first = 1 ] || echo; first=0
+  printf 'ActiveState=%s\nLoadState=%s\n' "\$a" "\$l"
+done
+EOF
+cat > "$HSHIM/ss" <<'EOF'
+#!/bin/sh
+cat <<'X'
+State  Recv-Q Send-Q Local Address:Port Peer Address:Port Process
+LISTEN 0      511    0.0.0.0:3000      0.0.0.0:*    users:(("node",pid=11,fd=20))
+LISTEN 0      511    [::]:5173         [::]:*       users:(("(vite)",pid=12,fd=21))
+LISTEN 0      128    0.0.0.0:22        0.0.0.0:*    users:(("sshd",pid=1,fd=3))
+X
+EOF
+chmod +x "$HSHIM/systemctl" "$HSHIM/ss"
+p="$PAY/minimal.json"
+hrender() {  # hrender <services-conf> [VAR=val...] -> normalized $T/got
+  local conf="$1"; shift
+  prepare minimal "$p"; rm -f "$T/systemctl-calls"
+  render "$p" 120 PATH="$HSHIM:$PATH_F" AGENTLINE_PROBE_TTL=0 AGENTLINE_SERVICES="$conf" ${1+"$@"}
+  normalize "$T/out" "$T/got"
+}
+n_calls() { wc -l < "$T/systemctl-calls" 2>/dev/null | tr -d ' '; }
+printf 'web:Web\ndb:DB\ngone:Gone\n# note\n\nmasked:Masked\nreload:Reload\n' > "$T/svc.conf"
+hrender "$T/svc.conf" AGENTLINE_LAYOUT=services
+check "services: one systemctl call for five units (got $(n_calls))" [ "$(n_calls)" = 1 ]
+check "services: states read by name, missing unit skipped" grep -qxF '🛡️ Web ✓ · DB ✗ · Masked ✗ · Reload ✓' "$T/got"
+check "services: probe exit 0, stderr empty" [ "$rc" = 0 ] && [ ! -s "$T/err" ]
+# An invalid name aborts the batch; each unit is then asked on its own, and
+# only the bad line is lost.
+printf 'web:Web\nbad name:Bad\ndb:DB\n' > "$T/svc.conf"
+hrender "$T/svc.conf" AGENTLINE_LAYOUT=services
+check "services: invalid name re-asked per unit (got $(n_calls) calls)" [ "$(n_calls)" = 4 ]
+check "services: invalid name skipped, the rest shown" grep -qxF '🛡️ Web ✓ · DB ✗' "$T/got"
+# A systemd that does not answer is cut off, not waited for.
+if command -v timeout >/dev/null 2>&1 || command -v gtimeout >/dev/null 2>&1; then
+  printf 'web:Web\nslow:Slow\n' > "$T/svc.conf"
+  t0=$SECONDS; hrender "$T/svc.conf" AGENTLINE_LAYOUT=services,ports; dt=$(( SECONDS - t0 ))
+  check "services: hung systemctl cut off (render took ${dt}s)" [ "$dt" -lt 5 ]
+  check "services: hung systemctl not re-asked (got $(n_calls) calls)" [ "$(n_calls)" = 1 ]
+  check "services: hung systemctl hides the panel only" grep -qF 'node(3000)' "$T/got"
+else
+  skip "services: no timeout/gtimeout for the hang guard"
+fi
+# Dev ports: labelled by the ss awk itself, parentheses round a process name
+# trimmed, system ports (< 3000) left out.
+hrender /nonexistent AGENTLINE_LAYOUT=ports
+check "dev ports: node(3000) labelled" grep -qF 'node(3000)' "$T/got"
+check "dev ports: (vite) trimmed to vite(5173)" grep -qF 'vite(5173)' "$T/got"
+if grep -q 'sshd' "$T/got"; then fail "dev ports: a port below 3000 shown"; else pass; fi
+
+# ===========================================================================
+# 3d. Opt-in /usage fetch: claim file, detached refresh
 # ===========================================================================
 # No network: fake credentials plus a sitecustomize that replaces urlopen
 # with a canned /usage reply after FAKE_USAGE_DELAY seconds. It patches only

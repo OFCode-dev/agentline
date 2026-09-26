@@ -440,6 +440,21 @@ else
   revcat() { tail -r "$1" 2>/dev/null; }
 fi
 
+# Hang guard for probes that can block: a git on NFS or behind a held lock,
+# a systemd that does not answer. `_run_to <secs> cmd...` kills the command
+# after <secs>, and its segment simply stays empty. Linux has coreutils
+# `timeout`; macOS only has it as `gtimeout` from Homebrew coreutils, and
+# without either the command runs unguarded as before. `command -v` is a
+# builtin, so resolving it costs nothing.
+if command -v timeout >/dev/null 2>&1; then _TIMEOUT=timeout
+elif command -v gtimeout >/dev/null 2>&1; then _TIMEOUT=gtimeout
+else _TIMEOUT=""
+fi
+_run_to() {
+  local secs="$1"; shift
+  if [ -n "$_TIMEOUT" ]; then "$_TIMEOUT" "$secs" "$@"; else "$@"; fi
+}
+
 # === Host probe cache ===
 # The clock ticks once a second, but CPU, RAM, disk, ports, services, MCP and
 # git do not change at that rate — and re-running `top -bn1`, `df`, `ss`,
@@ -621,10 +636,20 @@ ssh_count=$(who 2>/dev/null | awk '/\(([^:)][^)]*)\)/ {n++} END {print n+0}')
 cron_count=$(crontab -l 2>/dev/null | awk '!/^[[:space:]]*(#|$)/ {n++} END {print n+0}')
 
 # Dev servers: user-owned listeners on ports 3000-9999 (excludes system/IDE noise).
-# Socket enumeration is platform-specific -- `ss` on Linux, `lsof` on macOS -- so
-# each branch normalizes to "proc:port" pairs and the labeling below is shared.
+# Socket enumeration is platform-specific -- `ss` on Linux, `lsof` on macOS --
+# and each branch collects port -> process; the shared awk END below labels
+# them "proc(port)", space-separated, with any parentheses round the process
+# name trimmed. That labelling used to be a python3 and a sed of their own.
+_dev_label='END {
+  out = ""
+  for (p in seen) {
+    proc = seen[p]; gsub(/^[()]+/, "", proc); gsub(/[()]+$/, "", proc)
+    out = out (out == "" ? "" : " ") proc "(" p ")"
+  }
+  printf "%s", out
+}'
 if command -v ss >/dev/null 2>&1; then
-  dev_raw=$(ss -ltnp 2>/dev/null | awk '
+  dev_ports=$(ss -ltnp 2>/dev/null | awk '
     /users:\(\(/ {
       n = split($4, a, ":"); port = a[n]
       if (port ~ /^[0-9]+$/ && port >= 3000 && port <= 9999) {
@@ -632,24 +657,16 @@ if command -v ss >/dev/null 2>&1; then
         seen[port] = substr($0, RSTART+9, RLENGTH-10)
       }
     }
-    END { for (p in seen) printf "%s:%s ", seen[p], p }')
+    '"$_dev_label")
 else
-  dev_raw=$(lsof -nP -iTCP -sTCP:LISTEN 2>/dev/null | awk 'NR>1 {
+  dev_ports=$(lsof -nP -iTCP -sTCP:LISTEN 2>/dev/null | awk 'NR>1 {
       n = split($9, a, ":"); port = a[n]
       if (port ~ /^[0-9]+$/ && port >= 3000 && port <= 9999) {
         seen[port] = $1
       }
     }
-    END { for (p in seen) printf "%s:%s ", seen[p], p }')
+    '"$_dev_label")
 fi
-dev_ports=$(printf '%s' "$dev_raw" | python3 -c "
-import sys
-for item in sys.stdin.read().split():
-    if item and ':' in item:
-        proc, port = item.rsplit(':', 1)
-        proc = proc.strip('()')
-        print(f'{proc}({port})', end=' ')
-" | sed 's/ $//')
 
 # Disk usage (root fs). Some mounts report "-" instead of a percentage; the
 # numeric guard hides the segment there rather than tripping the -ge test below.
@@ -660,8 +677,36 @@ disk_pct=$(df -P / 2>/dev/null | awk 'NR==2 {gsub("%","",$5); if ($5 ~ /^[0-9]+$
 # Kept out of the repo on purpose so each machine can list its own units.
 SVC_CONFIG="${AGENTLINE_SERVICES:-$HOME/.claude/agentline-services.conf}"
 svc_panel=""
+# One `systemctl show` answers for every unit. It used to be two calls per
+# unit (`systemctl cat` to skip units not defined here, then `is-active`),
+# 2N forks for N units. `is-active` alone cannot replace the pair: it prints
+# "inactive" for a unit that does not exist, which would turn "not on this
+# machine" into a red ✗. `show` prints one block per unit, in argument
+# order, blank-line separated, and LoadState=not-found is exactly the unit
+# `cat` used to fail on (a masked unit is loaded as "masked", which `cat`
+# accepted, so it still shows ✗). Healthy is what `is-active` accepted:
+# active, reloading or refreshing. The properties are read by name, because
+# --value prints them in systemd's order, not the order asked for.
+#
+# systemctl aborts at the first invalid unit name ("bad name!"), dropping
+# every block after it. A short answer is therefore re-asked one unit at a
+# time, which is the old cost, paid only by a config with a bad line. A
+# timed-out answer (status 124) is not re-asked: a systemd that does not
+# answer once would not answer N times either.
+_svc_state() {  # _svc_state <systemctl show output> -> _svc_load[], _svc_act[]
+  local l i=0
+  _svc_load=(); _svc_act=()
+  while IFS= read -r l; do
+    case "$l" in
+      '') i=$(( i + 1 )) ;;
+      LoadState=*) _svc_load[$i]="${l#*=}" ;;
+      ActiveState=*) _svc_act[$i]="${l#*=}" ;;
+    esac
+  done <<< "$1"
+}
 # systemd is Linux-only. On macOS the panel stays empty and line 4 degrades cleanly.
 if command -v systemctl >/dev/null 2>&1 && [ -r "$SVC_CONFIG" ]; then
+  _svc_units=(); _svc_labels=()
   while IFS=: read -r svc label; do
     case "$svc" in ''|\#*) continue ;; esac
     [ -z "$label" ] && label="$svc"
@@ -669,15 +714,35 @@ if command -v systemctl >/dev/null 2>&1 && [ -r "$SVC_CONFIG" ]; then
     # than with the other host strings below ($svc_panel keeps its colours).
     label="${label//[[:cntrl:]]/}"; label="${label//\\/}"
     label="${label//${_C1_LEAD}[${_C1_LO}-${_C1_HI}]/}"
-    # Skip services not defined on this machine (portability)
-    systemctl cat "$svc" >/dev/null 2>&1 || continue
-    if systemctl is-active --quiet "$svc" 2>/dev/null; then
-      entry="\033[2m${label} ✓\033[0m"
-    else
-      entry="\033[1;31m${label} ✗\033[0m"
-    fi
-    svc_panel="${svc_panel:+${svc_panel} \033[2m·\033[0m }${entry}"
+    _svc_units[${#_svc_units[@]}]="$svc"
+    _svc_labels[${#_svc_labels[@]}]="$label"
   done < "$SVC_CONFIG"
+  if [ ${#_svc_units[@]} -gt 0 ]; then
+    _svc_out=$(_run_to 2 systemctl show -p LoadState,ActiveState -- "${_svc_units[@]}" 2>/dev/null)
+    _svc_rc=$?
+    _svc_state "$_svc_out"
+    if [ "$_svc_rc" != 124 ] && [ ${#_svc_load[@]} != ${#_svc_units[@]} ]; then
+      _svc_l=(); _svc_a=()
+      for (( _i = 0; _i < ${#_svc_units[@]}; _i++ )); do
+        _svc_state "$(_run_to 1 systemctl show -p LoadState,ActiveState -- "${_svc_units[$_i]}" 2>/dev/null)"
+        _svc_l[$_i]="${_svc_load[0]}"; _svc_a[$_i]="${_svc_act[0]}"
+      done
+      _svc_load=(); _svc_act=()
+      for (( _i = 0; _i < ${#_svc_units[@]}; _i++ )); do
+        _svc_load[$_i]="${_svc_l[$_i]}"; _svc_act[$_i]="${_svc_a[$_i]}"
+      done
+    fi
+    for (( _i = 0; _i < ${#_svc_units[@]}; _i++ )); do
+      # No answer (invalid name, timeout) or not defined here: skip it.
+      case "${_svc_load[$_i]}" in ''|not-found) continue ;; esac
+      label="${_svc_labels[$_i]}"
+      case "${_svc_act[$_i]}" in
+        active|reloading|refreshing) entry="\033[2m${label} ✓\033[0m" ;;
+        *) entry="\033[1;31m${label} ✗\033[0m" ;;
+      esac
+      svc_panel="${svc_panel:+${svc_panel} \033[2m·\033[0m }${entry}"
+    done
+  fi
 fi
 
 fi  # end of throttled host probes (part 2)

@@ -9,6 +9,16 @@
   match as the regex it replaces, and non-ASCII addresses still go to
   `python3`. The Fable gradient is painted by the layout pass, which runs on
   every full render anyway. The output is byte for byte what it was.
+- The host probes fork less. The service panel asks systemd once, with
+  `systemctl show` over every configured unit, instead of `systemctl cat` +
+  `is-active` per unit (2N calls). A unit that systemd reports as not-found
+  is still skipped. It is not shown as a red ✗, which a bare `is-active`
+  would have done, because it prints "inactive" for a missing unit. A
+  config line with an invalid unit name makes systemd abort the batch, so
+  only then is each unit asked on its own. A systemd that does not answer
+  within 2 s is cut off, and the panel stays empty until the next probe.
+  The dev-server list is labelled by the `ss`/`lsof` awk itself, which
+  replaces a `python3` and a `sed`.
 - One string now chooses the layout. `AGENTLINE_LAYOUT` lists segment
   names: `/` starts a line, `,` separates names, and a name left out is
   hidden. The default reproduces the four lines exactly. Before, the only
