@@ -1838,6 +1838,102 @@ prepare minimal "$PAY/minimal.json"
 render "$PAY/minimal.json" 120 CLAUDE_AGENTS_FILE="$T/custom-agents.txt"
 check "reader honours CLAUDE_AGENTS_FILE" grep -q 'relocated' "$T/out"
 
+# --- Subagent lifecycle (hook_event_name dispatch) ---------------------------
+# PreToolUse queues the dispatch's description, SubagentStart binds it to the
+# agent id, SubagentStop removes that agent alone and leaves a ✓ row, Stop
+# clears what the session still owns. The old hook read any payload without
+# tool_name as the Stop, so a SubagentStop would have wiped every sibling.
+AF="$SIDE/claude_agents.txt"
+hook() { printf '%s' "$1" | hook_env "$TEST_BASH" "$ROOT/hooks/agent-tracker-hook.sh"; }
+rows() { sed 's/^[0-9]* //' "$AF" 2>/dev/null; }
+row_is() { rows | grep -qxF -- "$1"; }
+rm -f "$SIDE"/claude_*
+hook_env "$TEST_BASH" "$AGENT" add "external run"
+hook '{"hook_event_name":"PreToolUse","tool_name":"Agent","session_id":"s2","tool_input":{"description":"explore repo","subagent_type":"Explore"}}'
+check "lifecycle: dispatch row appears at once" row_is "explore repo"
+hook '{"hook_event_name":"PreToolUse","tool_name":"Agent","session_id":"s2","tool_input":{"description":"review diff"}}'
+hook '{"hook_event_name":"SubagentStart","session_id":"s2","agent_id":"abcdef123","agent_type":"Explore"}'
+check "lifecycle: start re-labels the oldest dispatch" row_is "explore repo #abcdef"
+check "lifecycle: bare dispatch row replaced" sh -c "! sed 's/^[0-9]* //' '$AF' | grep -qx 'explore repo'"
+hook '{"hook_event_name":"SubagentStart","session_id":"s2","agent_id":"zzz999x","agent_type":"general-purpose"}'
+check "lifecycle: second start takes the second label" row_is "review diff #zzz999"
+hook '{"hook_event_name":"SubagentStart","session_id":"s2","agent_id":"nolabel1","agent_type":"fork"}'
+check "lifecycle: start with nothing queued uses agent_type" row_is "fork #nolabe"
+cp "$AF" "$T/af.before"
+hook '{"hook_event_name":"SubagentStart","session_id":"s2","agent_id":"internal1","agent_type":""}'
+check "lifecycle: internal agent (empty type) ignored" cmp -s "$AF" "$T/af.before"
+hook '{"hook_event_name":"SubagentStop","session_id":"s2","agent_id":"abcdef123","agent_type":"Explore","last_assistant_message":"done"}'
+check "lifecycle: stop removes that agent" sh -c "! grep -q 'explore repo #abcdef' '$AF'"
+check "lifecycle: stop leaves a done row" row_is "✓explore repo"
+check "lifecycle: stop keeps the sibling" row_is "review diff #zzz999"
+check "lifecycle: stop keeps the external agent" row_is "external run"
+cp "$AF" "$T/af.before"
+hook '{"hook_event_name":"SubagentStop","session_id":"s2","agent_id":"abcdef123","agent_type":"Explore","stop_hook_active":true}'
+check "lifecycle: repeated stop is a no-op" cmp -s "$AF" "$T/af.before"
+hook '{"hook_event_name":"SubagentStop","session_id":"s2","agent_id":"stranger","agent_type":""}'
+check "lifecycle: unknown agent_id ignored" cmp -s "$AF" "$T/af.before"
+hook '{"hook_event_name":"Stop","session_id":"s2","stop_hook_active":false}'
+check "lifecycle: Stop clears the running ones" sh -c "! grep -q -e 'review diff' -e 'fork #' '$AF'"
+check "lifecycle: Stop keeps the done flash" row_is "✓explore repo"
+check "lifecycle: Stop keeps the external agent" row_is "external run"
+check "lifecycle: Stop drops the session sidecars" sh -c "! ls '$AF'.pending.s2* '$AF'.ids.s2* '$AF'.owned.s2 >/dev/null 2>&1"
+check "lifecycle: no temp file left" sh -c "! ls '$AF'.[0-9]* '$AF'.*.s2.[0-9]* >/dev/null 2>&1"
+# Garbage and other events do nothing.
+cp "$AF" "$T/af.before"
+hook 'not json'
+hook '[1,2]'
+hook '{"hook_event_name":"PostToolUse","tool_name":"Bash","session_id":"s2"}'
+hook '{"hook_event_name":"PreToolUse","tool_name":"Bash","session_id":"s2","tool_input":{"description":"x"}}'
+check "lifecycle: garbage and other events ignored" cmp -s "$AF" "$T/af.before"
+
+# Parallel starts never pop the same queued label: 6 dispatches, 6 starts at
+# once, 6 distinct labels bound.
+rm -f "$SIDE"/claude_*
+for i in 1 2 3 4 5 6; do
+  hook "{\"hook_event_name\":\"PreToolUse\",\"tool_name\":\"Agent\",\"session_id\":\"par\",\"tool_input\":{\"description\":\"job $i\"}}"
+done
+for i in 1 2 3 4 5 6; do
+  hook "{\"hook_event_name\":\"SubagentStart\",\"session_id\":\"par\",\"agent_id\":\"agent${i}xx\",\"agent_type\":\"general-purpose\"}" &
+done
+wait
+check "lifecycle: parallel starts bind 6 distinct labels" \
+  [ "$(rows | grep -E '^job [1-6] #agent' | sed 's/ #.*//' | sort -u | wc -l | tr -d ' ')" = 6 ]
+check "lifecycle: parallel starts leave no bare dispatch row" sh -c "! sed 's/^[0-9]* //' '$AF' | grep -qx 'job [1-6]'"
+
+# The registry keeps finished rows for a minute and evicts them before any
+# running one when the cap is reached.
+rm -f "$AF"
+now=$(date +%s)
+printf '%s\n' "$now live one" "$now ✓finished" "$now live two" "$(( now - 90 )) ✓long gone" > "$AF"
+hook_env AGENTLINE_AGENT_CAP=3 "$TEST_BASH" "$AGENT" add "live three"
+check "cap: a done row goes first" sh -c "! grep -q '✓finished' '$AF'"
+check "cap: every running row kept" [ "$(grep -c 'live ' "$AF")" = 3 ]
+check "registry: a done row past a minute is pruned" sh -c "! grep -q 'long gone' '$AF'"
+
+# The reader: the first AGENTLINE_AGENT_SHOW running rows, oldest first, then
+# "+N"; done rows only while younger than 10 s. (prepare wipes the side
+# files, so the registry is written after it.)
+agents_rows() {
+  now=$(date +%s)
+  for i in 1 2 3 4 5 6; do printf '%s run%s\n' "$now" "$i"; done > "$AF"
+  printf '%s\n' "$now ✓fresh" "$(( now - 30 )) ✓stale" "$(( now - 400 )) old" >> "$AF"
+}
+prepare minimal "$PAY/minimal.json"; agents_rows
+render "$PAY/minimal.json" 200; normalize "$T/out" "$T/got"
+check "reader: first four, then +2, then the done flash" grep -qF '🤖 run1 · run2 · run3 · run4 · +2 · ✓fresh' "$T/got"
+check "reader: stale done row hidden" sh -c "! grep -q stale '$T/got'"
+check "reader: aged row hidden" sh -c "! grep -q ' old' '$T/got'"
+check "reader: done flash is green" grep -q "${ESC}\[1;32m✓fresh" "$T/out"
+prepare minimal "$PAY/minimal.json"; agents_rows
+render "$PAY/minimal.json" 200 AGENTLINE_AGENT_SHOW=0
+normalize "$T/out" "$T/got"
+check "reader: AGENTLINE_AGENT_SHOW=0 counts only" grep -qF '🤖 +6 · ✓fresh' "$T/got"
+prepare minimal "$PAY/minimal.json"; agents_rows
+render "$PAY/minimal.json" 200 AGENTLINE_AGENT_SHOW=junk
+normalize "$T/out" "$T/got"
+check "reader: bad AGENTLINE_AGENT_SHOW falls back to 4" grep -qF '· +2 ·' "$T/got"
+rm -f "$AF"
+
 # --- Registry lock -----------------------------------------------------------
 # flock(2) on <file>.lock, taken by python3. The holder below is a separate
 # python3 that takes the same lock and sleeps, so a test can hold it, and
@@ -2063,7 +2159,26 @@ jcheck "hooks: Stop wordcount x1" "$S" "($COUNT)('Stop', 'wordcount-hook.sh')" 1
 jcheck "hooks: Stop tracker x1" "$S" "($COUNT)('Stop', 'agent-tracker-hook.sh')" 1
 jcheck "hooks: PreToolUse tracker x1" "$S" "($COUNT)('PreToolUse', 'agent-tracker-hook.sh')" 1
 jcheck "hooks: tracker matcher" "$S" "[g['matcher'] for g in d['hooks']['PreToolUse']]" '["Agent|Task"]'
+jcheck "hooks: SubagentStart tracker x1" "$S" "($COUNT)('SubagentStart', 'agent-tracker-hook.sh')" 1
+jcheck "hooks: SubagentStop tracker x1" "$S" "($COUNT)('SubagentStop', 'agent-tracker-hook.sh')" 1
+jcheck "hooks: subagent events unmatched" "$S" "[g['matcher'] for e in ('SubagentStart', 'SubagentStop') for g in d['hooks'][e]]" '["", ""]'
 jcheck "hooks: user's own Stop hook kept" "$S" "($COUNT)('Stop', 'my-own-hook.sh')" 1
+# An install wired by an earlier release (PreToolUse + Stop only) gains the
+# two subagent events on the next --with-hooks, and nothing is doubled.
+python3 - "$S" <<'PYEOF'
+import json, sys
+d = json.load(open(sys.argv[1]))
+for e in ('SubagentStart', 'SubagentStop'):
+    d['hooks'].pop(e, None)
+json.dump(d, open(sys.argv[1], 'w'), indent=2)
+PYEOF
+install_run --with-hooks
+check "hooks upgrade: exit 0" [ "$irc" = 0 ]
+check "hooks upgrade: says wired" grep -q 'Hooks wired' "$T/iout"
+jcheck "hooks upgrade: SubagentStart added" "$S" "($COUNT)('SubagentStart', 'agent-tracker-hook.sh')" 1
+jcheck "hooks upgrade: SubagentStop added" "$S" "($COUNT)('SubagentStop', 'agent-tracker-hook.sh')" 1
+jcheck "hooks upgrade: PreToolUse not doubled" "$S" "($COUNT)('PreToolUse', 'agent-tracker-hook.sh')" 1
+jcheck "hooks upgrade: Stop not doubled" "$S" "($COUNT)('Stop', 'agent-tracker-hook.sh')" 1
 
 # A settings.json that does not parse is refused and left byte for byte.
 inst_home malformed

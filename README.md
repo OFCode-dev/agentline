@@ -106,7 +106,7 @@ Every `│`-separated segment below is independent: when its value cannot be mea
 | Segment | Meaning | Details |
 |---|---|---|
 | `⚙️ context7 · playwright` | Active MCP servers | Global and per-project servers from `~/.claude.json`, merged. Command-based servers count only if their process is actually running (`pgrep`-checked); remote HTTP/SSE servers count as configured. Hidden when none are active. |
-| `🤖 code review · tests` | Live subagents — optional hook | Entries fresher than 5 minutes, labels truncated at 25 chars, yellow. Claude's own subagents come from the [agent-tracker hook](#optional-hooks-word-counter--agent-tracker) and clear when that session stops; any other process can [register itself](#showing-external-agents) and stays until it deregisters or goes stale. |
+| `🤖 code review · tests · +2 · ✓explore` | Live subagents — optional hook | Entries fresher than 5 minutes, labels truncated at 25 chars, yellow. At most `AGENTLINE_AGENT_SHOW` (default 4) are listed, oldest first; the rest are counted as `+N`. A subagent that just finished flashes green as `✓label` for ten seconds. Claude's own subagents come from the [agent-tracker hook](#optional-hooks-word-counter--agent-tracker) and clear when each one stops. Any other process can [register itself](#showing-external-agents) and stays until it deregisters or goes stale. |
 | `♻️ claude --resume <id>` | Recovery command | Ready to paste after a crash to resume this exact session. Prefers the session **id** (what `--resume` accepts); falls back to the quoted session name, which `--resume` treats as a picker search term. |
 
 ### Line 4 — System layer
@@ -144,6 +144,7 @@ Everything is optional — agentline works with zero configuration.
 | `AGENTLINE_WIDTH` | live terminal width − 2, else `120` | Column budget for fitting, merging and wrapping lines. Overrides the live width when set |
 | `AGENTLINE_TZ` | system timezone | Pin the clock, e.g. `Europe/Istanbul` on a UTC server |
 | `AGENTLINE_PACE` | `1` | Set to `0` to hide the `⇡`/`⇣` pace arrows after `S:` and `W:` |
+| `AGENTLINE_AGENT_SHOW` | `4` | How many running agents `🤖` lists before it counts the rest as `+N` |
 | `AGENTLINE_CACHE_WARN` | `60` (5m TTL), `300` (1h TTL) | Seconds before a warm prompt cache expires at which the `🗄️ ↻` countdown appears |
 | `AGENTLINE_CACHE_VERBOSE` | unset | Set to `1` to always show the prompt-cache hit ratio (`🗄️ 91%`) |
 | `AGENTLINE_GIT_STATUS` | `1` | Set to `0` to skip the `git status` call behind the `↑↓` ahead/behind and `±?✖` dirty counts on the git segment |
@@ -204,7 +205,7 @@ A compact two-line bar, for example:
 Two segments read files that Claude Code itself does not provide, so they are fed by two small hooks shipped in [`hooks/`](hooks/):
 
 - **`wordcount-hook.sh`** — counts words in the transcript (PostToolUse + Stop) and feeds `🔤 ↑in ↓out` on line 1.
-- **`agent-tracker-hook.sh`** — records subagent spawns (PreToolUse on Agent) and clears them on Stop, feeding `🤖` on line 3.
+- **`agent-tracker-hook.sh`** — follows each subagent through its lifecycle and feeds `🤖` on line 3. The row appears on the dispatch (PreToolUse on Agent), under the tool call's description. `SubagentStart` ties it to the agent (`review diff #a1b2c3`, the first six characters of `agent_id`). `SubagentStop` removes that agent alone the moment it finishes and flashes `✓review diff` for about ten seconds. `Stop` clears whatever the session still owns, as a safety net. Internal agents (prompt suggestions, `/btw`) are ignored. The hook dispatches on `hook_event_name`, so one script serves all four events. Claude Code releases without `SubagentStart` keep the old behaviour: the row appears on dispatch and clears at the end of the turn.
 - **`agentline-agent.sh`** — the locked registry both of the above write through, and the entry point for anything else that wants a row on line 3 (see below).
 
 `bash install.sh --with-hooks` copies them to `~/.claude/agentline/` and adds the hook entries to `settings.json` idempotently — existing hooks are never duplicated or removed. Without them, the two segments simply stay hidden; nothing else changes.
@@ -241,13 +242,21 @@ it a longer run simply ages out of the display. If the process dies without
 running its trap, the row disappears on its own once it goes stale.
 
 Rows are only ever removed by whoever put them there: the agent-tracker hook
-clears its own session's subagents on `Stop` and leaves everything else alone,
-so an external run in progress survives the end of an assistant turn.
+clears its own session's subagents on `SubagentStop` and `Stop` and leaves
+everything else alone, so an external run in progress survives the end of an
+assistant turn.
+
+The segment shows the first `AGENTLINE_AGENT_SHOW` (default 4) running rows,
+oldest first, so labels keep their place from one second to the next. The rest
+are counted instead of hidden: `🤖 explore · review · fork · codex round 1 · +3`.
+A label starting with `✓` is a finished agent. It shows in green for ten
+seconds and is pruned from the file after a minute.
 
 Set `CLAUDE_AGENTS_FILE` to point the helper somewhere else (agentline reads
 the same variable, so it must be set for both, e.g. in the `settings.json` `env` block),
 `AGENTLINE_AGENT_WINDOW` to change the freshness window, and
-`AGENTLINE_AGENT_CAP` to change how many rows are kept.
+`AGENTLINE_AGENT_CAP` (default 32) to change how many rows the file keeps.
+Past the cap, finished rows are evicted first, then the oldest running one.
 
 ## Manual install
 

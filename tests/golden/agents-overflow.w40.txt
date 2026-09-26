@@ -1,0 +1,4 @@
+Sonnet 5
+~/work │ DD/MM/YYYY Day │ HH:MM:SS
+🤖 explore the repo · review #a1b2c3 · fork · codex round 1 · +2 · ✓code review
+♻️  claude --resume agents-0001

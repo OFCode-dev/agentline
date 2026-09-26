@@ -30,7 +30,7 @@ Two segments need small hooks (word counter `🔤`, live agent tracker `🤖`):
 bash install.sh --with-hooks
 ```
 
-This wires hook entries into `settings.json` idempotently — existing hooks are never duplicated or removed. Skip it unless the user wants those two segments.
+This wires hook entries into `settings.json` idempotently — existing hooks are never duplicated or removed. The agent tracker is registered for PreToolUse (`Agent|Task`), SubagentStart, SubagentStop and Stop. Re-running it on an older install adds the two subagent events. Skip it unless the user wants those two segments. `AGENTLINE_AGENT_SHOW` (default 4) caps how many running agents `🤖` lists before it counts the rest as `+N`.
 
 ## Configure
 

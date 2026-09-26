@@ -384,6 +384,13 @@ elif mode == 'hooks':
     # The subagent tool is 'Agent' in current Claude Code releases, 'Task' in
     # earlier ones; the regex matcher covers both.
     ensure('PreToolUse', 'Agent|Task', at)
+    # The subagent's own lifecycle: SubagentStart ties the dispatch to its
+    # agent_id, SubagentStop takes the row away the moment the agent is done
+    # (before, a finished agent stayed listed until the whole turn ended).
+    # No matcher: the hook filters out internal agents itself, by an empty
+    # agent_type on start and an unknown agent_id on stop.
+    ensure('SubagentStart', '', at)
+    ensure('SubagentStop', '', at)
     ensure('Stop', '', at)
     if changed:
         save(d)

@@ -942,20 +942,47 @@ AGENTLINE_TMP="${AGENTLINE_TMP:-/tmp}"
 AGENTS_FILE="${CLAUDE_AGENTS_FILE:-$AGENTLINE_TMP/claude_agents.txt}"
 
 # Active agents (from hook-written file) — never throttled, see PROBE_VARS.
+# One awk does all of it, in the order the rows were registered (oldest
+# first, so a label keeps its place from one second to the next):
+#   - a running agent (fresher than 5 minutes) is shown up to
+#     AGENTLINE_AGENT_SHOW (default 4) times; the rest are counted, "+3".
+#     The registry used to evict the oldest past 16 rows, silently, and the
+#     reader had no cap at all, so a big dispatch either hid work or ran the
+#     line off the screen at 25 cells a label.
+#   - a finished one ("✓<label>", written on SubagentStop) is shown for 10
+#     seconds after it stopped, the newest two at most, so a finish reads as
+#     a flash rather than as a row that vanished.
+# It prints "<running><US><finished>", split below, because the two get
+# different colours and the colours cannot ride inside the text (cleaning
+# strips the escapes). The joins happen in awk: no trailing separator to trim
+# and no sed (BSD sed aborted on a label with an invalid byte). The time is
+# $_now_epoch, set at startup: the `date +%s` this used to run was a fork per
+# full render for a number the script already had.
 active_agents=""
+agents_done=""
+case "${AGENTLINE_AGENT_SHOW-}" in ''|*[!0-9]*|???*) _ag_show=4 ;; *) _ag_show=$(( 10#$AGENTLINE_AGENT_SHOW )) ;; esac
 if [ -f "$AGENTS_FILE" ]; then
-  now=$(date +%s)
-  active_agents=$(awk -v now="$now" '{
-    age = now - $1
-    if (age < 300) {
-      label = substr($0, index($0,$2))
-      if (length(label) > 25) label = substr(label,1,22) "..."
-      printf "%s · ", label
+  active_agents=$(awk -v now="$_now_epoch" -v show="$_ag_show" -v us="$_US" '
+    function cut(s) { if (length(s) > 25) s = substr(s, 1, 22) "..."; return s }
+    {
+      age = now - $1
+      if ($1 !~ /^[0-9]+$/ || age < 0) next
+      label = substr($0, index($0, $2))
+      if (index(label, "✓") == 1) {
+        if (age < 10) done[nd++] = "✓" cut(substr(label, length("✓") + 1))
+      } else if (age < 300) {
+        if (n < show) live = live (n ? " · " : "") cut(label)
+        n++
+      }
     }
-  }' "$AGENTS_FILE")
-  # The trailing separator goes by expansion: a sed here was one more fork,
-  # and one that BSD sed aborted on a label with an invalid byte.
-  active_agents="${active_agents% · }"
+    END {
+      if (n > show) live = live (show ? " · " : "") "+" (n - show)
+      out = ""
+      for (i = (nd > 2 ? nd - 2 : 0); i < nd; i++) out = out (out == "" ? "" : " · ") done[i]
+      printf "%s%s%s", live, us, out
+    }' "$AGENTS_FILE")
+  agents_done="${active_agents#*"$_US"}"
+  active_agents="${active_agents%%"$_US"*}"
 fi
 
 # Home-relative path (~/projects/agentline) rather than the bare folder name.
@@ -1164,7 +1191,7 @@ _clean() {  # _clean <varname> -- strip control characters and backslashes
   v="${v//\\/}"
   printf -v "$1" '%s' "$v"
 }
-for _v in git_branch git_repo git_url git_ab git_dirty folder active_mcps active_agents dev_ports; do
+for _v in git_branch git_repo git_url git_ab git_dirty folder active_mcps active_agents agents_done dev_ports; do
   _clean "$_v"
 done
 
@@ -1972,7 +1999,10 @@ _seg clock "${CYAN}${time_str}${RESET}"
 
 # Line 3 — Claude layer: MCP servers + active agents + resume command
 [ -n "$active_mcps" ]   && _seg mcp "⚙️  ${DIM}${active_mcps}${RESET}"
-[ -n "$active_agents" ] && _seg agents "🤖 ${YELLOW}${active_agents}${RESET}"
+# Running agents in yellow, then the ones that just finished in green.
+if [ -n "$active_agents$agents_done" ]; then
+  _seg agents "🤖 ${active_agents:+${YELLOW}${active_agents}${RESET}}${active_agents:+${agents_done:+ ${DIM}·${RESET} }}${agents_done:+${GREEN}${agents_done}${RESET}}"
+fi
 # Recovery command: brings the session back after an unexpected exit.
 # `claude --resume` takes a session ID. A session name is free-form text, so
 # using it unquoted split the command into several arguments and could not be

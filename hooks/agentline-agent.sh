@@ -11,6 +11,9 @@
 #   agentline-agent.sh add    <label>   # register, or refresh an existing one
 #   agentline-agent.sh remove <label>   # deregister
 #
+# agentline.sh shows up to AGENTLINE_AGENT_SHOW (default 4) of them, oldest
+# first, and counts the rest as "+N".
+#
 # `add` is idempotent — it replaces any line carrying the same label rather
 # than appending a second one — so it doubles as a heartbeat:
 #
@@ -34,11 +37,19 @@
 #                           (default /tmp)
 #   AGENTLINE_AGENT_WINDOW  freshness window, seconds (default 300, matches
 #                           the window agentline.sh displays)
-#   AGENTLINE_AGENT_CAP     maximum entries kept (default 16)
+#   AGENTLINE_AGENT_CAP     maximum entries kept (default 32). Only a safety
+#                           bound on the file: agentline.sh shows the first
+#                           AGENTLINE_AGENT_SHOW and folds the rest into "+N",
+#                           so a large dispatch is counted, not hidden.
+#
+# A label starting with "✓" is a finished agent (agent-tracker-hook.sh writes
+# one on SubagentStop). agentline.sh shows it for a few seconds; here it is
+# pruned after a minute, and it is the first to go when the cap is reached,
+# so a burst of finished agents can never push a running one out.
 
 AGENTLINE_AGENT_FILE="${CLAUDE_AGENTS_FILE:-${AGENTLINE_TMP:-/tmp}/claude_agents.txt}"
 AGENTLINE_AGENT_WINDOW="${AGENTLINE_AGENT_WINDOW:-300}"
-AGENTLINE_AGENT_CAP="${AGENTLINE_AGENT_CAP:-16}"
+AGENTLINE_AGENT_CAP="${AGENTLINE_AGENT_CAP:-32}"
 
 # agentline_agent <add|remove> <label>
 #
@@ -81,7 +92,8 @@ import errno, fcntl, os, re, sys, time
 
 op, label, path, win, cap = sys.argv[1:6]
 win = int(win) if win.isdigit() else 300
-cap = int(cap) if cap.isdigit() else 16
+cap = int(cap) if cap.isdigit() else 32
+DONE, DONE_WIN = '✓', 60  # a finished agent's row, and how long it is kept
 # One row per line, so a label can never smuggle in a second one.
 label = re.sub(r'[\r\n]+', ' ', label)
 
@@ -129,12 +141,19 @@ for line in data.split('\n'):
     ts, rest = int(m.group(1)), m.group(2)
     if ts <= 0 or now - ts >= win or rest == '' or rest == label:
         continue
+    if rest.startswith(DONE) and now - ts >= DONE_WIN:
+        continue
     rows.append(line)
 if op == 'add':
     rows.append(f"{now} {label}")
 # Age pruning already ran, so the cap can only ever drop the oldest of the
-# still-live entries — never a running agent while a stale row survives.
-rows = rows[-cap:] if cap > 0 else []
+# still-live entries — never a running agent while a stale row survives —
+# and finished rows go before any running one.
+def done(r):
+    return r.partition(' ')[2].startswith(DONE)
+while len(rows) > max(cap, 0):
+    old = next((i for i, r in enumerate(rows) if done(r)), 0)
+    del rows[old]
 
 # Temp file beside the registry, then an atomic rename: the reader, which
 # takes no lock, sees the old file or the new one, never a half-written one.

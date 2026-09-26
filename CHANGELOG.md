@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+- The 🤖 agent tracker follows Claude Code's subagent lifecycle. It used to
+  add a row on the Agent/Task tool call and clear every row only at the end
+  of the turn, so a finished subagent stayed listed until its siblings were
+  done too. The hook now also runs on `SubagentStart`, which binds the
+  dispatch's description to the agent (`review diff #a1b2c3`), and on
+  `SubagentStop`, which removes that one agent the moment it finishes and
+  flashes a green `✓review diff` for ten seconds. Internal agents (an empty
+  `agent_type`, an `agent_id` never started) and a stop repeated by a
+  blocking stop hook are ignored. Along the way this fixes a latent bug: the
+  hook told a Stop from a tool call by the absence of `tool_name`. Wired to
+  `SubagentStop` as it was, the first subagent to finish would have cleared
+  all of them. It now dispatches on `hook_event_name`. `install.sh
+  --with-hooks` adds the two events to an existing install, idempotently.
+  The segment shows at most `AGENTLINE_AGENT_SHOW` (default 4) running
+  agents, oldest first, and counts the rest as `+N`. Before, the registry
+  silently evicted the oldest past 16 rows, and the reader had no cap, so a
+  large dispatch ran off the line. The registry cap is now 32, finished rows
+  are evicted before running ones, and the reader no longer forks `date`.
 - The git segment says how far the branch is from its upstream and how much
   work is uncommitted: `🌿 owner/repo@main ↑2↓1 ±3 ?2 ✖1` (ahead, behind,
   then dim changed, untracked, conflicted), each part hidden at zero. One
