@@ -12,7 +12,10 @@
 WCFILE="${AGENTLINE_TMP:-/tmp}/claude_wordcount.txt"
 
 input=$(cat)
-counts=$(PAYLOAD="$input" python3 - <<'PYEOF'
+# Read into a variable and run with -c rather than written as a heredoc
+# inside $(...): bash 3.2 (macOS /bin/bash) parses such a nested heredoc as
+# shell text, so one apostrophe in the python would be a syntax error.
+IFS= read -r -d '' _WC_PY <<'PYEOF'
 import json, os
 try:
     d = json.loads(os.environ.get('PAYLOAD', '') or '{}')
@@ -42,7 +45,7 @@ try:
 except Exception:
     print('0 0')
 PYEOF
-)
+counts=$(PAYLOAD="$input" python3 -c "$_WC_PY")
 
 # Write totals (overwrite each time — reflects the full session transcript)
 echo "${counts:-0 0}" > "$WCFILE"

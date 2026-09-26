@@ -196,7 +196,15 @@ fi
 # the former per-field helper spawned 20+ interpreters per render, and this is
 # the hottest path in the script. shlex.quote makes the eval safe for any
 # payload value (quotes, spaces, newlines).
-eval "$(PAYLOAD="$input" python3 - <<'PYEOF'
+#
+# The program is read into a variable at top level and run with `python3 -c`,
+# never written as a heredoc inside `$(...)`: bash 3.2 (the macOS /bin/bash)
+# parses a heredoc body nested in a command substitution as shell text, so a
+# single apostrophe in a python comment opened a quote and every full render
+# died with a syntax error. Every python program in this file follows the
+# same pattern; tests/run.sh guards it. `IFS=` keeps the indentation, and
+# read's non-zero status at end of input is expected.
+IFS= read -r -d '' _AL_PARSER <<'PYEOF'
 import json, math, os, re, shlex, sys
 # The decode is its own step so a broken payload is reported, not just
 # survived: before, any failure became {} and the model and context segments
@@ -365,7 +373,7 @@ def line(k, v):
     return s.encode('utf-8', 'replace')
 sys.stdout.buffer.write(b'\n'.join(line(k, v) for k, v in fields.items()))
 PYEOF
-)"
+eval "$(PAYLOAD="$input" python3 -c "$_AL_PARSER")"
 [ -z "$cwd" ] && cwd="$(pwd)"
 
 # === Platform detection ===
@@ -476,7 +484,8 @@ if [ -n "$cwd" ] && [ -d "$cwd" ]; then
 fi
 
 # Active MCP servers (from ~/.claude.json: global + this project; process check)
-active_mcps=$(python3 - "$cwd" <<'PYEOF'
+# (Program read first, run with -c: see the note at the payload parser.)
+IFS= read -r -d '' _AL_PY <<'PYEOF'
 import json, os, sys, subprocess
 try:
     cwd = sys.argv[1]
@@ -503,7 +512,7 @@ try:
 except Exception:
     print('')
 PYEOF
-)
+active_mcps=$(python3 -c "$_AL_PY" "$cwd")
 
 fi  # end of throttled host probes (part 1)
 
@@ -789,7 +798,7 @@ model_color="$CYAN"
 case "$model_raw" in
   claude-fable*|claude-mythos*)
     # Truecolor amber→orange gradient across the model name
-    model=$(python3 - "✦ ${model}" <<'PYEOF'
+    IFS= read -r -d '' _AL_PY <<'PYEOF'
 import sys
 s = sys.argv[1]
 start, end = (255, 215, 90), (255, 125, 25)
@@ -802,7 +811,7 @@ for i, ch in enumerate(s):
     out.append(f'\033[1;38;2;{r};{g};{b}m{ch}')
 print(''.join(out))
 PYEOF
-)
+    model=$(python3 -c "$_AL_PY" "✦ ${model}")
     model_color="" ;;
   claude-opus*)  model_color="$MAGENTA" ;;
   claude-sonnet*) model_color="$CYAN" ;;
@@ -1100,7 +1109,7 @@ except:
   _clean account_email
 fi
 
-masked_email=$(python3 - "$account_email" <<'PYEOF'
+IFS= read -r -d '' _AL_PY <<'PYEOF'
 import re, sys
 email = sys.argv[1]
 m = re.match(r'^(.)(.*)(.)(@)(.)(.*)(.)(\..+)$', email)
@@ -1117,7 +1126,7 @@ if m:
 else:
     print(email)
 PYEOF
-)
+masked_email=$(python3 -c "$_AL_PY" "$account_email")
 [ -n "$masked_email" ] && line2="${line2:+${line2}${P}}🤖 ${DIM}${masked_email}${RESET}"
 line2="${line2:+${line2}${P}}${DIM}${date_str}${RESET}${P}${CYAN}${time_str}${RESET}"
 
@@ -1167,7 +1176,7 @@ fi
 # segment is never split internally. Width is measured after stripping colour
 # escapes, counting wide glyphs as two cells; tune with $AGENTLINE_WIDTH.
 STATUSLINE_WIDTH="${AGENTLINE_WIDTH:-120}"
-layer_rows=$(python3 - "$STATUSLINE_WIDTH" "$P" "$line3" "$line4" <<'PYEOF'
+IFS= read -r -d '' _AL_PY <<'PYEOF'
 import re, sys, unicodedata
 width, sep, line3, line4 = int(sys.argv[1]), sys.argv[2], sys.argv[3], sys.argv[4]
 
@@ -1200,7 +1209,7 @@ else:
     rows = wrap(line3) + wrap(line4)
 sys.stdout.write('\n'.join(rows))
 PYEOF
-)
+layer_rows=$(python3 -c "$_AL_PY" "$STATUSLINE_WIDTH" "$P" "$line3" "$line4")
 
 # Prune the cache directory. Every session leaves render_<sid>.* files behind
 # and nothing else ever removes them, so a long-lived host collects thousands.

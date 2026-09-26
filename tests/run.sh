@@ -207,6 +207,33 @@ PYEOF
 for f in "$ROOT/agentline.sh" "$ROOT/install.sh" "$ROOT"/hooks/*.sh "$TESTS/run.sh"; do
   check "bash -n ${f#"$ROOT"/}" "$TEST_BASH" -n "$f"
 done
+# bash 3.2 (macOS /bin/bash) parses a heredoc body nested inside `$(...)` as
+# shell text: one apostrophe in a python comment there opened a quote and
+# broke every full render with a syntax error, while bash 5 and `bash -n`
+# under bash 5 were fine. Scripts read such programs into a variable at top
+# level instead; this check keeps an odd apostrophe count out of any heredoc
+# that still sits inside a command substitution, whichever bash runs it.
+if python3 - "$ROOT/agentline.sh" "$ROOT/install.sh" "$ROOT"/hooks/*.sh "$TESTS/run.sh" > "$T/heredocs" 2>&1 <<"PYEOF"
+import re, sys
+bad = []
+for path in sys.argv[1:]:
+    lines = open(path, encoding="utf-8").read().split("\n")
+    i = 0
+    while i < len(lines):
+        m = re.search(r"<<-?[\"']?(\w+)[\"']?", lines[i])
+        start = lines[i].rfind("$(", 0, m.start()) if m else -1
+        if m and start >= 0 and ")" not in lines[i][start:m.start()]:
+            tag, body, j = m.group(1), [], i + 1
+            while j < len(lines) and lines[j].strip() != tag:
+                body.append(lines[j]); j += 1
+            if sum(l.count(chr(39)) for l in body) % 2:
+                bad.append("%s:%d" % (path.rsplit("/", 1)[-1], i + 1))
+            i = j
+        i += 1
+if bad:
+    sys.exit("odd apostrophes in a heredoc inside $(...): " + ", ".join(bad))
+PYEOF
+then pass; else fail "bash 3.2 heredoc hazard: $(cat "$T/heredocs")"; fi
 
 # ===========================================================================
 # 2. Golden renders: every fixture at every width

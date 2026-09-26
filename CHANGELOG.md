@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Runs under bash 3.2 again (the macOS `/bin/bash`). bash 3.2 parses a
+  heredoc body inside `$(…)` as shell text, so one apostrophe in a comment
+  of the embedded Python parser opened a quote. Every full render then
+  failed with a syntax error and printed nothing. Every embedded Python
+  program, in `agentline.sh` and the word-count hook, is now read into a
+  variable at top level and run with `python3 -c`. The test suite rejects
+  an unbalanced apostrophe in any heredoc left inside `$(…)`.
+
 - Displayed text can no longer inject terminal escapes. The final output
   goes through `printf %b`, so a branch, remote, directory, session name,
   model name, MCP server, process name, agent label or e-mail containing
