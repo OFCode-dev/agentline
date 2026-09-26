@@ -44,7 +44,10 @@
   lines 1 and 2. Line 1 alone can carry 15 segments and ran off narrow
   terminals. Now, with `COLUMNS` known, a line that does not fit (less a
   2-cell resize margin) sheds segments in `AGENTLINE_DROP` order: tokens,
-  word counts, duration, date, version, e-mail, lines changed. Whatever still
+  word counts, duration, date, version, e-mail, lines changed, then CPU,
+  memory and disk. The host readings come last because they matter least
+  on a line about the session; without them a busy line 1 at ~122 columns
+  still wrapped them onto a row of their own. Whatever still
   does not fit wraps at `│` boundaries. Model, context and both rate limits
   are never dropped. Without `COLUMNS` nothing is dropped on a guessed width.
   `AGENTLINE_WIDTH` still wins when set. The width and layout settings are

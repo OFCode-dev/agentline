@@ -605,6 +605,23 @@ for cols in 122 62 30; do
   done
   if msg=$(rows_fit "$T/got" $((cols - 2)) 2>&1); then pass; else fail "layout: COLUMNS=$cols: $msg"; fi
 done
+# A busy session at COLUMNS=122: once the default drop list ran out, line 1
+# still overflowed by a few cells and wrapped the host readings onto a row
+# of their own. cpu, mem and disk now close the list (host info, the least
+# a line about the session needs), so line 1 fits one row.
+printf '{"session_id":"cols-0001","cwd":"%s","model":{"id":"claude-fable-5-1"},"effort":{"level":"xhigh"},"thinking":{"enabled":true},"fast_mode":true,"exceeds_200k_tokens":true,"context_window":{"used_percentage":25,"context_window_size":1000000,"total_input_tokens":250000},"rate_limits":{"five_hour":{"used_percentage":71,"resets_at":%s},"seven_day":{"used_percentage":58,"resets_at":1790208000},"seven_day_overage_included":{"used_percentage":30}},"cost":{"total_cost_usd":123.468,"total_duration_ms":600000}}\n' \
+  "$WORK" "$(( $(date +%s) + 7230 ))" > "$T/cols.json"
+prepare minimal "$T/cols.json"; seed_probes cols-0001 busy
+render "$T/cols.json" - COLUMNS=122; normalize "$T/out" "$T/got"
+check "layout: busy session at COLUMNS=122 keeps line 1 on one row" sh -c "sed -n 2p '$T/got' | grep -q '~/work'"
+check "layout: COLUMNS=122 line 1 keeps model, context, limits and cost" \
+  sh -c "head -n 1 '$T/got' | grep -q 'Fable 5.1.*xhigh.*25% >200k.*S:71%.*W:58% F:30%.*123.47'"
+if grep -q '🔥' "$T/got"; then fail "layout: COLUMNS=122 kept cpu, first of the host readings to go"; else pass; fi
+if msg=$(rows_fit "$T/got" 120 2>&1); then pass; else fail "layout: busy COLUMNS=122: $msg"; fi
+# With room to spare the host readings stay: they are dropped last, not always.
+prepare minimal "$T/cols.json"; seed_probes cols-0001 busy
+render "$T/cols.json" - COLUMNS=202; normalize "$T/out" "$T/got"
+check "layout: COLUMNS=202 keeps the host readings" sh -c "head -n 1 '$T/got' | grep -q '🔥 37% │ 💾 6.2G │ 💽 41%'"
 # AGENTLINE_WIDTH is an explicit override and wins over COLUMNS.
 prepare full "$p"; render "$p" 200 COLUMNS=62; normalize "$T/out" "$T/got"
 check "layout: AGENTLINE_WIDTH wins over COLUMNS" has "$T/got" '📥 8.4m'

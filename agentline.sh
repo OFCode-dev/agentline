@@ -1415,7 +1415,10 @@ fi
 # reverses exactly how python decoded argv: a byte the locale cannot decode
 # round-trips instead of raising on the way out.
 AGENTLINE_LAYOUT_DEFAULT="model,effort,fast,ctx,5h,week,cost,dur,tok_in,tok_out,words,lines,cpu,mem,disk / version,dir,git,session,email,date,clock / mcp,agents,resume / services,ssh,cron,ports"
-AGENTLINE_DROP_DEFAULT="tok_in,tok_out,words,dur,date,version,email,lines"
+# cpu, mem and disk close the list: they are host readings, the least a line
+# about the session needs, and without them a busy line 1 at COLUMNS≈122
+# still overflowed by a few cells and wrapped them onto a row of their own.
+AGENTLINE_DROP_DEFAULT="tok_in,tok_out,words,dur,date,version,email,lines,cpu,mem,disk"
 # Leading zeros and absurd lengths are refused: bash arithmetic reads "08" as
 # bad octal, and a width is never six digits.
 _cols="${COLUMNS-}"
