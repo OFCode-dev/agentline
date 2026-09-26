@@ -21,9 +21,10 @@
 #   trap 'kill "$hb" 2>/dev/null; agentline-agent.sh remove "$label"' EXIT
 #   codex exec ...
 #
-# Writes are serialised — flock on Linux, a mkdir lock where flock is missing
-# (macOS) — so dispatching several agents at once cannot drop an entry. Stale rows are pruned on every write, which keeps the
-# file bounded even if a process dies before deregistering.
+# Writes are serialised by a mkdir lock (<file>.d, the same mechanism on every
+# platform), so dispatching several agents at once cannot drop an entry. Stale
+# rows are pruned on every write, which keeps the file bounded even if a
+# process dies before deregistering.
 #
 # Environment:
 #   CLAUDE_AGENTS_FILE      data file (default $AGENTLINE_TMP/claude_agents.txt)
@@ -49,47 +50,64 @@ agentline_agent() {
   case "$op" in add|remove) ;; *) return 1 ;; esac
 
   local file="$AGENTLINE_AGENT_FILE"
-  local lock="${file}.lock"
   mkdir -p "$(dirname "$file")" 2>/dev/null || return 1
 
   (
-    # Serialise writers. Linux ships flock(1); macOS does not, and the old
-    # unguarded `flock … 2>/dev/null` there simply ran every write unlocked,
-    # so parallel dispatch could still drop a row. Where flock is missing, an
-    # atomic `mkdir` stands in: a lock directory older than 10 s is taken to
-    # belong to a writer that died holding it (a write takes well under a
-    # second) and is cleared. Either way, a lock not won within 5 s means the
-    # write is skipped rather than raced — a heartbeat `add` re-registers on
-    # its next beat, whereas a racing rewrite can silently drop another row.
-    if command -v flock >/dev/null 2>&1; then
-      exec 9>>"$lock" 2>/dev/null || exit 0
-      if ! flock -w 5 9 2>/dev/null; then
+    # Serialise writers with an atomic `mkdir` lock — on every platform. The
+    # lock used to be flock(1) where it was on PATH and mkdir elsewhere, but
+    # that choice was made per process: a Linux hook with flock and a writer
+    # whose PATH lacked it (a stripped hook env, a container sharing the temp
+    # dir) took different locks and did not exclude each other at all. One
+    # mechanism per registry file is the only safe answer, and mkdir is the
+    # one every platform has. Writes are rare (subagent start/stop, heartbeats
+    # every 30 s), so the few forks cost nothing that matters.
+    #
+    # A lock directory older than 10 s belongs to a writer that died holding
+    # it (a write takes well under a second). It is broken by renaming it to
+    # a name unique to this waiter, which only one waiter can do: the loser's
+    # rename finds nothing. The renamed directory is re-checked, because
+    # between our stat and our rename another waiter may have broken the
+    # stale lock and taken a fresh one — if what we moved is fresh, it is put
+    # back rather than stolen. A lock not won within 5 s, for any reason —
+    # held, unbreakable (another user's directory in a sticky /tmp, a
+    # non-empty directory, a file in the way) — means the write is skipped
+    # rather than raced: a heartbeat `add` re-registers on its next beat,
+    # whereas a racing rewrite can silently drop another row. The deadline is
+    # checked first on every pass, so no path can spin past it.
+    local lockdir="${file}.d" deadline held now_s stale
+    deadline=$(( $(date +%s) + 5 ))
+    until mkdir "$lockdir" 2>/dev/null; do
+      now_s=$(date +%s)
+      if [ "$now_s" -ge "$deadline" ]; then
         echo "agentline-agent: registry busy, skipped $op '$label'" >&2
         exit 0
       fi
-    else
-      local lockdir="${file}.d" deadline held now_s
-      deadline=$(( $(date +%s) + 5 ))
-      until mkdir "$lockdir" 2>/dev/null; do
-        now_s=$(date +%s)
-        held=$(stat -c %Y "$lockdir" 2>/dev/null || stat -f %m "$lockdir" 2>/dev/null)
-        # The holder may release between mkdir and stat. GNU stat then fails
-        # the -c form and reads `-f %m` as "filesystem status of a file named
-        # %m", printing a report instead of a number; drop anything
-        # non-numeric and simply retry the mkdir.
-        case "$held" in *[!0-9]*) held="" ;; esac
-        if [ -n "$held" ] && [ $(( now_s - held )) -gt 10 ]; then
-          rmdir "$lockdir" 2>/dev/null
-          continue
+      held=$(stat -c %Y "$lockdir" 2>/dev/null || stat -f %m "$lockdir" 2>/dev/null)
+      # The holder may release between mkdir and stat. GNU stat then fails
+      # the -c form and reads `-f %m` as "filesystem status of a file named
+      # %m", printing a report instead of a number; drop anything
+      # non-numeric and simply retry the mkdir.
+      case "$held" in *[!0-9]*) held="" ;; esac
+      if [ -n "$held" ] && [ $(( now_s - held )) -gt 10 ]; then
+        stale="${lockdir}.stale.$$.$RANDOM"
+        if mv "$lockdir" "$stale" 2>/dev/null; then
+          held=$(stat -c %Y "$stale" 2>/dev/null || stat -f %m "$stale" 2>/dev/null)
+          case "$held" in *[!0-9]*) held="" ;; esac
+          if [ -n "$held" ] && [ $(( now_s - held )) -le 10 ]; then
+            # Moved a live lock: hand it back, unless someone has already
+            # taken the name (then its owner's rmdir on exit cleans up).
+            [ -e "$lockdir" ] || mv "$stale" "$lockdir" 2>/dev/null
+          else
+            # A directory that will not rmdir (it has contents) is left
+            # aside under its stale name rather than deleted blind.
+            rmdir "$stale" 2>/dev/null || rm -f "$stale" 2>/dev/null
+            continue
+          fi
         fi
-        if [ "$now_s" -ge "$deadline" ]; then
-          echo "agentline-agent: registry busy, skipped $op '$label'" >&2
-          exit 0
-        fi
-        sleep 0.1 2>/dev/null || sleep 1
-      done
-      trap 'rmdir "$lockdir" 2>/dev/null' EXIT
-    fi
+      fi
+      sleep 0.1 2>/dev/null || sleep 1
+    done
+    trap 'rmdir "$lockdir" 2>/dev/null' EXIT
 
     local now tmp
     now=$(date +%s)

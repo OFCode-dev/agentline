@@ -44,6 +44,16 @@
   5 s wait now stands in, and a lock directory older than 10 s is cleared
   as abandoned. A write that cannot get the lock is skipped with a note on
   stderr instead of racing.
+- The registry lock can no longer spin forever, and every writer takes the
+  same one. Breaking a stale `mkdir` lock did `rmdir; continue`, skipping the
+  deadline, so a lock that could not be removed (another user's directory in
+  a sticky `/tmp`, a non-empty directory, a file in the way) looped on forks
+  indefinitely, and two waiters could both end up believing they held it.
+  The deadline is now checked first on every pass, and a stale lock is
+  broken by renaming it to a name unique to the waiter, so only one wins; a
+  fresh lock moved by mistake is put back. The lock is also no longer flock
+  on one process and mkdir on another depending on PATH, which let mixed
+  writers skip each other: it is the mkdir lock everywhere.
 - The cache directory is pruned. Every session left `render_<sid>.*` files
   behind forever; once a day, files untouched for 7 days are deleted. The
   daily gate is read with a builtin, so the other renders pay nothing.

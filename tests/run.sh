@@ -380,6 +380,78 @@ prepare minimal "$PAY/minimal.json"
 render "$PAY/minimal.json" 120 CLAUDE_AGENTS_FILE="$T/custom-agents.txt"
 check "reader honours CLAUDE_AGENTS_FILE" grep -q 'relocated' "$T/out"
 
+# --- Registry lock -----------------------------------------------------------
+# Run under a PATH with no flock (macOS has none): every tool the registry
+# needs is linked in, flock is not. A second PATH also replaces mv with one
+# that always fails, which makes a stale lock unbreakable.
+NOFLOCK="$T/noflock"; MVFAIL="$T/mvfail"
+mkdir -p "$NOFLOCK" "$MVFAIL"
+for tool in env date stat mkdir rmdir mv rm awk mktemp chmod wc tail sleep dirname cat sh; do
+  tp=$(command -v "$tool") && ln -s "$tp" "$NOFLOCK/$tool" && ln -s "$tp" "$MVFAIL/$tool"
+done
+rm -f "$MVFAIL/mv"; printf '#!/bin/sh\nexit 1\n' > "$MVFAIL/mv"; chmod +x "$MVFAIL/mv"
+REG="$T/lock/agents.txt"; LOCKD="$REG.d"
+reg() {  # reg <path-dir> <op> <label> -> $T/rerr, $lrc, $lsecs (killed after 20 s)
+  local pathdir="$1" start pid i=0; shift
+  mkdir -p "$T/lock"
+  start=$(date +%s)
+  env -i PATH="$pathdir" CLAUDE_AGENTS_FILE="$REG" "$TEST_BASH" "$AGENT" "$@" 2> "$T/rerr" &
+  pid=$!
+  while kill -0 "$pid" 2>/dev/null && [ "$i" -lt 200 ]; do sleep 0.1; i=$((i + 1)); done
+  if kill -0 "$pid" 2>/dev/null; then kill -9 "$pid" 2>/dev/null; lrc=hung; wait "$pid" 2>/dev/null
+  else wait "$pid"; lrc=$?; fi
+  lsecs=$(( $(date +%s) - start ))
+}
+old_stamp=200001010000
+
+check "lock test PATH has no flock" sh -c "! PATH='$NOFLOCK' command -v flock >/dev/null"
+rm -rf "$T/lock"; mkdir -p "$T/lock"
+for i in 1 2 3 4 5 6 7 8; do
+  env -i PATH="$NOFLOCK" CLAUDE_AGENTS_FILE="$REG" "$TEST_BASH" "$AGENT" add "parallel $i" 2>/dev/null &
+done
+wait
+check "lock: 8 parallel adds all land" [ "$(grep -c 'parallel' "$REG")" = 8 ]
+check "lock: released after use" [ ! -e "$LOCKD" ]
+# One mechanism for every writer: with flock on PATH the same mkdir lock is
+# honoured, so a writer that has flock cannot slip past one that does not.
+mkdir "$LOCKD"
+reg "$PATH_F" add "flock on path"
+check "lock is the same with flock on PATH" grep -q 'registry busy' "$T/rerr"
+rmdir "$LOCKD"
+
+# A live lock is waited on, then the write is skipped — never raced, never hung.
+mkdir "$LOCKD"; cp "$REG" "$T/reg.before"
+reg "$NOFLOCK" add "blocked"
+check "lock held: gives up with exit 0 (got $lrc)" [ "$lrc" = 0 ]
+check "lock held: within the deadline (${lsecs}s)" [ "$lsecs" -le 8 ]
+check "lock held: says skipped" grep -q 'registry busy' "$T/rerr"
+check "lock held: file untouched" cmp -s "$REG" "$T/reg.before"
+check "lock held: live lock left alone" [ -d "$LOCKD" ]
+rmdir "$LOCKD"
+
+# Stale locks that the old `rmdir; continue` could not clear, and spun on
+# forever: a regular file in the way, and a non-empty directory.
+touch "$LOCKD"; touch -t "$old_stamp" "$LOCKD"
+reg "$NOFLOCK" add "after stale file"
+check "stale file lock: add succeeds (got $lrc)" [ "$lrc" = 0 ]
+check "stale file lock: row written" grep -q 'after stale file' "$REG"
+check "stale file lock: cleared" [ ! -e "$LOCKD" ]
+mkdir -p "$LOCKD/junk"; touch -t "$old_stamp" "$LOCKD"
+reg "$NOFLOCK" add "after stale dir"
+check "stale non-empty lock: add succeeds (got $lrc)" [ "$lrc" = 0 ]
+check "stale non-empty lock: row written" grep -q 'after stale dir' "$REG"
+check "stale non-empty lock: set aside, not deleted" sh -c "ls -d '$LOCKD'.stale.* >/dev/null 2>&1"
+rm -rf "$LOCKD" "$LOCKD".stale.*
+
+# A stale lock that cannot be broken (rename refused, as for another user's
+# directory in a sticky /tmp) must still give up at the deadline.
+mkdir "$LOCKD"; touch -t "$old_stamp" "$LOCKD"
+reg "$MVFAIL" add "unbreakable"
+check "unbreakable stale lock: exit 0, not hung (got $lrc)" [ "$lrc" = 0 ]
+check "unbreakable stale lock: within the deadline (${lsecs}s)" [ "$lsecs" -le 8 ]
+check "unbreakable stale lock: says skipped" grep -q 'registry busy' "$T/rerr"
+rm -rf "$LOCKD"
+
 # ===========================================================================
 # 5. install.sh, end to end against a fixture HOME
 # ===========================================================================
