@@ -753,6 +753,10 @@ if [ -n "$cwd" ] && [ -d "$cwd" ]; then
     _h=""
     if [ -e "$_gd/HEAD" ] && [ ! -f "$_gd/HEAD" ]; then
       _h="-"  # not a file: no branch, and no git asked to open it either
+    elif [ -L "$_gd/HEAD" ]; then
+      # A symlinked HEAD (core.preferSymlinkRefs, old git) reads as the
+      # branch file's hash, i.e. detached; git resolves the link itself.
+      _h=""
     elif [ -O "$_gd/HEAD" ]; then
       IFS= read -r -n 1024 _h 2>/dev/null < "$_gd/HEAD"
       [ ${#_h} -ge 1024 ] && _h=""

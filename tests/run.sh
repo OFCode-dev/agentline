@@ -1261,6 +1261,15 @@ EOF
   else
     skip "git: no timeout/gtimeout or mkfifo for the FIFO HEAD tests"
   fi
+  # A symlinked HEAD (core.preferSymlinkRefs) is resolved by git: read as a
+  # file it held the branch's hash, and showed no branch at all.
+  gx init -q "$G/symhead"
+  gx -C "$G/symhead" -c user.name=t -c user.email=t@t commit -q --allow-empty -m x
+  gx -C "$G/symhead" branch -m sym-branch
+  rm -f "$G/symhead/.git/HEAD"; ln -s refs/heads/sym-branch "$G/symhead/.git/HEAD"
+  grender "$G/symhead"
+  check "git [symlinked HEAD]: branch shown" grep -qF 'sym-branch' "$T/got"
+  check "git [symlinked HEAD]: asks git" grep -q 'branch --show-current' "$T/git-calls"
   # A 2 MB HEAD is not shown whole: past the cap, git is asked instead.
   mkdir -p "$G/huge/.git"
   { printf 'ref: refs/heads/'; printf '%02000000d' 0; echo; } > "$G/huge/.git/HEAD"
