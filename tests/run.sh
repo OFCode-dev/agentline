@@ -1054,6 +1054,18 @@ check "wrapped custom: upgraded in place" cmp -s "$ROOT/agentline.sh" "$H/opt/ag
 check "wrapped custom: default location unused" [ ! -e "$H/.claude/agentline/agentline.sh" ]
 check "wrapped custom: settings untouched" cmp -s "$S" "$T/orig.json"
 
+# A command that runs this very checkout (wrapped or not) makes the install
+# target the installer's own source: `cp` onto itself used to fail and abort
+# the install with status 1. The copy is skipped and the checkout untouched.
+for cmdjson in "bash -c \\\"exec $ROOT/agentline.sh | cat\\\"" "bash $ROOT/agentline.sh"; do
+  inst_home self-copy
+  printf '{"statusLine": {"type": "command", "command": "%s", "refreshInterval": 1}}\n' "$cmdjson" > "$S"
+  install_run
+  check "self copy [$cmdjson]: exit 0 (got $irc)" [ "$irc" = 0 ]
+  check "self copy [$cmdjson]: says already current" grep -q 'already current' "$T/iout"
+  check "self copy [$cmdjson]: no backup of the checkout" sh -c "! ls '$ROOT'/agentline.sh.bak-* >/dev/null 2>&1"
+done
+
 # --with-hooks on a settings.json whose "hooks" is not an object is refused
 # up front — before the old code had already copied the script and saved
 # statusLine, then failed with "Nothing was changed".

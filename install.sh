@@ -414,14 +414,23 @@ mkdir -p "$(dirname "$DEST")"
 # cp'd over those edits. The replaced copy is kept whenever it differs from
 # the new one — local edit or simply an older release, cmp cannot tell — and
 # local.sh (see README) is the place for tweaks that survive upgrades.
-if [ -f "$DEST" ] && ! cmp -s "$SCRIPT_DIR/agentline.sh" "$DEST"; then
-  cp -p "$DEST" "$DEST.bak-$STAMP"
-  prune_backups "$DEST"
-  echo "• Previous copy kept as $DEST.bak-$STAMP (restore local edits from it)"
+#
+# The configured script may be the very file this installer ships (a wrapper
+# that runs the clone in place). `cp` onto itself fails ("are the same file")
+# and, under set -e, aborted the install with status 1; there is nothing to
+# copy then, so the copy is skipped.
+if [ "$DEST" -ef "$SCRIPT_DIR/agentline.sh" ]; then
+  echo "• $DEST is this checkout's agentline.sh — already current"
+else
+  if [ -f "$DEST" ] && ! cmp -s "$SCRIPT_DIR/agentline.sh" "$DEST"; then
+    cp -p "$DEST" "$DEST.bak-$STAMP"
+    prune_backups "$DEST"
+    echo "• Previous copy kept as $DEST.bak-$STAMP (restore local edits from it)"
+  fi
+  cp "$SCRIPT_DIR/agentline.sh" "$DEST"
+  chmod +x "$DEST"
+  echo "✓ Installed to $DEST"
 fi
-cp "$SCRIPT_DIR/agentline.sh" "$DEST"
-chmod +x "$DEST"
-echo "✓ Installed to $DEST"
 
 # Machine-local service list. Never overwrite an existing one: it holds this
 # host's unit names and is deliberately not tracked in git. A pre-rename
