@@ -295,6 +295,18 @@ else
   pass
 fi
 
+# Numbers python accepted but bash cannot use: Unicode digits ("٣٠"), an int
+# past a double (OverflowError lost the whole parse), JSON 1e999 (inf) and a
+# window size past 64 bits (`[ -gt ]` failed). Bad fields hide their segment;
+# the huge window still gets the forced 200k warning, decided in python.
+ctx_raw huge-numbers
+check "huge numbers: exit 0 (got $rc)" [ "$rc" = 0 ]
+check "huge numbers: stderr empty" [ ! -s "$T/err" ]
+check "huge numbers: model still parsed" grep -q 'Opus 5' "$T/out"
+check "huge numbers: huge window forces the yellow warning" grep -q "${ESC}\[1;33m⚠️  25%" "$T/out"
+if grep -qE 'S:|W:|💰|⏱️|📥' "$T/out"; then fail "huge numbers: a bad or absurd field leaked a segment"; else pass; fi
+check "huge numbers: a sane field next to them still shows" grep -q '📤 5.0k' "$T/out"
+
 # Terminal-escape injection: the escapes fixture puts literal ESC/BEL/C1 and
 # the backslash forms `printf %b` expands (\033, \e, \x1b, \a) into the
 # session name, model, version, effort, e-mail, branch, remote, MCP names,

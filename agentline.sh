@@ -224,13 +224,26 @@ def g(*keys):
 # complain on stderr for anything else. A number, or a string that is one,
 # passes through unchanged (str(83) and str(83.5) as before); anything else
 # -- a bool, an object, garbage -- becomes '' and the segment disappears.
+# Digits are ASCII only: `\d` also matched "٣٠" (Arabic-Indic 30), which
+# printf rejects ("invalid number", then a red "⚠️ 0%"). A value that does
+# not fit a double is garbage too: math.isfinite() raised OverflowError on
+# an int past ~1e308, which lost the whole parse. str() of an int with more
+# than 4300 digits raises ValueError on Python 3.11+. And a finite but absurd
+# value (1e300 ms, a 300-digit token count) printed as a 300-digit segment
+# or wrapped round in bash arithmetic, so anything from 1e15 up is dropped:
+# no percentage, cost, duration or token count comes near that.
+NUM_MAX = 1e15
 def num(v):
-    if isinstance(v, bool):
+    if isinstance(v, bool) or not isinstance(v, (int, float, str)):
         return ''
-    if isinstance(v, (int, float)):
-        return str(v) if math.isfinite(v) else ''
-    v = str(v)
-    return v if re.fullmatch(r'-?\d+(\.\d+)?', v) else ''
+    try:
+        s = str(v)
+        if isinstance(v, str) and not re.fullmatch(r'-?[0-9]+(\.[0-9]+)?', s):
+            return ''
+        f = float(s)
+        return s if math.isfinite(f) and abs(f) < NUM_MAX else ''
+    except (OverflowError, ValueError):
+        return ''
 
 # The final output goes through `printf %b`, which expands backslash escapes,
 # and the terminal interprets any raw control byte. A session name, model name
@@ -269,10 +282,29 @@ if m:
 else:
     model = disp or mid
 
-# Window size as a plain integer, so the context block can compare it with
-# the `[` builtin instead of forking awk.
-size = num(g('context_window', 'context_window_size'))
-ctx_size = str(int(float(size))) if size else ''
+# Whether to force the context warning, decided here rather than by comparing
+# the window size in bash: `[ -gt ]` fails with "integer expression expected"
+# on a size past 64 bits ("9999999999999999999999999"), and python compares
+# any size. exceeds_200k_tokens is Claude Code's own fixed-threshold flag
+# (input + output of the last response > 200k, whatever the window); only a
+# strict JSON true counts, and only on a window larger than 200k — on a 200k
+# window it just means "about 100%" again.
+#
+# The size is compared here without the 1e15 cap of num(): an absurd window is
+# still larger than 200k.
+def over(v, limit):
+    if isinstance(v, bool) or not isinstance(v, (int, float, str)):
+        return False
+    if isinstance(v, str) and not re.fullmatch(r'-?[0-9]+(\.[0-9]+)?', v):
+        return False
+    try:
+        return float(v) > limit
+    except OverflowError:
+        return v > 0  # an int too large for a double
+    except ValueError:
+        return False
+size = g('context_window', 'context_window_size')
+warn_200k = '1' if d.get('exceeds_200k_tokens') is True and over(size, 200000) else ''
 
 fields = {
     # cwd stays raw: it is a filesystem path (git, the probe-cache key, the
@@ -281,11 +313,7 @@ fields = {
     'model_raw': mid,
     'model': clean(model),
     'used_pct': num(g('context_window', 'used_percentage')),
-    # exceeds_200k_tokens is Claude Code's own fixed-threshold flag (input +
-    # output of the last response > 200k, whatever the window). Only a strict
-    # JSON true counts.
-    'exceeds_200k': '1' if d.get('exceeds_200k_tokens') is True else '',
-    'ctx_size': ctx_size,
+    'warn_200k': warn_200k,
     'payload_err': payload_err,
     'five_hour': num(g('rate_limits', 'five_hour', 'used_percentage')),
     'seven_day': num(g('rate_limits', 'seven_day', 'used_percentage')),
@@ -832,13 +860,13 @@ if [ -n "$used_pct" ]; then
   ctx_tag=""
   if awk -v p="$used_pct" 'BEGIN {exit !(p >= 80)}'; then
     ctx_icon="⚠️ "
-  elif [ -n "$exceeds_200k" ] && [ "${ctx_size:-0}" -gt 200000 ]; then
+  elif [ -n "$warn_200k" ]; then
     # On a 1M-window model 25% is already past 200k tokens — where long-context
     # pricing and quality change — yet the percentage alone reads as harmless.
     # Claude Code's exceeds_200k_tokens flag says so directly, so it forces
     # the warning, in yellow (this branch is below the 80% red), with a tag
-    # saying why. On a 200k window the flag is just "about 100%" again, so it
-    # is ignored there.
+    # saying why. The parser has already ignored it on a 200k window, where
+    # it is just "about 100%" again.
     ctx_icon="⚠️ "
     c="$YELLOW"
     ctx_tag=" ${DIM}>200k${RESET}"

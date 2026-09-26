@@ -21,6 +21,13 @@
   parser's output, so the model and context segments vanished and a
   traceback went to stderr. `"\udc9b"` came out as a raw `0x9B`, the 8-bit
   CSI. The parser now writes its own UTF-8.
+- Numeric fields accept ASCII digits only and stay within sane bounds.
+  `"٣٠"` (Arabic-Indic 30) passed the old `\d` check and reached `printf`,
+  which printed "invalid number" and a red `⚠️ 0%`. An integer past a
+  double raised inside the parser and blanked the whole line 1. A window
+  size past 64 bits broke bash's `[ -gt ]`. Such values, and anything from
+  1e15 up, now hide their segment. The 200k-warning decision is made in the
+  parser, which compares any size.
 - Payload robustness and a truthful context warning. A payload that does not
   decode, or decodes to something other than an object, used to become `{}`:
   the model and context segments vanished with no hint why. It now shows a
