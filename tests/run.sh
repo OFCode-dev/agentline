@@ -428,6 +428,11 @@ printf '{"session_id":"cwd-0002","cwd":"/nonexistent/b\233[32m"}\n' > "$T/cwd2.j
 # A cwd that cleans to nothing used to fall back to the raw value on screen.
 printf '{"session_id":"cwd-0003","cwd":"\233\\u001b\233"}\n' > "$T/cwd3.json"
 for cj in cwd1 cwd2 cwd3; do
+  # Chosen out here, not with a `case` inside the $(...) below: bash 3.2
+  # takes the `)` of a case pattern there for the end of the substitution.
+  if [ "$cj" = cwd1 ]; then want_folder='/nonexistent/a[31m0;x'
+  elif [ "$cj" = cwd2 ]; then want_folder='/nonexistent/b[32m'
+  else want_folder=''; fi
   prepare minimal "$T/$cj.json"
   render "$T/$cj.json" 120
   if msg=$(python3 -c '
@@ -441,7 +446,7 @@ if any(0x80 <= ord(c) <= 0x9f for c in s):
     sys.exit("C1 survived")
 if sys.argv[2] not in s:
     sys.exit("folder missing: %r" % sys.argv[2])
-' "$T/out" "$(case $cj in cwd1) echo '/nonexistent/a[31m0;x' ;; cwd2) echo '/nonexistent/b[32m' ;; esac)" 2>&1); then pass; else fail "$cj: $msg"; fi
+' "$T/out" "$want_folder" 2>&1); then pass; else fail "$cj: $msg"; fi
   check "$cj: exit 0 (got $rc)" [ "$rc" = 0 ]
 done
 
@@ -928,10 +933,12 @@ fi
 # request that carries the fake token to $T/fetches and answers after
 # ?delay=<s> seconds with a canned reply.
 cat > "$T/fakeusage.py" <<'EOF'
-import http.server, json, os, sys, time, urllib.parse
+import http.server, json, os, socketserver, sys, time, urllib.parse
 log, portfile = sys.argv[1], sys.argv[2]
 class H(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
+        with open(log + '.all', 'a') as f:
+            f.write('GET %s auth=%s\n' % (self.path, self.headers.get('Authorization') is not None))
         if self.headers.get('Authorization') == 'Bearer fake-token':
             with open(log, 'a') as f:
                 f.write('fetch\n')
@@ -952,7 +959,13 @@ class H(http.server.BaseHTTPRequestHandler):
         self.send_error(502)
     def log_message(self, *a):
         pass
-srv = http.server.ThreadingHTTPServer(('127.0.0.1', 0), H)
+class S(http.server.ThreadingHTTPServer):
+    # HTTPServer.server_bind calls socket.getfqdn(), a reverse DNS lookup
+    # that stalls for seconds on macOS runners; the port file came too late.
+    def server_bind(self):
+        socketserver.TCPServer.server_bind(self)
+        self.server_name, self.server_port = '127.0.0.1', self.server_address[1]
+srv = S(('127.0.0.1', 0), H)
 with open(portfile + '.tmp', 'w') as f:
     f.write(str(srv.server_address[1]))
 os.rename(portfile + '.tmp', portfile)
@@ -960,10 +973,42 @@ srv.serve_forever()
 EOF
 # Started from a subshell, so it is not a job of this shell: the registry
 # tests below use a bare `wait`, which would otherwise wait on it forever.
-USRV=$( python3 "$T/fakeusage.py" "$T/fetches" "$T/usage-port" > /dev/null 2>&1 < /dev/null & echo $! )
+USRV=$( python3 "$T/fakeusage.py" "$T/fetches" "$T/usage-port" > "$T/fakeusage.err" 2>&1 < /dev/null & echo $! )
 trap 'kill "$USRV" 2>/dev/null; rm -rf "$T"' EXIT
-n=50; while [ "$n" -gt 0 ] && [ ! -s "$T/usage-port" ]; do sleep 0.1; n=$((n - 1)); done
-UURL="http://127.0.0.1:$(cat "$T/usage-port" 2>/dev/null)/usage"
+# The server skips HTTPServer's reverse DNS lookup of its own address, which
+# on macOS runners outlasted the old 5 s wait, and the wait is generous now
+# too (a cold python start on a CI runner can take seconds). Should the
+# server never come up,
+# UURL points at a dead loopback port rather than at nothing: an empty port
+# fails the loopback check, and the fetch would then go to the real endpoint.
+n=300; while [ "$n" -gt 0 ] && [ ! -s "$T/usage-port" ]; do sleep 0.1; n=$((n - 1)); done
+uport=$(cat "$T/usage-port" 2>/dev/null)
+case "$uport" in ''|*[!0-9]*) uport=9 ;; esac
+UURL="http://127.0.0.1:$uport/usage"
+# The harness asks the server itself, so a failure below says whether the
+# server or the fetch is at fault. udiag prints what CI needs to tell.
+uprobe() {
+  python3 -I -c 'import sys, urllib.request as u
+try:
+    print(u.build_opener(u.ProxyHandler({})).open(sys.argv[1], timeout=5).read().decode()[:80])
+except Exception as e:
+    print("probe failed: %r" % e)' "$UURL"
+}
+udiag() {
+  echo "    usage diag: UURL=$UURL server pid=$USRV alive=$(kill -0 "$USRV" 2>/dev/null && echo yes || echo no)"
+  echo "    usage diag: probe: $(uprobe)"
+  echo "    usage diag: server stderr: $(head -c 600 "$T/fakeusage.err" 2>/dev/null)"
+  echo "    usage diag: requests seen: $(tr '\n' ' ' < "$T/fetches.all" 2>/dev/null)"
+  echo "    usage diag: cache=[$(cat "${UCACHE-}" 2>/dev/null)] claim=$([ -e "${UCLAIM-}" ] && echo present || echo none)"
+}
+ucheck() {  # check, plus the usage diagnostics on failure
+  local name="$1"; shift
+  if "$@"; then pass; else fail "$name"; udiag; fi
+}
+case "$(uprobe)" in
+  *weekly_scoped*) pass ;;
+  *) fail "usage: fake /usage server answers"; udiag ;;
+esac
 mkdir -p "$HOME_F/.claude"
 echo '{"claudeAiOauth": {"accessToken": "fake-token"}}' > "$HOME_F/.claude/.credentials.json"
 ukey="$HOME_F/.claude"; UCACHE="$CACHE_DIR/usage.${ukey//[!A-Za-z0-9]/_}"; UCLAIM="$UCACHE.claim"
@@ -987,14 +1032,14 @@ urender() {  # urender [delay] [VAR=val...]
 prepare minimal "$p"; rm -f "$UCLAIM" "$T/fetches"
 printf 37 > "$UCACHE"; age_file "$UCACHE" 310
 urender 2
-check "usage: stale figure shown during the refresh" grep -q 'F:37%' "$T/out"
-check "usage: render did not wait for the fetch" cache_is 37
-check "usage: claim recorded in its own file" [ -f "$UCLAIM" ]
-check "usage: detached fetch lands after the render" wait_for 8 cache_is 63
-check "usage: claim dropped after the fetch" wait_for 2 [ ! -e "$UCLAIM" ]
+ucheck "usage:stale figure shown during the refresh" grep -q 'F:37%' "$T/out"
+ucheck "usage:render did not wait for the fetch" cache_is 37
+ucheck "usage:claim recorded in its own file" [ -f "$UCLAIM" ]
+ucheck "usage:detached fetch lands after the render" wait_for 8 cache_is 63
+ucheck "usage:claim dropped after the fetch" wait_for 2 [ ! -e "$UCLAIM" ]
 prepare minimal "$p"
 urender
-check "usage: fresh result rendered" grep -q 'F:63%' "$T/out"
+ucheck "usage:fresh result rendered" grep -q 'F:63%' "$T/out"
 
 # The URL override is honoured for loopback only: the request carries the
 # OAuth token. Both proxies point at the fake server, so an honoured
@@ -1004,15 +1049,15 @@ prepare minimal "$p"; rm -f "$UCLAIM" "$T/fetches" "$T/fetches.connect"
 printf 37 > "$UCACHE"; age_file "$UCACHE" 310
 render "$p" 120 AGENTLINE_USAGE_API=1 AGENTLINE_USAGE_URL="http://usage.example/usage" \
   http_proxy="${UURL%/usage}" https_proxy="${UURL%/usage}"
-check "usage: non-loopback override refused" wait_for 8 grep -qs '^api.anthropic.com:443$' "$T/fetches.connect"
-check "usage: token not sent to a non-loopback override" [ ! -e "$T/fetches" ]
+ucheck "usage:non-loopback override refused" wait_for 8 grep -qs '^api.anthropic.com:443$' "$T/fetches.connect"
+ucheck "usage:token not sent to a non-loopback override" [ ! -e "$T/fetches" ]
 wait_for 5 [ ! -e "$UCLAIM" ]
 # The loopback override is plain http and goes direct, never through a proxy
 # (one would see the token in the clear): a dead proxy does not stop it.
 prepare minimal "$p"; rm -f "$UCLAIM" "$T/fetches"
 printf 37 > "$UCACHE"; age_file "$UCACHE" 310
 urender 0 http_proxy=http://127.0.0.1:9 HTTP_PROXY=http://127.0.0.1:9
-check "usage: loopback override bypasses http_proxy" wait_for 8 cache_is 63
+ucheck "usage:loopback override bypasses http_proxy" wait_for 8 cache_is 63
 wait_for 5 [ ! -e "$UCLAIM" ]
 
 # A live claim (another session is fetching) serves the old value and
@@ -1021,14 +1066,14 @@ prepare minimal "$p"
 printf 41 > "$UCACHE"; age_file "$UCACHE" 310
 date +%s > "$UCLAIM"
 urender
-check "usage: live claim serves the old value" grep -q 'F:41%' "$T/out"
+ucheck "usage:live claim serves the old value" grep -q 'F:41%' "$T/out"
 sleep 1
-check "usage: live claim starts no second fetch" cache_is 41
+ucheck "usage:live claim starts no second fetch" cache_is 41
 # An abandoned claim (render killed before it could fetch) ages out.
 echo $(( $(date +%s) - 60 )) > "$UCLAIM"
 prepare minimal "$p"
 urender
-check "usage: abandoned claim is retaken" wait_for 8 cache_is 63
+ucheck "usage:abandoned claim is retaken" wait_for 8 cache_is 63
 
 # A result that cannot be written keeps its claim, so the renders after it
 # do not each fetch again (8 fetches in 8 renders before the fix). The cache
@@ -1042,18 +1087,18 @@ for i in 1 2 3 4 5; do
   [ "$i" = 1 ] && wait_for 5 [ -s "$T/fetches" ]
 done
 sleep 1
-check "usage: failed cache write, one fetch not $(wc -l < "$T/fetches" 2>/dev/null | tr -d ' ')" \
-  [ "$(wc -l < "$T/fetches" 2>/dev/null | tr -d ' ')" = 1 ]
-check "usage: failed cache write keeps the claim" [ -f "$UCLAIM" ]
-check "usage: failed cache write leaves no temp file" sh -c "! ls '$UCACHE'.[0-9]* >/dev/null 2>&1"
+n_fetch=$(cat "$T/fetches" 2>/dev/null | wc -l | tr -d ' ')
+ucheck "usage: failed cache write, one fetch not $n_fetch" [ "$n_fetch" = 1 ]
+ucheck "usage:failed cache write keeps the claim" [ -f "$UCLAIM" ]
+ucheck "usage:failed cache write leaves no temp file" sh -c "! ls '$UCACHE'.[0-9]* >/dev/null 2>&1"
 rm -rf "$UCACHE"
 # A claim that cannot be written starts no fetch at all.
 rm -f "$UCLAIM" "$T/fetches"; mkdir "$UCLAIM"
 prepare minimal "$p"
 urender
 sleep 1
-check "usage: unwritable claim starts no fetch" [ ! -e "$T/fetches" ]
-check "usage: unwritable claim, stderr quiet" [ ! -s "$T/err" ]
+ucheck "usage:unwritable claim starts no fetch" [ ! -e "$T/fetches" ]
+ucheck "usage:unwritable claim, stderr quiet" [ ! -s "$T/err" ]
 rmdir "$UCLAIM"
 
 # Past TTL + 60 s grace an unconfirmed figure is hidden.
@@ -1061,7 +1106,7 @@ prepare minimal "$p"
 printf 55 > "$UCACHE"; age_file "$UCACHE" 420
 date +%s > "$UCLAIM"
 urender
-check "usage: figure past the grace is hidden" sh -c "! grep -q 'F:' '$T/out'"
+ucheck "usage:figure past the grace is hidden" sh -c "! grep -q 'F:' '$T/out'"
 
 # Claude Code cancels an in-flight render; killing the render's whole
 # process group must not abort the fetch (it runs in its own session).
@@ -1075,7 +1120,7 @@ if command -v setsid >/dev/null 2>&1; then
   rpid=$!
   wait "$rpid"
   kill -TERM -- "-$rpid" 2>/dev/null
-  check "usage: fetch survives a kill of the render's process group" wait_for 8 cache_is 63
+  ucheck "usage:fetch survives a kill of the render's process group" wait_for 8 cache_is 63
 else
   skip "usage: process-group kill: setsid not installed"
 fi
