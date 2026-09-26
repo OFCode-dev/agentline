@@ -101,6 +101,11 @@
   config line with an invalid unit name makes systemd abort the batch, so
   only then is each unit asked on its own. A systemd that does not answer
   within 2 s is cut off, and the panel stays empty until the next probe.
+  A name with `*`, `?` or `[` is skipped, as `systemctl cat` refused it
+  before. `show` would expand it and move the states onto the wrong
+  labels. A template such as `getty@.service` is not asked about, because
+  `show` rejects it and that re-asked every unit on every probe. It shows
+  ✗ as before, now even when the template is not installed.
   The dev-server list is labelled by the `ss`/`lsof` awk itself, which
   replaces a `python3` and a `sed`.
 - A hung git can no longer stall the status line. The branch is read from

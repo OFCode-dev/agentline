@@ -1168,6 +1168,19 @@ printf 'web:Web\nbad name:Bad\ndb:DB\n' > "$T/svc.conf"
 hrender "$T/svc.conf" AGENTLINE_LAYOUT=services
 check "services: invalid name re-asked per unit (got $(n_calls) calls)" [ "$(n_calls)" = 4 ]
 check "services: invalid name skipped, the rest shown" grep -qxF '🛡️ Web ✓ · DB ✗' "$T/got"
+# Globs never reach systemctl (show would expand them and shift the states
+# onto the wrong labels), and a template shows ✗ without being asked (show
+# rejects it as a bad name, which re-asked every unit on every probe).
+printf 'web:Web\nssh*:Glob\nno?match:Q\nx[ab]:B\ngetty@.service:Getty\ndb:DB\n' > "$T/svc.conf"
+hrender "$T/svc.conf" AGENTLINE_LAYOUT=services
+check "services: globs skipped, template shown failed" grep -qxF '🛡️ Web ✓ · Getty ✗ · DB ✗' "$T/got"
+check "services: one systemctl call (got $(n_calls))" [ "$(n_calls)" = 1 ]
+if grep -qE '[*?[]|@\.' "$T/systemctl-calls"; then fail "services: a glob or template was asked: $(cat "$T/systemctl-calls")"; else pass; fi
+# A config of templates alone asks nothing.
+printf 'getty@.service:Getty\n' > "$T/svc.conf"
+hrender "$T/svc.conf" AGENTLINE_LAYOUT=services
+check "services: templates only, no systemctl call (got $(n_calls))" [ "$(n_calls)" = 0 ]
+check "services: templates only, still shown" grep -qxF '🛡️ Getty ✗' "$T/got"
 # A systemd that does not answer is cut off, not waited for.
 if command -v timeout >/dev/null 2>&1 || command -v gtimeout >/dev/null 2>&1; then
   printf 'web:Web\nslow:Slow\n' > "$T/svc.conf"

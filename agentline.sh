@@ -950,43 +950,63 @@ _svc_state() {  # _svc_state <systemctl show output> -> _svc_load[], _svc_act[]
 }
 # systemd is Linux-only. On macOS the panel stays empty and line 4 degrades cleanly.
 if command -v systemctl >/dev/null 2>&1 && [ -r "$SVC_CONFIG" ]; then
-  _svc_units=(); _svc_labels=()
+  # Two kinds of name never reach `show`. A glob (* ? [) is skipped, as
+  # `systemctl cat` refused one: `show` expands it, so "ssh*" answered for
+  # whatever it matched (or for nothing), and the blocks no longer lined up
+  # with the labels. A template ("getty@.service") is no unit systemd can
+  # report on — `show` rejects it as a bad name and so forced the per-unit
+  # re-ask on every probe — but `cat` accepted it and `is-active` failed
+  # it, so it showed ✗; it still does, without asking (unlike `cat`, even
+  # when the template is not installed here). _svc_q holds the asked units,
+  # _svc_tmpl[i] marks a template entry.
+  _svc_units=(); _svc_labels=(); _svc_tmpl=(); _svc_q=()
   while IFS=: read -r svc label; do
-    case "$svc" in ''|\#*) continue ;; esac
+    case "$svc" in ''|\#*|*[*?[]*) continue ;; esac
     [ -z "$label" ] && label="$svc"
     # The label sits between real escapes, so it is cleaned here rather
     # than with the other host strings below ($svc_panel keeps its colours).
     label="${label//[[:cntrl:]]/}"; label="${label//\\/}"
     label="${label//${_C1_LEAD}[${_C1_LO}-${_C1_HI}]/}"
+    case "$svc" in
+      *@.*) _svc_tmpl[${#_svc_units[@]}]=1 ;;
+      *) _svc_q[${#_svc_q[@]}]="$svc" ;;
+    esac
     _svc_units[${#_svc_units[@]}]="$svc"
     _svc_labels[${#_svc_labels[@]}]="$label"
   done < "$SVC_CONFIG"
-  if [ ${#_svc_units[@]} -gt 0 ]; then
-    _svc_out=$(_run_to 2 systemctl show -p LoadState,ActiveState -- "${_svc_units[@]}" 2>/dev/null)
+  _svc_load=(); _svc_act=()
+  if [ ${#_svc_q[@]} -gt 0 ]; then
+    _svc_out=$(_run_to 2 systemctl show -p LoadState,ActiveState -- "${_svc_q[@]}" 2>/dev/null)
     _svc_rc=$?
     _svc_state "$_svc_out"
-    if [ "$_svc_rc" != 124 ] && [ ${#_svc_load[@]} != ${#_svc_units[@]} ]; then
+    if [ "$_svc_rc" != 124 ] && [ ${#_svc_load[@]} != ${#_svc_q[@]} ]; then
       _svc_l=(); _svc_a=()
-      for (( _i = 0; _i < ${#_svc_units[@]}; _i++ )); do
-        _svc_state "$(_run_to 1 systemctl show -p LoadState,ActiveState -- "${_svc_units[$_i]}" 2>/dev/null)"
+      for (( _i = 0; _i < ${#_svc_q[@]}; _i++ )); do
+        _svc_state "$(_run_to 1 systemctl show -p LoadState,ActiveState -- "${_svc_q[$_i]}" 2>/dev/null)"
         _svc_l[$_i]="${_svc_load[0]}"; _svc_a[$_i]="${_svc_act[0]}"
       done
       _svc_load=(); _svc_act=()
-      for (( _i = 0; _i < ${#_svc_units[@]}; _i++ )); do
+      for (( _i = 0; _i < ${#_svc_q[@]}; _i++ )); do
         _svc_load[$_i]="${_svc_l[$_i]}"; _svc_act[$_i]="${_svc_a[$_i]}"
       done
     fi
-    for (( _i = 0; _i < ${#_svc_units[@]}; _i++ )); do
-      # No answer (invalid name, timeout) or not defined here: skip it.
-      case "${_svc_load[$_i]}" in ''|not-found) continue ;; esac
-      label="${_svc_labels[$_i]}"
-      case "${_svc_act[$_i]}" in
-        active|reloading|refreshing) entry="\033[2m${label} ✓\033[0m" ;;
-        *) entry="\033[1;31m${label} ✗\033[0m" ;;
-      esac
-      svc_panel="${svc_panel:+${svc_panel} \033[2m·\033[0m }${entry}"
-    done
   fi
+  _j=0  # index into the asked units' answers
+  for (( _i = 0; _i < ${#_svc_units[@]}; _i++ )); do
+    label="${_svc_labels[$_i]}"
+    if [ -n "${_svc_tmpl[$_i]}" ]; then
+      _sl=loaded; _sa=template
+    else
+      _sl="${_svc_load[$_j]}"; _sa="${_svc_act[$_j]}"; _j=$(( _j + 1 ))
+    fi
+    # No answer (invalid name, timeout) or not defined here: skip it.
+    case "$_sl" in ''|not-found) continue ;; esac
+    case "$_sa" in
+      active|reloading|refreshing) entry="\033[2m${label} ✓\033[0m" ;;
+      *) entry="\033[1;31m${label} ✗\033[0m" ;;
+    esac
+    svc_panel="${svc_panel:+${svc_panel} \033[2m·\033[0m }${entry}"
+  done
 fi
 
 fi  # end of throttled host probes (part 2)
