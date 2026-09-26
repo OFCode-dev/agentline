@@ -854,23 +854,19 @@ fast_icon=""
 
 # === Model Color ===
 model_color="$CYAN"
+# Truecolor amber→orange gradient across the model name. It is coloured per
+# character, which bash cannot do reliably: under C/POSIX (common on servers)
+# ${s:i:1} is a byte, and slicing "✦" put escapes between its three bytes. So
+# the name is only marked here and the layout pass, a python3 that runs on
+# every full render anyway, paints it (see gradient() there). This used to be
+# a python3 of its own — ~20 ms of interpreter start on each render of a
+# Fable session. The markers carry \x02 like the placeholders above, so no
+# cleaned payload string can open or close one.
+GRAD_OPEN="@@${_AL_TOK}AGENTLINE_GRAD@@"
+GRAD_CLOSE="@@${_AL_TOK}AGENTLINE_GRAD_END@@"
 case "$model_raw" in
   claude-fable*|claude-mythos*)
-    # Truecolor amber→orange gradient across the model name
-    IFS= read -r -d '' _AL_PY <<'PYEOF'
-import sys
-s = sys.argv[1]
-start, end = (255, 215, 90), (255, 125, 25)
-n = max(len(s) - 1, 1)
-out = []
-for i, ch in enumerate(s):
-    r = int(start[0] + (end[0]-start[0]) * i / n)
-    g = int(start[1] + (end[1]-start[1]) * i / n)
-    b = int(start[2] + (end[2]-start[2]) * i / n)
-    out.append(f'\033[1;38;2;{r};{g};{b}m{ch}')
-print(''.join(out))
-PYEOF
-    model=$(python3 -c "$_AL_PY" "✦ ${model}")
+    model="${GRAD_OPEN}✦ ${model}${GRAD_CLOSE}"
     model_color="" ;;
   claude-opus*)  model_color="$MAGENTA" ;;
   claude-sonnet*) model_color="$CYAN" ;;
@@ -1176,6 +1172,17 @@ except:
   _clean account_email
 fi
 
+# The mask keeps the first and last character of the local part and of the
+# domain label before the TLD: octocat@example.com -> o*****t@e*****e.com. It
+# is the regex below, ^(.)(.*)(.)@(.)(.*)(.)(\..+)$, done with parameter
+# expansion for the common case — a python3 start (~20 ms) on every full
+# render used to be spent on it. The greedy groups are walked the same way
+# the regex backtracks: the last "@" that leaves a valid domain, then the
+# last "." in that domain with two characters before it and one after.
+# Parameter expansion counts bytes under C/POSIX and characters under UTF-8,
+# so it is only trusted with an address spelled from an explicit ASCII list
+# (no ranges: bash 3.2 matches [a-z] by collation order, which admits
+# accented letters); anything else still goes to the python3 original.
 IFS= read -r -d '' _AL_PY <<'PYEOF'
 import re, sys
 email = sys.argv[1]
@@ -1193,7 +1200,35 @@ if m:
 else:
     print(email)
 PYEOF
-masked_email=$(python3 -c "$_AL_PY" "$account_email")
+_mask_email() {  # _mask_email <address> -> $masked_email
+  local e="$1" head loc dom dhead pre post s1 s2
+  masked_email="$e"
+  case "$e" in
+    '') return ;;
+    *[!abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789@._+-]*)
+      masked_email=$(python3 -c "$_AL_PY" "$e"); return ;;
+  esac
+  head="$e"
+  while :; do
+    case "$head" in *@*) ;; *) return ;; esac
+    loc="${head%@*}"; dom="${e:$(( ${#loc} + 1 ))}"; head="$loc"
+    # Every earlier "@" leaves a shorter local part, so none can reach two.
+    [ ${#loc} -ge 2 ] || return
+    dhead="$dom"
+    while :; do
+      case "$dhead" in *.*) ;; *) break ;; esac
+      pre="${dhead%.*}"; post="${dom:${#pre}}"; dhead="$pre"
+      [ ${#pre} -ge 2 ] || break
+      if [ ${#post} -ge 2 ]; then
+        printf -v s1 '%*s' $(( ${#loc} - 2 )) ''
+        printf -v s2 '%*s' $(( ${#pre} - 2 )) ''
+        masked_email="${loc:0:1}${s1// /*}${loc:$(( ${#loc} - 1 ))}@${pre:0:1}${s2// /*}${pre:$(( ${#pre} - 1 ))}${post}"
+        return
+      fi
+    done
+  done
+}
+_mask_email "$account_email"
 [ -n "$masked_email" ] && _seg email "🤖 ${DIM}${masked_email}${RESET}"
 _seg date "${DIM}${date_str}${RESET}"
 _seg clock "${CYAN}${time_str}${RESET}"
@@ -1287,14 +1322,29 @@ import os, re, sys, unicodedata
 width, sep, segs, layout, default_layout = max(1, int(sys.argv[1])), sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5]
 fitting, drop_spec = sys.argv[6] == '1', sys.argv[7]
 placeholders = dict(zip(sys.argv[8:11], ('00:00:00', 'max', 'ultracode')))
+grad_re = re.compile(re.escape(sys.argv[11]) + '(.*?)' + re.escape(sys.argv[12]), re.S)
 KEEP = ('warn', 'model', 'ctx', '5h', 'week')
 drop = [n for n in re.split(r'[\s,]+', drop_spec) if n and n not in KEEP]
+
+# The Fable/Mythos model name arrives between GRAD_OPEN/GRAD_CLOSE markers
+# and is painted here, one truecolor step per character, amber to orange.
+def gradient(m):
+    s = m.group(1)
+    start, end = (255, 215, 90), (255, 125, 25)
+    n = max(len(s) - 1, 1)
+    out = []
+    for i, ch in enumerate(s):
+        r = int(start[0] + (end[0]-start[0]) * i / n)
+        g = int(start[1] + (end[1]-start[1]) * i / n)
+        b = int(start[2] + (end[2]-start[2]) * i / n)
+        out.append(f'\033[1;38;2;{r};{g};{b}m{ch}')
+    return ''.join(out)
 
 seg = {}
 for rec in segs.split('\x1e'):
     name, _, text = rec.partition('\x1f')
     if text and name not in seg:
-        seg[name] = text
+        seg[name] = grad_re.sub(gradient, text)
 
 def parse(spec):
     # "/" starts a line, "," separates names; unknown names and repeats are
@@ -1378,7 +1428,7 @@ sys.stdout.buffer.write(os.fsencode('\\n'.join(rows)))
 PYEOF
 out=$(python3 -c "$_AL_PY" "$STATUSLINE_WIDTH" "$P" "$SEGS" "${AGENTLINE_LAYOUT:-$AGENTLINE_LAYOUT_DEFAULT}" \
   "$AGENTLINE_LAYOUT_DEFAULT" "$_fit" "${AGENTLINE_DROP-$AGENTLINE_DROP_DEFAULT}" \
-  "$CLOCK_TOKEN" "$ANIM_MAX_TOKEN" "$ANIM_ULTRA_TOKEN")
+  "$CLOCK_TOKEN" "$ANIM_MAX_TOKEN" "$ANIM_ULTRA_TOKEN" "$GRAD_OPEN" "$GRAD_CLOSE")
 
 # Prune the cache directory. Every session leaves render_<sid>.* files behind
 # and nothing else ever removes them, so a long-lived host collects thousands.

@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- A render that misses the render cache starts two `python3` instead of
+  three, or four for a Fable/Mythos model. That is the render an active turn
+  pays about once a second, and each `python3` start costs ~20 ms of CPU.
+  The e-mail mask is now bash parameter expansion. It walks the same greedy
+  match as the regex it replaces, and non-ASCII addresses still go to
+  `python3`. The Fable gradient is painted by the layout pass, which runs on
+  every full render anyway. The output is byte for byte what it was.
 - One string now chooses the layout. `AGENTLINE_LAYOUT` lists segment
   names: `/` starts a line, `,` separates names, and a name left out is
   hidden. The default reproduces the four lines exactly. Before, the only

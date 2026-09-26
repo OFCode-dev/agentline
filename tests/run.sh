@@ -662,7 +662,55 @@ check "layout: changed AGENTLINE_LAYOUT bypasses the cache" grep -q 'Opus 5' "$T
 rm -f "$(cbase "$sid")".*
 
 # ===========================================================================
-# 3b. Opt-in /usage fetch: claim file, detached refresh
+# 3b. Fork budget: python3 boots per render, the bash e-mail mask, gradient
+# ===========================================================================
+# A python3 start is ~20 ms, the largest fixed cost of a full render. With the
+# probe cache fresh, a render boots exactly two: the payload parser and the
+# layout pass. The e-mail mask is bash, and the Fable gradient is painted by
+# the layout pass. A logging shim ahead of the real python3 counts the boots.
+REAL_PY=$(command -v python3)
+PYSHIM="$T/pyshim"; mkdir -p "$PYSHIM"
+cat > "$PYSHIM/python3" <<EOF
+#!/bin/sh
+echo x >> "$T/py-boots"
+exec "$REAL_PY" "\$@"
+EOF
+chmod +x "$PYSHIM/python3"
+for fx in full fable-max; do
+  fill "$FIX/payloads/$fx.json" "$PAY/$fx.json"
+  prepare "$fx" "$PAY/$fx.json"; rm -f "$T/py-boots"
+  render "$PAY/$fx.json" 120 PATH="$PYSHIM:$PATH_F"
+  boots=$(wc -l < "$T/py-boots" 2>/dev/null | tr -d ' ')
+  check "fork budget: $fx render boots 2 python3 (got ${boots:-0})" [ "${boots:-0}" = 2 ]
+done
+
+# The gradient comes out of the layout pass exactly as the old helper drew it.
+grad_want=$(python3 -c '
+s = "✦ Fable 5.1"; a, b = (255, 215, 90), (255, 125, 25); n = max(len(s) - 1, 1)
+print("".join("\033[1;38;2;%d;%d;%dm%s" % tuple([int(a[k] + (b[k] - a[k]) * i / n) for k in range(3)] + [c]) for i, c in enumerate(s)))')
+prepare fable-max "$PAY/fable-max.json"; render "$PAY/fable-max.json" 120
+check "fork budget: Fable gradient painted by the layout pass" grep -qF "$grad_want" "$T/out"
+if grep -q 'AGENTLINE_GRAD' "$T/out"; then fail "fork budget: gradient marker leaked"; else pass; fi
+
+# The bash mask is the regex it replaced, case for case, including the ones
+# that only the regex backtracking decides (several "@", trailing dots) and
+# the non-ASCII addresses it hands back to python3.
+for addr in octocat@example.com a@b.c ab@cd.e ab@cd.ef x.y@sub.example.co.uk ab@c.d@e ab@@cd.ef \
+            ab@cd. @ab.cd ab@.cd ab@cd.ef@gh.ij a-b_c+d@x-y.z9 abc ab@c.d.e. ab@cd.. ab@cd.e.f \
+            "o'brien@ex.com" 'şule@örnek.com.tr' 'ab*x@cd.ef'; do
+  want=$(python3 -c '
+import re, sys
+e = sys.argv[1]
+m = re.match(r"^(.)(.*)(.)(@)(.)(.*)(.)(\..+)$", e)
+print(m and "".join([m[1], "*" * len(m[2]), m[3], m[4], m[5], "*" * len(m[6]), m[7], m[8]]) or e)' "$addr")
+  printf '{"session_id":"mask-0001","cwd":"%s","account":{"email":"%s"}}\n' "$WORK" "$addr" > "$T/mask.json"
+  prepare minimal "$T/mask.json"
+  render "$T/mask.json" 120 AGENTLINE_LAYOUT=email; normalize "$T/out" "$T/got"
+  check "e-mail mask: $addr -> $want" grep -qxF "🤖 $want" "$T/got"
+done
+
+# ===========================================================================
+# 3c. Opt-in /usage fetch: claim file, detached refresh
 # ===========================================================================
 # No network: fake credentials plus a sitecustomize that replaces urlopen
 # with a canned /usage reply after FAKE_USAGE_DELAY seconds. It patches only
