@@ -302,8 +302,22 @@ fi
 # escapes allowed are the script's own SGR colour codes; nothing else from
 # C0/DEL/C1 may survive, and no backslash may be left for %b to act on. The
 # tainted segments must still render (cleaned), not vanish.
-ctx_raw escapes
-check "escapes: exit 0 (got $rc)" [ "$rc" = 0 ]
+# Run under C (the harness default, and common on servers, where bash's
+# [[:cntrl:]] does not cover C1) and under a UTF-8 locale, when one exists.
+# An agent label with UTF-8 encoded C1 is added to the fixture's registry.
+UTF8_LOCALE=""
+for loc in C.UTF-8 C.utf8 en_US.UTF-8 en_US.utf8; do
+  if [ "$(LC_ALL=$loc "$TEST_BASH" -c 'x=ş; echo ${#x}' 2>/dev/null)" = 1 ]; then UTF8_LOCALE=$loc; break; fi
+done
+esc_locales="C"
+if [ -n "$UTF8_LOCALE" ]; then esc_locales="C $UTF8_LOCALE"; else skip "escapes: no UTF-8 locale installed"; fi
+for loc in $esc_locales; do
+fill "$FIX/payloads/escapes.json" "$PAY/escapes.json"
+prepare escapes "$PAY/escapes.json"
+printf '%s agent\302\2332J-\302\235x\n' "$(date +%s)" >> "$SIDE/claude_agents.txt"
+render "$PAY/escapes.json" 120 LC_ALL="$loc"
+check "escapes [$loc]: exit 0 (got $rc)" [ "$rc" = 0 ]
+check "escapes [$loc]: stderr empty" [ ! -s "$T/err" ]
 if msg=$(python3 - "$T/out" <<'PYEOF' 2>&1
 import re, sys
 s = open(sys.argv[1], 'rb').read().decode('utf-8')
@@ -313,12 +327,13 @@ if bad:
     sys.exit('control characters survived: %s' % ', '.join(bad))
 if '\\' in rest:
     sys.exit('backslash survived')
-for want in ('feat/]0;pwned-title-xe[5m', 'own033[2Jer/reepo@', 'Evil[41m e[7mModel',
-             'evil[2Jmcp', 'node033[31m(3000)', 'claude --resume esc-0001'):
+for want in ('feat/]0;pwned-title-xe[5m31m-şğÇ🚀©', 'own033[2Jer/reepo@', 'Evil[41m e[7mModel',
+             'evil[2J2Jmcp', 'node033[31m(3000)', 'agent2J-x', 'claude --resume esc-0001'):
     if want not in rest:
         sys.exit('segment missing: %r' % want)
 PYEOF
-); then pass; else fail "escapes: $msg"; fi
+); then pass; else fail "escapes [$loc]: $msg"; fi
+done
 
 # ===========================================================================
 # 3. Render-cache fast path

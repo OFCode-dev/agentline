@@ -11,7 +11,12 @@
   control characters (C0, DEL, C1) and backslashes before it is displayed.
   Payload strings are cleaned in the parser, host strings with fork-free
   parameter expansion. The text itself still shows, cleaned. Paths used for
-  lookups (cwd, session id, transcript) stay raw.
+  lookups (cwd, session id, transcript) stay raw. UTF-8 encoded C1 controls
+  (U+009B CSI is the bytes `C2 9B`) are stripped byte by byte as well. Under
+  a C/POSIX locale or an unset `LANG` (common on servers) bash's
+  `[[:cntrl:]]` does not match them, yet git allows them in a branch name
+  and xterm-class terminals act on them. Other text is untouched: Turkish
+  letters, emoji and `©` survive in every locale.
 - Payload robustness and a truthful context warning. A payload that does not
   decode, or decodes to something other than an object, used to become `{}`:
   the model and context segments vanished with no hint why. It now shows a

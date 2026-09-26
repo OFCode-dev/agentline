@@ -28,6 +28,12 @@ input=$(cat)
 CLOCK_TOKEN='@@AGENTLINE_CLOCK@@'
 CACHE_TTL="${AGENTLINE_CACHE_TTL:-5}"
 
+# The UTF-8 encoding of a C1 control (U+0080-U+009F) is the byte C2 followed
+# by 80-9F. Spelled as byte variables once here so the display sanitizer
+# (see "Display sanitization") can strip it in any locale, with a plain
+# pattern that needs no $'...' inside ${...} (extquote) on bash 3.2.
+_C1_LEAD=$'\xc2'; _C1_LO=$'\x80'; _C1_HI=$'\x9f'
+
 # Display timezone: system-local by default. Set $AGENTLINE_TZ (for example
 # "Europe/Istanbul") to pin the clock to home time on remote UTC servers.
 # Resolved before the fast path so cached ticks honour it too.
@@ -545,6 +551,7 @@ if command -v systemctl >/dev/null 2>&1 && [ -r "$SVC_CONFIG" ]; then
     # The label sits between real escapes, so it is cleaned here rather
     # than with the other host strings below ($svc_panel keeps its colours).
     label="${label//[[:cntrl:]]/}"; label="${label//\\/}"
+    label="${label//${_C1_LEAD}[${_C1_LO}-${_C1_HI}]/}"
     # Skip services not defined on this machine (portability)
     systemctl cat "$svc" >/dev/null 2>&1 || continue
     if systemctl is-active --quiet "$svc" 2>/dev/null; then
@@ -582,10 +589,20 @@ fi
 # cleaned in the parser; these are cleaned here, after the probe cache is
 # loaded, so values read back from a cache written by an older release are
 # covered too. [[:cntrl:]] is C0 + DEL, and under a UTF-8 locale also the
-# C1 range. Pure parameter expansion: no fork, and this is the slow path.
+# C1 range — but only there: under C/POSIX or an unset LANG (common on
+# servers, and what the test suite runs) a UTF-8 encoded C1 such as U+009B
+# CSI (bytes C2 9B) is two ordinary bytes to bash and survived, although
+# xterm-class terminals act on it (and git allows it in a branch name). So
+# C2 80..C2 9F is also stripped byte-wise, which matches in every locale and
+# cannot touch any other character: C2 is only ever a lead byte, and C2 A0+
+# (NBSP, ©, …) is outside the range. A raw lone 0x80-0x9F byte is left: it
+# cannot be told from a continuation byte (ş is C5 9F, 🚀 F0 9F 9A 80)
+# without decoding, and a UTF-8 terminal does not treat it as C1 anyway.
+# Pure parameter expansion: no fork, and this is the slow path.
 _clean() {  # _clean <varname> -- strip control characters and backslashes
   local v="${!1}"
   v="${v//[[:cntrl:]]/}"
+  v="${v//${_C1_LEAD}[${_C1_LO}-${_C1_HI}]/}"
   v="${v//\\/}"
   printf -v "$1" '%s' "$v"
 }
