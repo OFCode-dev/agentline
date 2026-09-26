@@ -211,7 +211,7 @@ PYEOF
 # ===========================================================================
 # 1. Syntax
 # ===========================================================================
-for f in "$ROOT/agentline.sh" "$ROOT/install.sh" "$ROOT"/hooks/*.sh "$TESTS/run.sh"; do
+for f in "$ROOT/agentline.sh" "$ROOT/install.sh" "$ROOT"/hooks/*.sh "$TESTS/run.sh" "$ROOT"/bench/*.sh; do
   check "bash -n ${f#"$ROOT"/}" "$TEST_BASH" -n "$f"
 done
 # bash 3.2 (macOS /bin/bash) parses a heredoc body nested inside `$(...)` as

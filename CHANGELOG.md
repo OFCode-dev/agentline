@@ -26,6 +26,14 @@
   repositories and under `$GIT_DIR`. It and the origin-URL lookup now run
   with `--no-optional-locks` (never touching the index lock) under a 1 s
   timeout (`timeout`, or `gtimeout` on macOS with coreutils).
+- `bench/bench.sh` measures CPU per call over 100 calls on each render path:
+  the cached tick, a payload change with fresh probes (Opus and Fable), and
+  a cold probe. It uses the shell's own `time`, so it needs no GNU
+  `/usr/bin/time`. Where `strace` exists it also counts the programs each
+  path execs, and it checks that a tick needs no program with an empty
+  `PATH`. The README's new Performance section publishes the numbers,
+  including the honest floor: two `python3` starts at ~20 ms each per full
+  render.
 - One string now chooses the layout. `AGENTLINE_LAYOUT` lists segment
   names: `/` starts a line, `,` separates names, and a name left out is
   hidden. The default reproduces the four lines exactly. Before, the only

@@ -259,9 +259,22 @@ Claude Code invokes the `statusLine` command on every render and pipes a JSON pa
 
 Two caches keep that affordable, because they answer different questions.
 
-The **render cache** holds the finished line, and is invalidated by any change to the payload — which happens constantly during a turn. The **probe cache** holds the host layer (CPU, RAM, disk, ports, services, MCP, git) and deliberately survives payload changes, because a `top` reading does not stop being true just because the token count moved. Without that split, a busy turn would re-run `top -bn1`, `df`, `ss`, `crontab`, `who` and a `systemctl is-active` per unit once a second, which is most of a render's cost spent on numbers that barely move. With it, a render that misses the render cache but hits the probe cache costs ~0.11 s instead of ~0.5 s. The working directory is part of the probe cache's validity check, so changing directory re-probes git immediately rather than showing the previous repo's branch; the live subagent list is never throttled.
+The **render cache** holds the finished line, and is invalidated by any change to the payload — which happens constantly during a turn. The **probe cache** holds the host layer (CPU, RAM, disk, ports, services, MCP, git) and deliberately survives payload changes, because a `top` reading does not stop being true just because the token count moved. Without that split, a busy turn would re-run `top -bn1`, `df`, `ss`, `crontab`, `who`, `systemctl` and git once a second, which is most of a render's cost spent on numbers that barely move. With it, a render that misses the render cache but hits the probe cache costs about half the CPU of a cold one (see [Performance](#performance)). The working directory is part of the probe cache's validity check, so changing directory re-probes git immediately rather than showing the previous repo's branch; the live subagent list is never throttled.
 
 Once a second is far too often to pay for a full render, so the finished line is cached per session with the clock left as a placeholder. A tick whose payload (and terminal width and layout settings) is byte-identical and whose cache is younger than `AGENTLINE_CACHE_TTL` just stamps the current time into the cached line and prints — no `python3`, no probes, no `date` at all on bash ≥ 5.0, which uses the built-in `$EPOCHSECONDS` and `printf '%(%H:%M:%S)T'`. Any real event changes the payload and invalidates the cache on the spot, so a ticking clock never means stale numbers next to it.
+
+### Performance
+
+The status line runs up to once a second in every open session, so the number that matters is CPU per call, summed over your sessions. `bash bench/bench.sh` measures it over 100 calls per path, using the shell's own `time` (getrusage, children included). It prints user + system time per call and, where `strace` exists, the programs each path execs. On a 4-core Arm Neoverse-N1 VM (OCI Ampere A1, Ubuntu 24.04):
+
+| Path | When | bash 5.2 | bash 3.2 |
+|---|---|---|---|
+| tick | same payload, render cache fresh (the once-a-second path) | 5.8 ms, 1 exec (`cat`) | 10.7 ms, 3 execs (`cat`, 2 × `date`) |
+| payload change | a new payload, probe cache fresh (an active turn, ~1/s) | 111 ms, 2 × `python3` | 126 ms, 2 × `python3` |
+| payload change, Fable | the same with the gradient model name | 109 ms, 2 × `python3` | 126 ms, 2 × `python3` |
+| cold probe | a new payload and every host probe (every 15 s at most) | 233 ms, 3 × `python3` | 250 ms, 3 × `python3` |
+
+The previous release measured 133 / 153 / 297 ms for the last three rows on the same host (bash 5.2). Its payload-change render booted `python3` three times, four for Fable, and a cold probe booted it five times and called `systemctl` twice per service unit. The floor is honest rather than impressive: one `python3` start costs about 20 ms of CPU, and a full render needs two, one for the JSON payload and one for the width-aware layout. The rest is short `awk`/`date` calls. Sub-10 ms is only the cached tick.
 
 ## Development / tests
 
@@ -269,6 +282,8 @@ Once a second is far too often to pay for a full render, so the finished line is
 bash tests/run.sh             # the whole suite, ~10 s, no network
 /bin/bash tests/run.sh        # same, under macOS's bash 3.2
 bash tests/run.sh --update    # regenerate tests/golden/ after an intended output change
+bash bench/bench.sh           # CPU per call on each render path (see Performance)
+bash bench/bench.sh 100 old/agentline.sh   # the same for another version, to compare
 ```
 
 The suite needs only `bash` and `python3`. It renders every payload in `tests/fixtures/payloads/` (full, minimal, `{}`, malformed JSON, empty stdin, a null context window after compaction, a 1M-context model, Fable + `max`, xhigh vs ultracode transcripts, hostile values) at `AGENTLINE_WIDTH` 120, 80 and 40, and compares the output, with ANSI codes stripped and the clock masked, against `tests/golden/`. Every render must exit 0 with empty stderr, and lines 3/4 may only wrap at `│` boundaries. The layout checks cover `AGENTLINE_LAYOUT`, `AGENTLINE_DROP` and live `COLUMNS`: the model, context and limits survive at narrow widths, every row fits, and a resize bypasses the render cache. It also checks that a cached tick is served from the render cache and that `install.sh` behaves correctly: a malformed `settings.json` is refused untouched, backups are timestamped, a foreign status line is left alone, re-runs are idempotent, and `--with-hooks` can be run twice. Where `strace` exists, it asserts that the once-a-second fast path forks nothing beyond reading stdin.
@@ -293,7 +308,7 @@ Yes. Line 1 shows both the 5-hour rate limit (`S:31% ↻2h49m`) and the 7-day ra
 They hide when empty, merge when short, and wrap onto extra rows when crowded — a status bar should spend rows on information, not on structure. See [Adaptive layout](#why-agentline).
 
 **Does agentline slow Claude Code down?**
-No. Rendering is a single pass of one bash script with a few short-lived `python3` helpers; there are no daemons and no network calls. Claude Code renders the status line asynchronously, so your prompt never waits on it.
+No. Rendering is a single pass of one bash script with two short-lived `python3` passes (about 0.1 s of CPU, see [Performance](#performance)), and the once-a-second clock tick is served from a cache in about 6 ms. There are no daemons and no network calls. Claude Code renders the status line asynchronously, so your prompt never waits on it.
 
 **Does it work on macOS?**
 Yes — CPU, memory, and listening-port probes have BSD branches selected once at startup. Only the systemd service panel is Linux-specific, and it degrades to nothing on macOS.
