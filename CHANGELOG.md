@@ -42,7 +42,9 @@
   limit. No arrow is shown within ±5 points, early in a window (the first
   30 minutes of 5 hours, the first ~5 hours of 7 days, when a single
   prompt swings the number), or when `resets_at` is missing, already past,
-  further off than the window or not an epoch. It is plain bash arithmetic
+  further off than the window or not an epoch, or when used % is past 100
+  (garbage input). used % is rounded the way `S:`/`W:` print it, so
+  `S:81%` never sits beside an arrow worked out from 80. It is plain bash arithmetic
   with no extra fork, and `AGENTLINE_PACE=0` turns it off. The 5-hour
   countdown also stopped forking `date` for the current time.
 - A repository can no longer run code through the status line. agentline,

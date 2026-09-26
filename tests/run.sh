@@ -667,6 +667,14 @@ check "pace: expired reset still shows S:" grep -qF 'S:40%' "$T/pl"
 pace '{"used_percentage":90,"resets_at":"2026-09-26T20:00:00Z"}' '{"used_percentage":90}'
 if grep -qE '⇡|⇣' "$T/pl"; then fail "pace: ISO or missing resets_at shows no arrow"; else pass; fi
 check "pace: ISO resets_at, exit 0 (got $rc)" [ "$rc" = 0 ]
+# The arrow rounds used% as S: prints it (F4): 80.9 is S:81%, so ⇡31 at 50%.
+pace "{\"used_percentage\":80.9,\"resets_at\":$((pnow + 9000))}" "{\"used_percentage\":58,\"resets_at\":$((pnow + 302400))}"
+check "pace: arrow rounds like S: (81 − 50 = ⇡31%)" grep -qF 'S:81% ⇡31%' "$T/pl"
+# A used% past 100 is garbage (F5): the percentage shows, no arrow does.
+pace "{\"used_percentage\":150,\"resets_at\":$((pnow + 9000))}" "{\"used_percentage\":1e14,\"resets_at\":$((pnow + 302400))}"
+check "pace: used% over 100, exit 0 (got $rc)" [ "$rc" = 0 ]
+check "pace: used% over 100 still shows S:" grep -qF 'S:150%' "$T/pl"
+if grep -qE '⇡|⇣' "$T/pl"; then fail "pace: used% over 100 shows no arrow"; else pass; fi
 pace "{\"used_percentage\":80.5,\"resets_at\":$((pnow + 9000))}" "{\"used_percentage\":58,\"resets_at\":$((pnow + 302400))}" AGENTLINE_PACE=0
 if grep -qE '⇡|⇣' "$T/pl"; then fail "pace: AGENTLINE_PACE=0 turns it off"; else pass; fi
 
@@ -725,6 +733,28 @@ check "cache: cold, ttl cause" grep -qF '🗄️ cold·ttl' "$T/pl"
 check "cache: cold is red" grep -q "${ESC}\[1;31mcold" "$T/out"
 pcache '{"warm":false,"last_miss_cause":null,"recache_tokens_if_cold":812}'
 check "cache: cold, no cause, recache cost" grep -qF '🗄️ cold ~812' "$T/pl"
+# Just under a million rolls over to the next unit (F6), not "1000k".
+pcache '{"warm":false,"recache_tokens_if_cold":999600}'
+check "cache: 999,600 recache tokens read ~1.0m" grep -qF '🗄️ cold ~1.0m' "$T/pl"
+pcache '{"warm":false,"recache_tokens_if_cold":999400}'
+check "cache: 999,400 recache tokens read ~999k" grep -qF '🗄️ cold ~999k' "$T/pl"
+# The layout measures the countdown at the width its warn window allows
+# (F3): with AGENTLINE_CACHE_WARN=720 it prints "11m40s", one cell wider
+# than the old "0m00s" guess. At one cell under line 1's real width, a
+# line measured right wraps; one measured a cell short overflowed instead.
+pcache "{\"warm\":true,\"ttl\":\"5m\",\"expires_at\":$(( $(date +%s) + 700 ))}" AGENTLINE_CACHE_WARN=720
+check "cache: a 12-minute window counts down in NNmSSs" grep -qE '🗄️ ↻11m[0-9]{2}s' "$T/pl"
+row1w() {  # row1w <normalized> -> cells of its first row
+  python3 -c '
+import sys, unicodedata
+s = open(sys.argv[1], encoding="utf-8").read().split("\n")[0]
+print(sum(2 if unicodedata.east_asian_width(c) in ("W", "F") else 1 for c in s))
+' "$1"
+}
+l1w=$(row1w "$T/pl")
+render "$T/pcache.json" "$(( l1w - 1 ))" AGENTLINE_CACHE_WARN=720 AGENTLINE_DROP=
+normalize "$T/out" "$T/pn"
+check "cache: a wide countdown is measured at its printed width" [ "$(row1w "$T/pn")" -lt "$l1w" ]
 pcache '{"warm":false,"last_miss_cause":{"causes":["model_changed"]}}'
 check "cache: *_changed shortens to its subject" grep -qF '🗄️ cold·model' "$T/pl"
 pcache '{"warm":false,"caching_observed":false}'

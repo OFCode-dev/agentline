@@ -466,10 +466,14 @@ if isinstance(pc, dict) and pc.get('caching_observed') is not False:
         h = float(h)
         pc_hit = str(int(round(h * 100 if h <= 1 else min(h, 100))))
     # What going cold costs: the tokens the next turn re-writes to the cache.
+    # The unit is chosen on the rounded value: 999,600 tokens is "1.0m", not
+    # the "1000k" that deciding on the raw count printed. Lower-case m, as
+    # the token counters on line 1 spell a million.
     r = num(pc.get('recache_tokens_if_cold'))
     if r != '' and float(r) > 0:
         r = float(r)
-        pc_recache = str(int(r)) if r < 1000 else f'{r / 1000:.0f}k' if r < 1e6 else f'{r / 1e6:.1f}m'
+        pc_recache = (str(int(r)) if r < 1000 else f'{r / 1000:.0f}k'
+                      if round(r / 1000) < 1000 else f'{r / 1e6:.1f}m')
     pc_cause = cause(pc.get('last_miss_cause'))
 
 # The session name is shortened here, by characters. bash used to do it
@@ -1213,13 +1217,19 @@ seven_day_reset_fmt=$(fmt_reset_week "$seven_day_reset")
 #
 # Pure bash arithmetic on $_now_epoch, returned in $_pace_out rather than
 # printed: no subshell, no awk (color_pct forks one), so the pace costs no
-# fork. used% is a float ("23.5"); ${u%.*} truncates it. AGENTLINE_PACE=0
-# turns it off.
+# fork. used% is a float ("80.9"), rounded with the same `printf %.0f` that
+# prints S:/W: (the builtin's -v form, no subshell), so "S:81%" never sits
+# beside an arrow worked out from 80. A used% past 100 is no window this
+# one can be in: garbage input, which printed ⇡999999999999949% and is now
+# simply given no arrow. AGENTLINE_PACE=0 turns it off.
 pace_arrow() {  # pace_arrow <used%> <resets_epoch> <window_secs> <min_elapsed%> -> $_pace_out
-  local u="${1%.*}" ts="$2" win="$3" rem el d
+  local u="$1" ts="$2" win="$3" rem el d
   _pace_out=""
   [ "${AGENTLINE_PACE:-1}" = 0 ] && return
-  case "$u" in ''|-*|*[!0-9]*) return ;; esac
+  case "$u" in ''|-*|*[!0-9.]*|*.*.*|.*|*.) return ;; esac
+  printf -v u '%.0f' "$u" 2>/dev/null || return
+  case "$u" in ''|*[!0-9]*) return ;; esac
+  [ ${#u} -le 3 ] && [ "$u" -le 100 ] || return
   case "$ts" in ''|*[!0-9]*) return ;; esac
   # Ten digits is an epoch until 2286; anything longer would only overflow.
   [ ${#ts} -gt 12 ] && return
@@ -1550,6 +1560,7 @@ fi
 # response wrote no cache at all), where it can only describe that response.
 # No "miss" marker while warm: with no time on the cause it would keep
 # naming the same old miss after every hit that followed it.
+pc_meas="0m00s"
 if [ -n "$pc_state" ]; then
   pc_body=""
   pc_gone=0
@@ -1566,6 +1577,10 @@ if [ -n "$pc_state" ]; then
     pc_rem=$(( pc_exp - _now_epoch ))
     if [ "$pc_rem" -gt 0 ] && [ "$pc_rem" -le "$pc_warn" ]; then
       pc_body="${YELLOW}↻${PCEXP_TOKEN}${pc_exp}@@${RESET}"; _WARNED="${_WARNED},cache"
+      # The layout pass measures the countdown before it is filled in, at
+      # the widest it can print within this warn window: "0m00s" was a cell
+      # short of the "12m00s" an AGENTLINE_CACHE_WARN of 600+ prints.
+      if [ "$pc_warn" -ge 60 ]; then pc_meas="$(( pc_warn / 60 ))m00s"; else pc_meas="${pc_warn}s"; fi
     fi
   fi
   if [ "${AGENTLINE_CACHE_VERBOSE:-0}" = 1 ] && [ -n "$pc_hit" ]; then
@@ -1803,9 +1818,11 @@ width, sep, layout, default_layout = max(1, int(sys.argv[1])), sys.argv[2], sys.
 fitting, drop_spec = sys.argv[5] == '1', sys.argv[6]
 placeholders = dict(zip(sys.argv[7:10], ('00:00:00', 'max', 'ultracode')))
 grad_re = re.compile(re.escape(sys.argv[10]) + '(.*?)' + re.escape(sys.argv[11]), re.S)
-# The prompt-cache countdown carries its epoch: measured as "0m00s", as
-# wide as it prints under ten minutes and wider than "45s".
+# The prompt-cache countdown carries its epoch: measured as argv[14], the
+# widest it can print within the warn window bash chose ("0m00s" for the
+# default windows, "12m00s" for AGENTLINE_CACHE_WARN=720).
 pcexp_re = re.compile(re.escape(sys.argv[12]) + '[0-9]*@@')
+pc_meas = sys.argv[14]
 # The segment records come on stdin (a here-string: one trailing newline).
 segs = sys.stdin.buffer.read().decode('utf-8', 'surrogateescape')
 if segs.endswith('\n'):
@@ -1855,7 +1872,7 @@ def vis(s):
     # substituted after layout; count them at the width they will print at.
     for tok, shown in placeholders.items():
         s = s.replace(tok, shown)
-    s = pcexp_re.sub('0m00s', s)
+    s = pcexp_re.sub(pc_meas, s)
     # Colour codes are mostly still in backslash-escape form here (rendered
     # later by printf %b), so strip the literal \033[..m sequences before
     # measuring — and real ESC ones too, which color_pct prints already
@@ -1939,7 +1956,7 @@ PYEOF
 # lines vanished. A here-string costs no fork.
 out=$(python3 -I -c "$_AL_PY" "$STATUSLINE_WIDTH" "$P" "${AGENTLINE_LAYOUT:-$AGENTLINE_LAYOUT_DEFAULT}" \
   "$AGENTLINE_LAYOUT_DEFAULT" "$_fit" "${AGENTLINE_DROP-$AGENTLINE_DROP_DEFAULT}" \
-  "$CLOCK_TOKEN" "$ANIM_MAX_TOKEN" "$ANIM_ULTRA_TOKEN" "$GRAD_OPEN" "$GRAD_CLOSE" "$PCEXP_TOKEN" "$_WARNED" <<< "$SEGS")
+  "$CLOCK_TOKEN" "$ANIM_MAX_TOKEN" "$ANIM_ULTRA_TOKEN" "$GRAD_OPEN" "$GRAD_CLOSE" "$PCEXP_TOKEN" "$_WARNED" "$pc_meas" <<< "$SEGS")
 _layout_rc=$?
 
 # If the layout pass failed, bash lays the lines out itself: each line of
