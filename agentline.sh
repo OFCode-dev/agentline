@@ -772,11 +772,18 @@ if [ -n "$cwd" ] && [ -d "$cwd" ]; then
       IFS= read -r -n 1024 _h 2>/dev/null < "$_gd/HEAD"
       [ ${#_h} -ge 1024 ] && _h=""
     fi
+    # Only the two canonical shapes are settled here: exactly "ref:
+    # refs/heads/<name>" (no whitespace: git refuses it in a ref name, so
+    # "ref:refs/heads/x" or a trailing space is not a HEAD git wrote) and a
+    # bare 40- or 64-digit hash, a detached HEAD, which shows no branch.
+    # Anything else is git's to judge. The hex list is spelled out: bash
+    # 3.2 matches a range by collation order, which can admit A-F.
     case "$_h" in
-      "ref: refs/heads/.invalid") _git_ask=1 ;;
+      -) ;;
+      "ref: refs/heads/.invalid"|"ref: refs/heads/"*[[:space:]]*) _git_ask=1 ;;
       "ref: refs/heads/"?*) git_branch="${_h#ref: refs/heads/}" ;;
-      ''|"ref: "*) _git_ask=1 ;;
-      # Anything else is a detached HEAD's hash: no branch.
+      *[!0123456789abcdef]*|'') _git_ask=1 ;;
+      *) case "${#_h}" in 40|64) ;; *) _git_ask=1 ;; esac ;;
     esac
   fi
   if [ "$_git_ask" = 1 ]; then

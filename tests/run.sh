@@ -1293,6 +1293,20 @@ EOF
   check "git [symlink into a repo]: branch shown" grep -qxF '🌿 octo/repo@feat/x' "$T/got"
   grender "$G/repo/sub/to-other"
   check "git [symlink into another repo]: that repo's branch" grep -qxF '🌿 sym-branch' "$T/got"
+  # A HEAD that is not in git's canonical spelling is git's to read: without
+  # the space after "ref:" it showed no branch, and trailing spaces stayed
+  # in the name. git accepts the first and trims the second.
+  gx init -q "$G/nosp"; printf 'ref:refs/heads/nosp\n' > "$G/nosp/.git/HEAD"
+  grender "$G/nosp"
+  check "git [ref: without space]: branch shown via git" grep -qxF '🌿 nosp' "$T/got"
+  gx init -q "$G/trail"; printf 'ref: refs/heads/trail  \n' > "$G/trail/.git/HEAD"
+  grender "$G/trail"
+  check "git [trailing spaces]: trimmed branch" grep -qxF '🌿 trail' "$T/got"
+  check "git [trailing spaces]: asks git" grep -q 'branch --show-current' "$T/git-calls"
+  # An uppercase or short "hash" is no detached HEAD git wrote: ask git.
+  mkdir -p "$G/badhash/.git"; printf 'ABCDEF\n' > "$G/badhash/.git/HEAD"
+  grender "$G/badhash"
+  check "git [not a hash]: asks git" grep -q 'branch --show-current' "$T/git-calls"
   # A 2 MB HEAD is not shown whole: past the cap, git is asked instead.
   mkdir -p "$G/huge/.git"
   { printf 'ref: refs/heads/'; printf '%02000000d' 0; echo; } > "$G/huge/.git/HEAD"
