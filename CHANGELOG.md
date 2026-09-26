@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Displayed text can no longer inject terminal escapes. The final output
+  goes through `printf %b`, so a branch, remote, directory, session name,
+  model name, MCP server, process name, agent label or e-mail containing
+  `\033]0;…`, `\e[…`, or a raw ESC/BEL byte was turned into a real escape
+  sequence. That could retitle the window, clear the screen or forge part of
+  the line. Every payload- and host-derived string is now stripped of
+  control characters (C0, DEL, C1) and backslashes before it is displayed.
+  Payload strings are cleaned in the parser, host strings with fork-free
+  parameter expansion. The text itself still shows, cleaned. Paths used for
+  lookups (cwd, session id, transcript) stay raw.
 - Payload robustness and a truthful context warning. A payload that does not
   decode, or decodes to something other than an object, used to become `{}`:
   the model and context segments vanished with no hint why. It now shows a

@@ -226,6 +226,16 @@ def num(v):
     v = str(v)
     return v if re.fullmatch(r'-?\d+(\.\d+)?', v) else ''
 
+# The final output goes through `printf %b`, which expands backslash escapes,
+# and the terminal interprets any raw control byte. A session name, model name
+# or version carrying "\033]0;..." or a literal ESC could therefore retitle
+# the window, move the cursor or forge the line. Every displayed payload
+# string is cleaned here: C0 controls, DEL, C1 controls (U+0080-U+009F, which
+# some terminals honour as CSI/OSC) and the backslash itself. Host-derived
+# strings get the same treatment in bash, after the probes.
+def clean(v):
+    return re.sub(r'[\x00-\x1f\x7f-\x9f\\]', '', str(v))
+
 # The model field has been both an object {id, display_name} and a bare id
 # string across Claude Code versions (other status lines crashed on the flip,
 # CCometixLine#118); accept either. Model ids carry variant and build
@@ -253,9 +263,11 @@ size = num(g('context_window', 'context_window_size'))
 ctx_size = str(int(float(size))) if size else ''
 
 fields = {
+    # cwd stays raw: it is a filesystem path (git, the probe-cache key, the
+    # transcript lookup). Only its displayed form, $folder, is cleaned.
     'cwd': g('cwd'),
     'model_raw': mid,
-    'model': model,
+    'model': clean(model),
     'used_pct': num(g('context_window', 'used_percentage')),
     # exceeds_200k_tokens is Claude Code's own fixed-threshold flag (input +
     # output of the last response > 200k, whatever the window). Only a strict
@@ -279,7 +291,7 @@ fields = {
         num(g('rate_limits', 'seven_day_opus', 'used_percentage'))),
     'five_hour_reset': g('rate_limits', 'five_hour', 'resets_at'),
     'seven_day_reset': g('rate_limits', 'seven_day', 'resets_at'),
-    'effort_raw': g('effort', 'level'),
+    'effort_raw': clean(g('effort', 'level')),
     'cost': num(g('cost', 'total_cost_usd')),
     'duration_ms': num(g('cost', 'total_duration_ms')),
     'lines_added': num(g('cost', 'total_lines_added')),
@@ -287,11 +299,13 @@ fields = {
     'tokens_in': num(g('context_window', 'total_input_tokens')),
     'tokens_out': num(g('context_window', 'total_output_tokens')),
     'thinking': g('thinking', 'enabled'),
-    'session_name': g('session_name'),
+    'session_name': clean(g('session_name')),
+    # session_id is also a path component (the transcript fallback), so it
+    # stays raw; the resume command shows a cleaned copy.
     'session_id': g('session_id'),
     'fast': g('fast_mode'),
-    'version': g('version'),
-    'payload_email': g('account', 'email'),
+    'version': clean(g('version')),
+    'payload_email': clean(g('account', 'email')),
     'payload_transcript': g('transcript_path'),
 }
 print('\n'.join(f'{k}={shlex.quote(str(v))}' for k, v in fields.items()))
@@ -528,6 +542,9 @@ if command -v systemctl >/dev/null 2>&1 && [ -r "$SVC_CONFIG" ]; then
   while IFS=: read -r svc label; do
     case "$svc" in ''|\#*) continue ;; esac
     [ -z "$label" ] && label="$svc"
+    # The label sits between real escapes, so it is cleaned here rather
+    # than with the other host strings below ($svc_panel keeps its colours).
+    label="${label//[[:cntrl:]]/}"; label="${label//\\/}"
     # Skip services not defined on this machine (portability)
     systemctl cat "$svc" >/dev/null 2>&1 || continue
     if systemctl is-active --quiet "$svc" 2>/dev/null; then
@@ -554,6 +571,27 @@ if [ "$_probes_fresh" != 1 ] && [ -n "$CACHE_BASE" ]; then
   done
   printf '%s\n%s\n%s' "$_now_epoch" "$cwd" "$_pc_out" > "${CACHE_BASE}.probes" 2>/dev/null
 fi
+
+# === Display sanitization ===
+# Everything assembled below is printed with `printf %b`, which turns a
+# backslash sequence into a real escape, and the terminal acts on any raw
+# control byte. Host-derived text is not trustworthy: a remote URL, a
+# directory name, a listening process's name, an agent label or an MCP
+# server name is whatever someone else chose, and "\033]0;owned\a" in any of
+# them would retitle the window or rewrite the line. Payload strings are
+# cleaned in the parser; these are cleaned here, after the probe cache is
+# loaded, so values read back from a cache written by an older release are
+# covered too. [[:cntrl:]] is C0 + DEL, and under a UTF-8 locale also the
+# C1 range. Pure parameter expansion: no fork, and this is the slow path.
+_clean() {  # _clean <varname> -- strip control characters and backslashes
+  local v="${!1}"
+  v="${v//[[:cntrl:]]/}"
+  v="${v//\\/}"
+  printf -v "$1" '%s' "$v"
+}
+for _v in git_branch git_repo folder active_mcps active_agents dev_ports; do
+  _clean "$_v"
+done
 
 # === Colors ===
 RESET="\033[0m"
@@ -983,6 +1021,8 @@ except:
     # the CLI on every render.
     printf '%s' "$account_email" > "$auth_cache" 2>/dev/null
   fi
+  # CLI output (fresh or cached) is host data like the probes above.
+  _clean account_email
 fi
 
 masked_email=$(python3 - "$account_email" <<'PYEOF'
@@ -1022,7 +1062,10 @@ fi
 # The readable name is already shown on line 2, so nothing is lost here.
 resume_cmd=""
 if [ -n "$session_id" ]; then
-  resume_cmd="claude --resume ${session_id}"
+  # $session_id is kept raw for the transcript path; the displayed copy is
+  # cleaned like every other payload string.
+  _sid_disp="$session_id"; _clean _sid_disp
+  resume_cmd="claude --resume ${_sid_disp}"
 elif [ -n "$session_name" ]; then
   resume_cmd="claude --resume \"${session_name//\"/\\\"}\""
 fi

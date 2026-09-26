@@ -295,6 +295,31 @@ else
   pass
 fi
 
+# Terminal-escape injection: the escapes fixture puts literal ESC/BEL/C1 and
+# the backslash forms `printf %b` expands (\033, \e, \x1b, \a) into the
+# session name, model, version, effort, e-mail, branch, remote, MCP names,
+# dev-port process names and an agent label. In the raw render the only
+# escapes allowed are the script's own SGR colour codes; nothing else from
+# C0/DEL/C1 may survive, and no backslash may be left for %b to act on. The
+# tainted segments must still render (cleaned), not vanish.
+ctx_raw escapes
+check "escapes: exit 0 (got $rc)" [ "$rc" = 0 ]
+if msg=$(python3 - "$T/out" <<'PYEOF' 2>&1
+import re, sys
+s = open(sys.argv[1], 'rb').read().decode('utf-8')
+rest = re.sub(r'\x1b\[[0-9;]*m', '', s)
+bad = sorted({hex(ord(c)) for c in rest if c != '\n' and (ord(c) < 0x20 or 0x7f <= ord(c) <= 0x9f)})
+if bad:
+    sys.exit('control characters survived: %s' % ', '.join(bad))
+if '\\' in rest:
+    sys.exit('backslash survived')
+for want in ('feat/]0;pwned-title-xe[5m', 'own033[2Jer/reepo@', 'Evil[41m e[7mModel',
+             'evil[2Jmcp', 'node033[31m(3000)', 'claude --resume esc-0001'):
+    if want not in rest:
+        sys.exit('segment missing: %r' % want)
+PYEOF
+); then pass; else fail "escapes: $msg"; fi
+
 # ===========================================================================
 # 3. Render-cache fast path
 # ===========================================================================
