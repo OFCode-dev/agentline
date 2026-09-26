@@ -40,7 +40,7 @@ Set variables in the `env` block of `~/.claude/settings.json`:
 |---|---|---|
 | `AGENTLINE_SERVICES` | `~/.claude/agentline-services.conf` | Path to the service list |
 | `AGENTLINE_LAYOUT` | the four default lines | Segment order and grouping: `/` starts a line, `,` separates names, an omitted name is hidden (names listed in the README's "Layout and narrow terminals"). Use this rather than editing `agentline.sh`, which an upgrade replaces |
-| `AGENTLINE_DROP` | `tok_in,tok_out,words,dur,date,version,email,lines,cpu,mem,disk,cache` | Segments dropped first, in order, from a line too wide for the terminal; `model`, `ctx`, `5h`, `week` never drop. Empty = wrap only |
+| `AGENTLINE_DROP` | `tok_in,tok_out,words,dur,date,version,email,lines,cpu,mem,disk,cache` | Segments dropped first, in order, from a line too wide for the terminal; `model`, `ctx`, `5h`, `week` never drop, nor a segment in warning state (disk ≥ 80 %, cold/expiring cache, failed service). Empty = wrap only |
 | `AGENTLINE_PACE` | `1` | `0` hides the `⇡`/`⇣` pace arrows after `S:`/`W:` |
 | `AGENTLINE_CACHE_WARN` | `60` (5m TTL), `300` (1h) | Seconds before a warm prompt cache expires at which the `🗄️ ↻` countdown appears |
 | `AGENTLINE_CACHE_VERBOSE` | unset | `1` always shows the prompt-cache hit ratio |

@@ -142,7 +142,9 @@
   on a line about the session; without them a busy line 1 at ~122 columns
   still wrapped them onto a row of their own. Whatever still
   does not fit wraps at `│` boundaries. Model, context and both rate limits
-  are never dropped. Without `COLUMNS` nothing is dropped on a guessed width.
+  are never dropped, and neither is a segment showing a warning: a disk at
+  80 % or more with its red ⚠️, a cold or expiring prompt cache, or a
+  service panel with a ✗. Without `COLUMNS` nothing is dropped on a guessed width.
   `AGENTLINE_WIDTH` still wins when set. The width and layout settings are
   part of the render-cache key, so a resize shows on the next tick instead
   of after the cache TTL.

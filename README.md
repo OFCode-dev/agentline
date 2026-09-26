@@ -137,7 +137,7 @@ Everything is optional — agentline works with zero configuration.
 |---|---|---|
 | `AGENTLINE_SERVICES` | `~/.claude/agentline-services.conf` | Path to the service list |
 | `AGENTLINE_LAYOUT` | the four lines above | Which segments show, in what order, on which line — see [Layout and narrow terminals](#layout-and-narrow-terminals) |
-| `AGENTLINE_DROP` | `tok_in,tok_out,words,dur,date,version,email,lines,cpu,mem,disk,cache` | Segments that give way on a line too wide for the terminal, lowest priority first. `model`, `ctx`, `5h` and `week` are never dropped. Set to empty to wrap instead of dropping anything |
+| `AGENTLINE_DROP` | `tok_in,tok_out,words,dur,date,version,email,lines,cpu,mem,disk,cache` | Segments that give way on a line too wide for the terminal, lowest priority first. `model`, `ctx`, `5h` and `week` are never dropped, and neither is a segment showing a warning (disk ≥ 80 %, a cold or expiring cache, a failed service). Set to empty to wrap instead of dropping anything |
 | `AGENTLINE_WIDTH` | live terminal width − 2, else `120` | Column budget for fitting, merging and wrapping lines. Overrides the live width when set |
 | `AGENTLINE_TZ` | system timezone | Pin the clock, e.g. `Europe/Istanbul` on a UTC server |
 | `AGENTLINE_PACE` | `1` | Set to `0` to hide the `⇡`/`⇣` pace arrows after `S:` and `W:` |

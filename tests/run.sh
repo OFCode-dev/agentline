@@ -923,6 +923,20 @@ done
 check "layout: COLUMNS=100 line 2 still two rows" \
   [ "$(grep -c -e "$long_branch" -e 'v3.0.24' -e 'DD/MM' -e 'golden-full' "$T/got")" = 2 ]
 if msg=$(rows_fit "$T/got" 98 2>&1); then pass; else fail "layout: COLUMNS=100 re-insert: $msg"; fi
+# A segment in its warning state is never dropped: a 95% disk at a narrow
+# width used to lose its red ⚠️ silently.
+for cols in 100 62; do
+  prepare full "$p"
+  LC_ALL=C sed 's#^disk_pct=.*#disk_pct=95#' "$(cbase "$(sid_of "$p")").probes" > "$T/probes.tmp"
+  cat "$T/probes.tmp" > "$(cbase "$(sid_of "$p")").probes"
+  render "$p" - COLUMNS=$cols; normalize "$T/out" "$T/got"
+  check "layout: COLUMNS=$cols keeps a disk warning" has "$T/got" '⚠️ 💽 95%'
+done
+# Likewise a cold prompt cache, the last name in the default drop list.
+printf '{"session_id":"warn-0001","cwd":"%s","model":{"id":"claude-opus-5"},"context_window":{"used_percentage":12},"cost":{"total_cost_usd":1.5,"total_duration_ms":600000},"prompt_cache":{"warm":false,"last_miss_cause":"ttl"}}\n' \
+  "$WORK" > "$T/warn.json"
+prepare minimal "$T/warn.json"; render "$T/warn.json" - COLUMNS=30; normalize "$T/out" "$T/got"
+check "layout: COLUMNS=30 keeps a cold cache" has "$T/got" '🗄️ cold'
 # A busy session at COLUMNS=122: once the default drop list ran out, line 1
 # still overflowed by a few cells and wrapped the host readings onto a row
 # of their own. cpu, mem and disk now close the list (host info, the least

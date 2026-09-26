@@ -1271,6 +1271,12 @@ P=" ${DIM}│${RESET} "
 # AGENTLINE_LAYOUT vocabulary. An empty text is no segment at all.
 SEGS=""
 _seg() { [ -n "$2" ] && SEGS="${SEGS}$1${_US}$2${_RS}"; return 0; }
+# Segments shown in their warning state (a red disk ⚠️, a cold or expiring
+# prompt cache, a failed service): the layout pass never drops these, or
+# fit mode would hide a warning exactly when the terminal is narrow — a
+# 95% disk at COLUMNS=100 used to lose its ⚠️ silently, where before fit
+# mode the line wrapped and kept it.
+_WARNED=""
 
 # Line 1: model first, then stats. A payload that did not decode leads with a
 # dim marker instead of silently losing the model and context segments; it is
@@ -1508,6 +1514,7 @@ if [ -n "$pc_state" ]; then
   pc_body=""
   if [ "$pc_state" = cold ]; then
     pc_body="${RED}cold${pc_cause:+·${pc_cause}}${RESET}${pc_recache:+ ${DIM}~${pc_recache}${RESET}}"
+    _WARNED="${_WARNED},cache"
   elif [ -n "$pc_exp" ]; then
     pc_warn=60; [ "$pc_ttl" = 1h ] && pc_warn=300
     case "${AGENTLINE_CACHE_WARN-}" in
@@ -1516,7 +1523,7 @@ if [ -n "$pc_state" ]; then
     esac
     pc_rem=$(( pc_exp - _now_epoch ))
     if [ "$pc_rem" -gt 0 ] && [ "$pc_rem" -le "$pc_warn" ]; then
-      pc_body="${YELLOW}↻${PCEXP_TOKEN}${pc_exp}@@${RESET}"
+      pc_body="${YELLOW}↻${PCEXP_TOKEN}${pc_exp}@@${RESET}"; _WARNED="${_WARNED},cache"
     fi
   fi
   if [ "${AGENTLINE_CACHE_VERBOSE:-0}" = 1 ] && [ -n "$pc_hit" ]; then
@@ -1538,7 +1545,7 @@ fi
 [ -n "$mem_used_gb" ]    && _seg mem "💾 ${mem_used_gb}"
 if [ -n "$disk_pct" ]; then
   if [ "$disk_pct" -ge 80 ]; then
-    _seg disk "${RED}⚠️ 💽 ${disk_pct}%${RESET}"
+    _seg disk "${RED}⚠️ 💽 ${disk_pct}%${RESET}"; _WARNED="${_WARNED},disk"
   else
     c=$(color_pct "$disk_pct" 90 80)
     _seg disk "${c}💽 ${disk_pct}%${RESET}"
@@ -1680,6 +1687,7 @@ fi
 
 # Line 4 — System layer: service health + ssh + cron + dev servers
 [ -n "$svc_panel" ] && _seg services "🛡️ ${svc_panel}"
+case "$svc_panel" in *✗*) _WARNED="${_WARNED},services" ;; esac
 if [ -n "$ssh_count" ] && [ "$ssh_count" -gt 0 ]; then
   ssh_c="$DIM"; [ "$ssh_count" -gt 1 ] && ssh_c="$YELLOW"
   _seg ssh "🔐 ${ssh_c}ssh:${ssh_count}${RESET}"
@@ -1761,7 +1769,9 @@ segs = sys.stdin.buffer.read().decode('utf-8', 'surrogateescape')
 if segs.endswith('\n'):
     segs = segs[:-1]
 KEEP = ('warn', 'model', 'ctx', '5h', 'week')
-drop = [n for n in re.split(r'[\s,]+', drop_spec) if n and n not in KEEP]
+# Plus whatever is in its warning state this render (_WARNED in bash).
+warned = set(sys.argv[13].split(','))
+drop = [n for n in re.split(r'[\s,]+', drop_spec) if n and n not in KEEP and n not in warned]
 
 # The Fable/Mythos model name arrives between GRAD_OPEN/GRAD_CLOSE markers
 # and is painted here, one truecolor step per character, amber to orange.
@@ -1887,7 +1897,7 @@ PYEOF
 # lines vanished. A here-string costs no fork.
 out=$(python3 -I -c "$_AL_PY" "$STATUSLINE_WIDTH" "$P" "${AGENTLINE_LAYOUT:-$AGENTLINE_LAYOUT_DEFAULT}" \
   "$AGENTLINE_LAYOUT_DEFAULT" "$_fit" "${AGENTLINE_DROP-$AGENTLINE_DROP_DEFAULT}" \
-  "$CLOCK_TOKEN" "$ANIM_MAX_TOKEN" "$ANIM_ULTRA_TOKEN" "$GRAD_OPEN" "$GRAD_CLOSE" "$PCEXP_TOKEN" <<< "$SEGS")
+  "$CLOCK_TOKEN" "$ANIM_MAX_TOKEN" "$ANIM_ULTRA_TOKEN" "$GRAD_OPEN" "$GRAD_CLOSE" "$PCEXP_TOKEN" "$_WARNED" <<< "$SEGS")
 _layout_rc=$?
 
 # If the layout pass failed, bash lays the lines out itself: each line of
