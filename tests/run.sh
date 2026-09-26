@@ -860,29 +860,49 @@ fi
 # ===========================================================================
 # 3d. Opt-in /usage fetch: claim file, detached refresh
 # ===========================================================================
-# No network: fake credentials plus a sitecustomize that replaces urlopen
-# with a canned /usage reply after FAKE_USAGE_DELAY seconds. It patches only
-# urlopen, so every other python3 the render runs is unaffected.
-mkdir -p "$T/usagehook"
-cat > "$T/usagehook/sitecustomize.py" <<'EOF'
-import errno, io, json, os, time, urllib.request
-def _fake(req, timeout=None):
-    if os.environ.get('FAKE_USAGE_LOG'):
-        with open(os.environ['FAKE_USAGE_LOG'], 'a') as f:
-            f.write('fetch\n')
-    time.sleep(float(os.environ.get('FAKE_USAGE_DELAY', '0')))
-    return io.BytesIO(json.dumps({'limits': [{'kind': 'weekly_scoped',
-        'scope': {'model': {'display_name': 'Fable'}}, 'percent': 63}]}).encode())
-urllib.request.urlopen = _fake
-# FAKE_REPLACE_FAIL=1: the rename of the fetched result fails (a full disk).
-if os.environ.get('FAKE_REPLACE_FAIL'):
-    _real_replace = os.replace
-    def _fail(src, dst, *a, **k):
-        if '/usage.' in str(dst):
-            raise OSError(errno.ENOSPC, 'No space left on device', str(dst))
-        return _real_replace(src, dst, *a, **k)
-    os.replace = _fail
+# No network beyond loopback: fake credentials plus a fake /usage server on
+# 127.0.0.1, reached through AGENTLINE_USAGE_URL (honoured for loopback only).
+# The fetch runs as `python3 -I`, which ignores PYTHONPATH, so the former
+# sitecustomize seam is closed; the server is the seam now. It logs every
+# request that carries the fake token to $T/fetches and answers after
+# ?delay=<s> seconds with a canned reply.
+cat > "$T/fakeusage.py" <<'EOF'
+import http.server, json, os, sys, time, urllib.parse
+log, portfile = sys.argv[1], sys.argv[2]
+class H(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        if self.headers.get('Authorization') == 'Bearer fake-token':
+            with open(log, 'a') as f:
+                f.write('fetch\n')
+        q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+        time.sleep(float(q.get('delay', ['0'])[0]))
+        body = json.dumps({'limits': [{'kind': 'weekly_scoped',
+            'scope': {'model': {'display_name': 'Fable'}}, 'percent': 63}]}).encode()
+        self.send_response(200)
+        self.send_header('Content-Type', 'application/json')
+        self.send_header('Content-Length', str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+    # Also the https proxy of the loopback-only test: a CONNECT is the real
+    # endpoint being asked for, and is logged and refused.
+    def do_CONNECT(self):
+        with open(log + '.connect', 'a') as f:
+            f.write(self.path + '\n')
+        self.send_error(502)
+    def log_message(self, *a):
+        pass
+srv = http.server.ThreadingHTTPServer(('127.0.0.1', 0), H)
+with open(portfile + '.tmp', 'w') as f:
+    f.write(str(srv.server_address[1]))
+os.rename(portfile + '.tmp', portfile)
+srv.serve_forever()
 EOF
+# Started from a subshell, so it is not a job of this shell: the registry
+# tests below use a bare `wait`, which would otherwise wait on it forever.
+USRV=$( python3 "$T/fakeusage.py" "$T/fetches" "$T/usage-port" > /dev/null 2>&1 < /dev/null & echo $! )
+trap 'kill "$USRV" 2>/dev/null; rm -rf "$T"' EXIT
+n=50; while [ "$n" -gt 0 ] && [ ! -s "$T/usage-port" ]; do sleep 0.1; n=$((n - 1)); done
+UURL="http://127.0.0.1:$(cat "$T/usage-port" 2>/dev/null)/usage"
 mkdir -p "$HOME_F/.claude"
 echo '{"claudeAiOauth": {"accessToken": "fake-token"}}' > "$HOME_F/.claude/.credentials.json"
 ukey="$HOME_F/.claude"; UCACHE="$CACHE_DIR/usage.${ukey//[!A-Za-z0-9]/_}"; UCLAIM="$UCACHE.claim"
@@ -896,13 +916,16 @@ wait_for() {  # wait_for <seconds> <command...> — poll until it succeeds
 }
 cache_is() { [ "$(cat "$UCACHE" 2>/dev/null)" = "$1" ]; }
 p="$PAY/minimal.json"
-urender() { render "$p" 120 AGENTLINE_USAGE_API=1 AGENTLINE_USAGE_TTL=300 PYTHONPATH="$T/usagehook" ${1+"$@"}; }
+urender() {  # urender [delay] [VAR=val...]
+  local d="${1:-0}"; [ $# -gt 0 ] && shift
+  render "$p" 120 AGENTLINE_USAGE_API=1 AGENTLINE_USAGE_TTL=300 AGENTLINE_USAGE_URL="$UURL?delay=$d" ${1+"$@"}
+}
 
 # Expired cache, no claim: the previous figure is shown while a detached
 # fetch runs; the render does not wait for it, and it lands afterwards.
-prepare minimal "$p"; rm -f "$UCLAIM"
+prepare minimal "$p"; rm -f "$UCLAIM" "$T/fetches"
 printf 37 > "$UCACHE"; age_file "$UCACHE" 310
-urender FAKE_USAGE_DELAY=2
+urender 2
 check "usage: stale figure shown during the refresh" grep -q 'F:37%' "$T/out"
 check "usage: render did not wait for the fetch" cache_is 37
 check "usage: claim recorded in its own file" [ -f "$UCLAIM" ]
@@ -911,6 +934,25 @@ check "usage: claim dropped after the fetch" wait_for 2 [ ! -e "$UCLAIM" ]
 prepare minimal "$p"
 urender
 check "usage: fresh result rendered" grep -q 'F:63%' "$T/out"
+
+# The URL override is honoured for loopback only: the request carries the
+# OAuth token. Both proxies point at the fake server, so an honoured
+# non-loopback override would arrive there as a plain GET with the token,
+# and a refused one leaves the real endpoint, which arrives as a CONNECT.
+prepare minimal "$p"; rm -f "$UCLAIM" "$T/fetches" "$T/fetches.connect"
+printf 37 > "$UCACHE"; age_file "$UCACHE" 310
+render "$p" 120 AGENTLINE_USAGE_API=1 AGENTLINE_USAGE_URL="http://usage.example/usage" \
+  http_proxy="${UURL%/usage}" https_proxy="${UURL%/usage}"
+check "usage: non-loopback override refused" wait_for 8 grep -qs '^api.anthropic.com:443$' "$T/fetches.connect"
+check "usage: token not sent to a non-loopback override" [ ! -e "$T/fetches" ]
+wait_for 5 [ ! -e "$UCLAIM" ]
+# The loopback override is plain http and goes direct, never through a proxy
+# (one would see the token in the clear): a dead proxy does not stop it.
+prepare minimal "$p"; rm -f "$UCLAIM" "$T/fetches"
+printf 37 > "$UCACHE"; age_file "$UCACHE" 310
+urender 0 http_proxy=http://127.0.0.1:9 HTTP_PROXY=http://127.0.0.1:9
+check "usage: loopback override bypasses http_proxy" wait_for 8 cache_is 63
+wait_for 5 [ ! -e "$UCLAIM" ]
 
 # A live claim (another session is fetching) serves the old value and
 # starts no second fetch.
@@ -928,12 +970,14 @@ urender
 check "usage: abandoned claim is retaken" wait_for 8 cache_is 63
 
 # A result that cannot be written keeps its claim, so the renders after it
-# do not each fetch again (8 fetches in 8 renders before the fix).
-prepare minimal "$p"; rm -f "$UCLAIM" "$T/fetches"
-printf 37 > "$UCACHE"; age_file "$UCACHE" 310
+# do not each fetch again (8 fetches in 8 renders before the fix). The cache
+# path is a non-empty directory, so renaming the result onto it fails the
+# way a full disk does — EISDIR here, ENOSPC there, both an OSError.
+prepare minimal "$p"; rm -f "$UCLAIM" "$UCACHE" "$T/fetches"
+mkdir "$UCACHE"; : > "$UCACHE/x"
 for i in 1 2 3 4 5; do
   prepare minimal "$p"
-  urender FAKE_REPLACE_FAIL=1 FAKE_USAGE_LOG="$T/fetches"
+  urender
   [ "$i" = 1 ] && wait_for 5 [ -s "$T/fetches" ]
 done
 sleep 1
@@ -941,10 +985,11 @@ check "usage: failed cache write, one fetch not $(wc -l < "$T/fetches" 2>/dev/nu
   [ "$(wc -l < "$T/fetches" 2>/dev/null | tr -d ' ')" = 1 ]
 check "usage: failed cache write keeps the claim" [ -f "$UCLAIM" ]
 check "usage: failed cache write leaves no temp file" sh -c "! ls '$UCACHE'.[0-9]* >/dev/null 2>&1"
+rm -rf "$UCACHE"
 # A claim that cannot be written starts no fetch at all.
 rm -f "$UCLAIM" "$T/fetches"; mkdir "$UCLAIM"
 prepare minimal "$p"
-urender FAKE_USAGE_LOG="$T/fetches"
+urender
 sleep 1
 check "usage: unwritable claim starts no fetch" [ ! -e "$T/fetches" ]
 check "usage: unwritable claim, stderr quiet" [ ! -s "$T/err" ]
@@ -964,7 +1009,7 @@ if command -v setsid >/dev/null 2>&1; then
   printf 37 > "$UCACHE"; age_file "$UCACHE" 310
   ( cd "$WORK" && exec setsid env -i PATH="$PATH_F" HOME="$HOME_F" TMPDIR="$TMP_F" AGENTLINE_TMP="$SIDE" \
       TZ=UTC LC_ALL=C AGENTLINE_PROBE_TTL=3600 AGENTLINE_WIDTH=120 AGENTLINE_USAGE_API=1 \
-      PYTHONPATH="$T/usagehook" FAKE_USAGE_DELAY=2 "$TEST_BASH" "$ROOT/agentline.sh" \
+      AGENTLINE_USAGE_URL="$UURL?delay=2" "$TEST_BASH" "$ROOT/agentline.sh" \
       < "$p" > /dev/null 2>&1 ) &
   rpid=$!
   wait "$rpid"
@@ -1431,6 +1476,9 @@ check "legacy: prints the old command" grep -q 'was: ~/.claude/statusline/status
 # A single-file bind mount refuses os.replace with EBUSY. No mount is possible
 # here, so a sitecustomize makes the rename fail the same way; the installer
 # must rewrite the file in place, keep the backup, and print no traceback.
+# The installer runs `python3 -I`, which ignores PYTHONPATH, so a python3
+# shim ahead on PATH drops the -I for this one run (the test seam lives here,
+# not in install.sh).
 inst_home bindmount
 echo '{"model": "opus"}' > "$S"
 mkdir -p "$T/pyhook"
@@ -1443,8 +1491,15 @@ def _busy(src, dst, *a, **k):
     return _real(src, dst, *a, **k)
 os.replace = _busy
 EOF
+mkdir -p "$T/pyhook/bin"
+cat > "$T/pyhook/bin/python3" <<EOF
+#!/bin/sh
+for a do shift; [ "\$a" = -I ] || set -- "\$@" "\$a"; done
+exec "$REAL_PY" "\$@"
+EOF
+chmod +x "$T/pyhook/bin/python3"
 ino_before=$(ls -i "$S" | awk '{print $1}')
-INST_ENV="PYTHONPATH=$T/pyhook"
+INST_ENV="PATH=$T/pyhook/bin:$PATH_F PYTHONPATH=$T/pyhook"
 install_run
 INST_ENV=""
 check "bind mount: exit 0 (got $irc)" [ "$irc" = 0 ]
@@ -1498,6 +1553,69 @@ check "symlink: backup beside the target" [ "$n" = 1 ]
 inst_home badarg
 install_run --bogus
 check "unknown option: exit 2" [ "$irc" = 2 ]
+
+# ===========================================================================
+# 6. Isolated interpreters: the project directory is not on sys.path
+# ===========================================================================
+# Everything here runs in Claude Code's project directory, and `python3 -c` /
+# `python3 -` put the cwd first on sys.path: a repository holding a json.py
+# had it executed on every render. Each script starts python3 -I. The
+# directory below shadows every module the programs import, and a package
+# for urllib; any one of them imported from it leaves a marker.
+EVIL="$T/evil"; PWNED="$T/pwned"; mkdir -p "$EVIL/urllib"
+for m in json re shlex math subprocess signal unicodedata errno stat shutil tempfile \
+         fcntl time glob http urllib/__init__ urllib/request; do
+  printf 'open(%s, "a").write("%s\\n")\n' "'$PWNED'" "$m" > "$EVIL/$m.py"
+done
+# PYTHONPATH and PYTHONSTARTUP are the other doors -I closes.
+printf 'open(%s, "a").write("startup\\n")\n' "'$PWNED'" > "$T/evil-startup.py"
+EVIL_ENV="PYTHONPATH=$EVIL PYTHONSTARTUP=$T/evil-startup.py"
+erun() {  # erun <stdin-file> <command...> — in $EVIL, hermetic env plus EVIL_ENV
+  local in="$1"; shift
+  # shellcheck disable=SC2086
+  ( cd "$EVIL" && run_env $EVIL_ENV "$@" < "$in" > "$T/out" 2> "$T/err" )
+  rc=$?
+}
+pwned() { if [ -e "$PWNED" ]; then fail "$1: ran $(tr '\n' ' ' < "$PWNED")"; rm -f "$PWNED"; else pass; fi; }
+rm -f "$PWNED"
+# Full render with every python path live: probes (MCP), the CLI e-mail
+# lookup (no payload address, no cached one), the detached /usage fetch.
+printf '{"session_id":"evil-0001","cwd":"%s"}\n' "$EVIL" > "$T/evil.json"
+rm -f "$CACHE_DIR"/render_* "$CACHE_DIR"/email.* "$CACHE_DIR"/usage.*
+erun "$T/evil.json" AGENTLINE_PROBE_TTL=0 AGENTLINE_USAGE_API=1 AGENTLINE_USAGE_URL="$UURL" \
+  AGENTLINE_WIDTH=120 "$TEST_BASH" "$ROOT/agentline.sh"
+check "isolated: full render exit 0 (got $rc)" [ "$rc" = 0 ]
+check "isolated: full render printed" [ -s "$T/out" ]
+wait_for 5 sh -c "! ls '$CACHE_DIR'/usage.*.claim >/dev/null 2>&1"
+pwned "isolated: full render"
+# The python e-mail mask (a non-ASCII address).
+printf '{"session_id":"evil-0002","cwd":"%s","account":{"email":"şule@örnek.com"}}\n' "$EVIL" > "$T/evil.json"
+erun "$T/evil.json" AGENTLINE_WIDTH=120 "$TEST_BASH" "$ROOT/agentline.sh"
+check "isolated: e-mail mask still masks" grep -qF 'ş**e@ö***k.com' "$T/out"
+pwned "isolated: e-mail mask"
+# The hooks, and the registry helper on its own.
+printf '{"transcript_path":"%s"}' "$T/transcript.jsonl" > "$T/evil.json"
+erun "$T/evil.json" AGENTLINE_TMP="$SIDE" "$TEST_BASH" "$ROOT/hooks/wordcount-hook.sh"
+check "isolated: wordcount hook still counts" [ "$(cat "$SIDE/claude_wordcount.txt" 2>/dev/null)" = "3 2" ]
+pwned "isolated: wordcount hook"
+echo '{"tool_name":"Agent","session_id":"s9","tool_input":{"description":"evil sub"}}' > "$T/evil.json"
+erun "$T/evil.json" AGENTLINE_TMP="$SIDE" "$TEST_BASH" "$ROOT/hooks/agent-tracker-hook.sh"
+check "isolated: tracker still registers" grep -q 'evil sub' "$SIDE/claude_agents.txt"
+pwned "isolated: tracker hook"
+erun /dev/null AGENTLINE_TMP="$SIDE" "$TEST_BASH" "$ROOT/hooks/agentline-agent.sh" remove "evil sub"
+pwned "isolated: agentline-agent.sh"
+# The installer.
+inst_home evil
+erun /dev/null HOME="$H" "$TEST_BASH" "$ROOT/install.sh"
+check "isolated: install exit 0 (got $rc)" [ "$rc" = 0 ]
+pwned "isolated: install.sh"
+# And no interpreter start in the shipped scripts goes without -I.
+if grep -nE '(^|[^-A-Za-z_])python3( |$)' "$ROOT/agentline.sh" "$ROOT/install.sh" "$ROOT"/hooks/*.sh \
+     | grep -vE ':[0-9]+: *#|command -v python3|python3 -I( |$)|python3 not found' > "$T/nonisolated"; then
+  fail "isolated: python3 without -I: $(cat "$T/nonisolated")"
+else
+  pass
+fi
 
 # ===========================================================================
 echo "agentline tests (bash $TEST_BASH_MAJOR): $n_pass passed, $n_fail failed, $n_skip skipped"

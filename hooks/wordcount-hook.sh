@@ -45,7 +45,9 @@ try:
 except Exception:
     print('0 0')
 PYEOF
-counts=$(PAYLOAD="$input" python3 -c "$_WC_PY")
+# -I (isolated): the hook runs in the project directory, and plain `python3 -c`
+# would import a json.py or os.py sitting there instead of the standard one.
+counts=$(PAYLOAD="$input" python3 -I -c "$_WC_PY")
 
 # Write totals (overwrite each time — reflects the full session transcript)
 echo "${counts:-0 0}" > "$WCFILE"

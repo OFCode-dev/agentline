@@ -240,6 +240,14 @@ fi
 # died with a syntax error. Every python program in this file follows the
 # same pattern; tests/run.sh guards it. `IFS=` keeps the indentation, and
 # read's non-zero status at end of input is expected.
+#
+# Every interpreter in this file (and in install.sh and the hooks) starts as
+# `python3 -I`. The status line runs in Claude Code's project directory, and
+# `python3 -c` / `python3 -` put the current directory first on sys.path: a
+# repository holding a json.py, re.py or shlex.py had that file executed on
+# every render, before a single payload field was read. Isolated mode leaves
+# the cwd and the script directory off sys.path and ignores the PYTHON*
+# variables (PYTHONPATH, PYTHONSTARTUP), which a project could also set.
 IFS= read -r -d '' _AL_PARSER <<'PYEOF'
 import json, math, os, re, shlex, sys
 # The decode is its own step so a broken payload is reported, not just
@@ -413,7 +421,7 @@ def line(k, v):
     return s.encode('utf-8', 'replace')
 sys.stdout.buffer.write(b'\n'.join(line(k, v) for k, v in fields.items()))
 PYEOF
-eval "$(PAYLOAD="$input" python3 -c "$_AL_PARSER")"
+eval "$(PAYLOAD="$input" python3 -I -c "$_AL_PARSER")"
 [ -z "$cwd" ] && cwd="$(pwd)"
 # (A host-derived pwd is cleaned with the other host strings via $folder.)
 [ -z "$cwd_disp" ] && cwd_disp="$cwd"
@@ -636,7 +644,7 @@ try:
 except Exception:
     print('')
 PYEOF
-active_mcps=$(python3 -c "$_AL_PY" "$cwd")
+active_mcps=$(python3 -I -c "$_AL_PY" "$cwd")
 
 fi  # end of throttled host probes (part 1)
 
@@ -1125,6 +1133,14 @@ if [ -z "$seven_day_top" ] && [ "${AGENTLINE_USAGE_API:-0}" = "1" ] && [ -n "$CA
     # cache, then drops the claim. A 20 s alarm bounds it however the
     # network misbehaves.
     #
+    # os.setsid() runs only once the interpreter is up, some 20 ms after the
+    # fork, and a render that exits sooner than that could have its group
+    # killed while the fetch was still in it. So the fetch is started with
+    # HUP, INT and TERM ignored — an ignored disposition survives exec — and
+    # python puts them back to default the moment it has its own session.
+    # The group is backgrounded as one job and `exec`s python: one fork, as
+    # a plain `python3 ... &` was.
+    #
     # Meanwhile the previous figure is shown, but only for a minute past its
     # TTL. The result, empty included, replaces the cache: keeping the old
     # value on failure would leave a figure on screen that nothing has
@@ -1144,13 +1160,28 @@ if [ -z "$seven_day_top" ] && [ "${AGENTLINE_USAGE_API:-0}" = "1" ] && [ -n "$CA
     # shell's own "cannot create" message for the failed redirect is muted.
     if [ $(( _now_epoch - claimed_at )) -ge 30 ] &&
        printf '%s\n' "$_now_epoch" 2>/dev/null > "$usage_claim"; then
-      python3 - "$_cfg_dir" "$usage_cache" "$usage_claim" >/dev/null 2>&1 <<'PYEOF' &
-import json, os, signal, sys, urllib.request
-cfg, cache, claim = sys.argv[1:4]
+      { trap '' HUP INT TERM
+        exec python3 -I - "$_cfg_dir" "$usage_cache" "$usage_claim" >/dev/null 2>&1 <<'PYEOF'
+import json, os, re, signal, sys, urllib.request
 try:
     os.setsid()
 except OSError:
     pass
+for _sig in (signal.SIGHUP, signal.SIGINT, signal.SIGTERM):
+    signal.signal(_sig, signal.SIG_DFL)
+cfg, cache, claim = sys.argv[1:4]
+# AGENTLINE_USAGE_URL is the test seam (tests/run.sh points it at a local fake
+# server; -I closed the old PYTHONPATH one). It is honoured for a loopback
+# http URL only: the request carries the account OAuth token, and a project
+# .claude/settings.json can set env vars for the session, so an arbitrary URL
+# here would hand that token to whoever wrote the project settings. The
+# override also ignores any http_proxy: it is plain http, and a proxy would
+# see the token in the clear (the real endpoint only ever tunnels TLS).
+url, fetch = 'https://api.anthropic.com/api/oauth/usage', urllib.request.urlopen
+_override = os.environ.get('AGENTLINE_USAGE_URL', '')
+if re.match(r'http://(127\.0\.0\.1|localhost|\[::1\])(:[0-9]+)?/', _override):
+    url = _override
+    fetch = urllib.request.build_opener(urllib.request.ProxyHandler({})).open
 def _expired(*_):
     raise TimeoutError()
 signal.signal(signal.SIGALRM, _expired)
@@ -1158,12 +1189,12 @@ signal.alarm(20)
 out = ''
 try:
     cred = json.load(open(os.path.join(os.path.expanduser(cfg), '.credentials.json')))['claudeAiOauth']
-    req = urllib.request.Request('https://api.anthropic.com/api/oauth/usage', headers={
+    req = urllib.request.Request(url, headers={
         'Authorization': 'Bearer ' + cred['accessToken'],
         'anthropic-beta': 'oauth-2025-04-20',
         'Accept': 'application/json',
     })
-    d = json.load(urllib.request.urlopen(req, timeout=10))
+    d = json.load(fetch(req, timeout=10))
     scoped = [l for l in d.get('limits', []) if isinstance(l, dict) and l.get('kind') == 'weekly_scoped']
     for want in ('fable', 'opus'):
         for l in scoped:
@@ -1196,6 +1227,7 @@ else:
     except OSError:
         pass
 PYEOF
+      } &
     fi
   fi
 fi
@@ -1271,7 +1303,7 @@ if [ -z "$account_email" ] && [ -n "$CACHE_BASE" ]; then
   if [ "$cache_age" -lt 60 ]; then
     account_email=$(cat "$auth_cache" 2>/dev/null)
   else
-    account_email=$(claude auth status --json 2>/dev/null | python3 -c "
+    account_email=$(claude auth status --json 2>/dev/null | python3 -I -c "
 import json, sys
 try:
     d = json.load(sys.stdin)
@@ -1321,7 +1353,7 @@ _mask_email() {  # _mask_email <address> -> $masked_email
   case "$e" in
     '') return ;;
     *[!abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789@._+-]*)
-      masked_email=$(python3 -c "$_AL_PY" "$e"); return ;;
+      masked_email=$(python3 -I -c "$_AL_PY" "$e"); return ;;
   esac
   head="$e"
   while :; do
@@ -1544,7 +1576,7 @@ else:
             rows += wrap(t) if fitting or i >= 2 else [sep.join(t)]
 sys.stdout.buffer.write(os.fsencode('\\n'.join(rows)))
 PYEOF
-out=$(python3 -c "$_AL_PY" "$STATUSLINE_WIDTH" "$P" "$SEGS" "${AGENTLINE_LAYOUT:-$AGENTLINE_LAYOUT_DEFAULT}" \
+out=$(python3 -I -c "$_AL_PY" "$STATUSLINE_WIDTH" "$P" "$SEGS" "${AGENTLINE_LAYOUT:-$AGENTLINE_LAYOUT_DEFAULT}" \
   "$AGENTLINE_LAYOUT_DEFAULT" "$_fit" "${AGENTLINE_DROP-$AGENTLINE_DROP_DEFAULT}" \
   "$CLOCK_TOKEN" "$ANIM_MAX_TOKEN" "$ANIM_ULTRA_TOKEN" "$GRAD_OPEN" "$GRAD_CLOSE")
 

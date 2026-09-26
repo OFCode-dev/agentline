@@ -15,7 +15,9 @@ HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)"
 . "$HOOK_DIR/agentline-agent.sh" 2>/dev/null || exit 0
 
 input=$(cat)
-parsed=$(printf '%s' "$input" | python3 -c "
+# -I (isolated): the hook runs in the project directory, and plain `python3 -c`
+# would import a json.py or re.py sitting there instead of the standard one.
+parsed=$(printf '%s' "$input" | python3 -I -c "
 import sys, json, re
 try:
     d = json.load(sys.stdin)

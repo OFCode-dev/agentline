@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- A repository can no longer run code through the status line. agentline,
+  its hooks and the installer run in the project directory, and
+  `python3 -c` puts that directory first on the import path, so a repo
+  holding a `json.py`, `re.py` or `shlex.py` had it executed on every
+  render. Every interpreter now starts as `python3 -I`, which leaves the
+  current directory off the path and ignores `PYTHONPATH` and
+  `PYTHONSTARTUP`. The opt-in /usage fetch also survives a render killed
+  within its first few milliseconds: it used to die if the kill came
+  before it had left the render's process group.
 - A render that misses the render cache starts two `python3` instead of
   three, or four for a Fable/Mythos model. That is the render an active turn
   pays about once a second, and each `python3` start costs ~20 ms of CPU.

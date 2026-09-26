@@ -69,7 +69,10 @@ agentline_agent() {
     echo "agentline-agent: python3 not found, skipped $op '$label'" >&2
     return 0
   fi
-  python3 - "$op" "$label" "$file" "$AGENTLINE_AGENT_WINDOW" "$AGENTLINE_AGENT_CAP" <<'PYEOF'
+  # -I (isolated): this runs in whatever directory the caller is in (a hook:
+  # the project), and plain `python3 -` would import an os.py or json.py
+  # sitting there instead of the standard one.
+  python3 -I - "$op" "$label" "$file" "$AGENTLINE_AGENT_WINDOW" "$AGENTLINE_AGENT_CAP" <<'PYEOF'
 # Only what every write needs is imported up front: this runs on every
 # subagent start and stop and every heartbeat, and glob, shutil and tempfile
 # together were most of its start-up (a write took 44 ms against 25 ms for

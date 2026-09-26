@@ -65,7 +65,10 @@ STAMP=$(date -u +%Y%m%d-%H%M%S)
 # statusLine entry — one trailing comma cost the user every permission, hook
 # and env override they had, with no backup to recover from.
 settings_py() {
-  python3 - "$@" <<'PYEOF'
+  # -I (isolated): the installer is often run from a checkout or a download
+  # directory, and plain `python3 -` would import a json.py or shutil.py
+  # sitting in the current directory instead of the standard one.
+  python3 -I - "$@" <<'PYEOF'
 import errno, json, os, shlex, shutil, stat, sys, tempfile
 
 mode, settings_path, stamp = sys.argv[1], sys.argv[2], sys.argv[3]
