@@ -44,6 +44,20 @@
   5 s wait now stands in, and a lock directory older than 10 s is cleared
   as abandoned. A write that cannot get the lock is skipped with a note on
   stderr instead of racing.
+- The `/usage` refresh survives the render being cancelled. Claude Code
+  cancels an in-flight status-line script whenever the next update is due
+  (every second with `refreshInterval: 1`), and a full render plus a fetch
+  often ran past that. The fetch claimed the refresh by touching the cache
+  itself, so a cancelled render left a fresh mtime on stale or empty content
+  for a whole TTL. The claim is now a separate `.claim` file holding its
+  epoch, which ages out after 30 s, and the fetch runs as a detached python
+  in its own session that renames its result into place, so the render
+  neither waits for it nor can take it down. The old figure stays up at most
+  a minute past its TTL while the refresh is in flight.
+- Cache file modes are repaired. `umask 077` only covers new files: a
+  cache file an older release left at 644 stayed 644 through every `>`
+  rewrite. The daily sweep now sets surviving files to 600 and the
+  directory to 700.
 - The registry lock can no longer spin forever, and every writer takes the
   same one. Breaking a stale `mkdir` lock did `rmdir; continue`, skipping the
   deadline, so a lock that could not be removed (another user's directory in

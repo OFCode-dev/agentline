@@ -756,30 +756,61 @@ if [ -z "$seven_day_top" ] && [ "${AGENTLINE_USAGE_API:-0}" = "1" ] && [ -n "$CA
   if [ "$usage_age" -lt "$usage_ttl" ]; then
     seven_day_top=$(<"$usage_cache")
   else
-    # Claim the refresh before making it. Every open session and every tick
-    # lands here the moment the TTL runs out; bumping the mtime first makes
-    # the others read the cache as fresh and serve the previous value while
-    # this one fetches, so N sessions make one request, not N. No lock, so
-    # nothing can be left stuck: at worst two renders racing inside the same
-    # instant both fetch. The timeout is 3 s, not 10: this runs inside a
-    # render, and a status line that stalls is worse than one missing `F:`.
+    # The refresh runs detached from the render. Claude Code cancels an
+    # in-flight status-line script whenever a new update is due — with
+    # refreshInterval=1 that is every second — and a full render already
+    # takes most of one, so a fetch made inside the render was routinely
+    # killed halfway. It used to claim the refresh by touching the cache
+    # itself, so a killed render left a fresh mtime on the old (or empty)
+    # content and nothing retried for a whole TTL.
     #
-    # The result, empty included, then replaces the cache. Keeping the old
+    # Now the claim is its own small file, holding the epoch it was taken
+    # (read with the `read` builtin): every open session and every tick
+    # lands here the moment the TTL runs out, and the first one to find no
+    # claim younger than 30 s takes it and starts the fetch, so N sessions
+    # make one request, not N. No lock, so nothing can be left stuck — an
+    # abandoned claim simply ages out. The fetch is a background python that
+    # leaves the render's process group (os.setsid) and holds none of its
+    # output, so neither the render finishing nor Claude Code killing it
+    # can abort the fetch; it writes a temp file and renames it over the
+    # cache, then drops the claim. A 20 s alarm bounds it however the
+    # network misbehaves.
+    #
+    # Meanwhile the previous figure is shown, but only for a minute past its
+    # TTL. The result, empty included, replaces the cache: keeping the old
     # value on failure would leave a figure on screen that nothing has
     # confirmed since, indefinitely for a logged-out account; an empty
     # result instead hides `F:` for one TTL and does not retry every render.
-    touch "$usage_cache" 2>/dev/null
-    seven_day_top=$(python3 - "$_cfg_dir" <<'PYEOF'
-import json, os, sys, urllib.request
+    # If fetches never land at all, the grace runs out and `F:` hides too.
+    if [ -f "$usage_cache" ] && [ "$usage_age" -lt $(( usage_ttl + 60 )) ]; then
+      seven_day_top=$(<"$usage_cache")
+    fi
+    usage_claim="${usage_cache}.claim"
+    claimed_at=0
+    [ -f "$usage_claim" ] && read -r claimed_at < "$usage_claim"
+    case "$claimed_at" in ''|*[!0-9]*) claimed_at=0 ;; esac
+    if [ $(( _now_epoch - claimed_at )) -ge 30 ]; then
+      printf '%s\n' "$_now_epoch" > "$usage_claim" 2>/dev/null
+      python3 - "$_cfg_dir" "$usage_cache" "$usage_claim" >/dev/null 2>&1 <<'PYEOF' &
+import json, os, signal, sys, urllib.request
+cfg, cache, claim = sys.argv[1:4]
+try:
+    os.setsid()
+except OSError:
+    pass
+def _expired(*_):
+    raise TimeoutError()
+signal.signal(signal.SIGALRM, _expired)
+signal.alarm(20)
 out = ''
 try:
-    cred = json.load(open(os.path.join(os.path.expanduser(sys.argv[1]), '.credentials.json')))['claudeAiOauth']
+    cred = json.load(open(os.path.join(os.path.expanduser(cfg), '.credentials.json')))['claudeAiOauth']
     req = urllib.request.Request('https://api.anthropic.com/api/oauth/usage', headers={
         'Authorization': 'Bearer ' + cred['accessToken'],
         'anthropic-beta': 'oauth-2025-04-20',
         'Accept': 'application/json',
     })
-    d = json.load(urllib.request.urlopen(req, timeout=3))
+    d = json.load(urllib.request.urlopen(req, timeout=10))
     scoped = [l for l in d.get('limits', []) if isinstance(l, dict) and l.get('kind') == 'weekly_scoped']
     for want in ('fable', 'opus'):
         for l in scoped:
@@ -791,10 +822,23 @@ try:
             break
 except Exception:
     pass
-print(out)
+signal.alarm(0)
+tmp = '%s.%d' % (cache, os.getpid())
+try:
+    with open(tmp, 'w') as f:
+        f.write(out)
+    os.replace(tmp, cache)
+except OSError:
+    try:
+        os.unlink(tmp)
+    except OSError:
+        pass
+try:
+    os.unlink(claim)
+except OSError:
+    pass
 PYEOF
-)
-    printf '%s' "$seven_day_top" > "$usage_cache" 2>/dev/null
+    fi
   fi
 fi
 # Weekly limits. The premium-model bucket rides inside the W segment as an
@@ -990,6 +1034,13 @@ PYEOF
 # gate is an epoch in a stamp file read with the `read` builtin, so the check
 # costs no fork on every other full render of the day; the stamp is written
 # before the sweep so a concurrent render does not start a second one.
+#
+# The same sweep repairs modes. `umask 077` only governs files created from
+# now on: a `>` redirect onto a cache file an older release left at 644 keeps
+# 644, and a directory made before the `mkdir -m 700` fix keeps whatever it
+# had. So every file that survives the sweep is set to 600 and the directory
+# to 700 (the directory is the `-maxdepth 0` entry, `-type d`). The first
+# full render after an upgrade with no stamp yet, and every day after, runs it.
 if [ -n "$CACHE_BASE" ]; then
   _prune_stamp="${CACHE_DIR}/.pruned"
   _pruned_at=0
@@ -997,7 +1048,10 @@ if [ -n "$CACHE_BASE" ]; then
   case "$_pruned_at" in ''|*[!0-9]*) _pruned_at=0 ;; esac
   if [ $(( _now_epoch - _pruned_at )) -ge 86400 ]; then
     printf '%s\n' "$_now_epoch" > "$_prune_stamp" 2>/dev/null
-    find "$CACHE_DIR" -maxdepth 1 -type f -mtime +7 ! -name .pruned -delete 2>/dev/null
+    find "$CACHE_DIR" -maxdepth 1 \
+      \( -type f -mtime +7 ! -name .pruned -delete \) -o \
+      \( -type f ! -perm 600 -exec chmod 600 {} + \) -o \
+      \( -type d ! -perm 700 -exec chmod 700 {} + \) 2>/dev/null
   fi
 fi
 

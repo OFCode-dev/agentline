@@ -348,6 +348,99 @@ PYEOF
 fi
 
 # ===========================================================================
+# 3b. Opt-in /usage fetch: claim file, detached refresh
+# ===========================================================================
+# No network: fake credentials plus a sitecustomize that replaces urlopen
+# with a canned /usage reply after FAKE_USAGE_DELAY seconds. It patches only
+# urlopen, so every other python3 the render runs is unaffected.
+mkdir -p "$T/usagehook"
+cat > "$T/usagehook/sitecustomize.py" <<'EOF'
+import io, json, os, time, urllib.request
+def _fake(req, timeout=None):
+    time.sleep(float(os.environ.get('FAKE_USAGE_DELAY', '0')))
+    return io.BytesIO(json.dumps({'limits': [{'kind': 'weekly_scoped',
+        'scope': {'model': {'display_name': 'Fable'}}, 'percent': 63}]}).encode())
+urllib.request.urlopen = _fake
+EOF
+mkdir -p "$HOME_F/.claude"
+echo '{"claudeAiOauth": {"accessToken": "fake-token"}}' > "$HOME_F/.claude/.credentials.json"
+ukey="$HOME_F/.claude"; UCACHE="$CACHE_DIR/usage.${ukey//[!A-Za-z0-9]/_}"; UCLAIM="$UCACHE.claim"
+age_file() {  # age_file <file> <seconds-old>
+  python3 -c 'import os, sys, time; t = time.time() - int(sys.argv[2]); os.utime(sys.argv[1], (t, t))' "$1" "$2"
+}
+wait_for() {  # wait_for <seconds> <command...> — poll until it succeeds
+  local n=$(( $1 * 10 )); shift
+  while [ "$n" -gt 0 ]; do "$@" && return 0; sleep 0.1; n=$((n - 1)); done
+  return 1
+}
+cache_is() { [ "$(cat "$UCACHE" 2>/dev/null)" = "$1" ]; }
+p="$PAY/minimal.json"
+urender() { render "$p" 120 AGENTLINE_USAGE_API=1 AGENTLINE_USAGE_TTL=300 PYTHONPATH="$T/usagehook" ${1+"$@"}; }
+
+# Expired cache, no claim: the previous figure is shown while a detached
+# fetch runs; the render does not wait for it, and it lands afterwards.
+prepare minimal "$p"; rm -f "$UCLAIM"
+printf 37 > "$UCACHE"; age_file "$UCACHE" 310
+urender FAKE_USAGE_DELAY=2
+check "usage: stale figure shown during the refresh" grep -q 'F:37%' "$T/out"
+check "usage: render did not wait for the fetch" cache_is 37
+check "usage: claim recorded in its own file" [ -f "$UCLAIM" ]
+check "usage: detached fetch lands after the render" wait_for 8 cache_is 63
+check "usage: claim dropped after the fetch" wait_for 2 [ ! -e "$UCLAIM" ]
+prepare minimal "$p"
+urender
+check "usage: fresh result rendered" grep -q 'F:63%' "$T/out"
+
+# A live claim (another session is fetching) serves the old value and
+# starts no second fetch.
+prepare minimal "$p"
+printf 41 > "$UCACHE"; age_file "$UCACHE" 310
+date +%s > "$UCLAIM"
+urender
+check "usage: live claim serves the old value" grep -q 'F:41%' "$T/out"
+sleep 1
+check "usage: live claim starts no second fetch" cache_is 41
+# An abandoned claim (render killed before it could fetch) ages out.
+echo $(( $(date +%s) - 60 )) > "$UCLAIM"
+prepare minimal "$p"
+urender
+check "usage: abandoned claim is retaken" wait_for 8 cache_is 63
+
+# Past TTL + 60 s grace an unconfirmed figure is hidden.
+prepare minimal "$p"
+printf 55 > "$UCACHE"; age_file "$UCACHE" 420
+date +%s > "$UCLAIM"
+urender
+check "usage: figure past the grace is hidden" sh -c "! grep -q 'F:' '$T/out'"
+
+# Claude Code cancels an in-flight render; killing the render's whole
+# process group must not abort the fetch (it runs in its own session).
+if command -v setsid >/dev/null 2>&1; then
+  prepare minimal "$p"; rm -f "$UCLAIM"
+  printf 37 > "$UCACHE"; age_file "$UCACHE" 310
+  ( cd "$WORK" && exec setsid env -i PATH="$PATH_F" HOME="$HOME_F" TMPDIR="$TMP_F" AGENTLINE_TMP="$SIDE" \
+      TZ=UTC LC_ALL=C AGENTLINE_PROBE_TTL=3600 AGENTLINE_WIDTH=120 AGENTLINE_USAGE_API=1 \
+      PYTHONPATH="$T/usagehook" FAKE_USAGE_DELAY=2 "$TEST_BASH" "$ROOT/agentline.sh" \
+      < "$p" > /dev/null 2>&1 ) &
+  rpid=$!
+  wait "$rpid"
+  kill -TERM -- "-$rpid" 2>/dev/null
+  check "usage: fetch survives a kill of the render's process group" wait_for 8 cache_is 63
+else
+  skip "usage: process-group kill: setsid not installed"
+fi
+rm -f "$HOME_F/.claude/.credentials.json" "$UCACHE" "$UCLAIM"
+
+# The daily sweep repairs modes a pre-umask release left behind.
+prepare minimal "$p"
+echo old > "$CACHE_DIR/legacy.cache"; chmod 644 "$CACHE_DIR/legacy.cache"
+chmod 755 "$CACHE_DIR"; rm -f "$CACHE_DIR/.pruned"
+render "$p" 120
+case "$(ls -l "$CACHE_DIR/legacy.cache")" in -rw-------*) pass ;; *) fail "prune: cache file not repaired to 600: $(ls -l "$CACHE_DIR/legacy.cache")" ;; esac
+case "$(ls -ld "$CACHE_DIR")" in drwx------*) pass ;; *) fail "prune: cache dir not repaired to 700: $(ls -ld "$CACHE_DIR")" ;; esac
+rm -f "$CACHE_DIR/legacy.cache"
+
+# ===========================================================================
 # 4. Hooks and the AGENTLINE_TMP seam
 # ===========================================================================
 hook_env() { env -i PATH="$PATH_F" HOME="$HOME_F" AGENTLINE_TMP="$SIDE" "$@"; }
