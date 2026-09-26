@@ -19,6 +19,13 @@
   within 2 s is cut off, and the panel stays empty until the next probe.
   The dev-server list is labelled by the `ss`/`lsof` awk itself, which
   replaces a `python3` and a `sed`.
+- A hung git can no longer stall the status line. The branch is read from
+  `HEAD` directly. agentline walks up to the first `.git` and follows a
+  `gitdir:` file for worktrees and submodules, so a directory outside a
+  repo costs no git fork at all. git still answers for bare and reftable
+  repositories and under `$GIT_DIR`. It and the origin-URL lookup now run
+  with `--no-optional-locks` (never touching the index lock) under a 1 s
+  timeout (`timeout`, or `gtimeout` on macOS with coreutils).
 - One string now chooses the layout. `AGENTLINE_LAYOUT` lists segment
   names: `/` starts a line, `,` separates names, and a name left out is
   hidden. The default reproduces the four lines exactly. Before, the only

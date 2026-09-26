@@ -751,12 +751,13 @@ hrender() {  # hrender <services-conf> [VAR=val...] -> normalized $T/got
   render "$p" 120 PATH="$HSHIM:$PATH_F" AGENTLINE_PROBE_TTL=0 AGENTLINE_SERVICES="$conf" ${1+"$@"}
   normalize "$T/out" "$T/got"
 }
-n_calls() { wc -l < "$T/systemctl-calls" 2>/dev/null | tr -d ' '; }
+n_calls() { if [ -f "$T/systemctl-calls" ]; then wc -l < "$T/systemctl-calls" | tr -d ' '; else echo 0; fi; }
 printf 'web:Web\ndb:DB\ngone:Gone\n# note\n\nmasked:Masked\nreload:Reload\n' > "$T/svc.conf"
 hrender "$T/svc.conf" AGENTLINE_LAYOUT=services
 check "services: one systemctl call for five units (got $(n_calls))" [ "$(n_calls)" = 1 ]
 check "services: states read by name, missing unit skipped" grep -qxF '🛡️ Web ✓ · DB ✗ · Masked ✗ · Reload ✓' "$T/got"
-check "services: probe exit 0, stderr empty" [ "$rc" = 0 ] && [ ! -s "$T/err" ]
+check "services: probe exit 0 (got $rc)" [ "$rc" = 0 ]
+check "services: probe stderr empty" [ ! -s "$T/err" ]
 # An invalid name aborts the batch; each unit is then asked on its own, and
 # only the bad line is lost.
 printf 'web:Web\nbad name:Bad\ndb:DB\n' > "$T/svc.conf"
@@ -779,6 +780,65 @@ hrender /nonexistent AGENTLINE_LAYOUT=ports
 check "dev ports: node(3000) labelled" grep -qF 'node(3000)' "$T/got"
 check "dev ports: (vite) trimmed to vite(5173)" grep -qF 'vite(5173)' "$T/got"
 if grep -q 'sshd' "$T/got"; then fail "dev ports: a port below 3000 shown"; else pass; fi
+
+# Git: the branch is read from HEAD, git runs only for the origin URL (and for
+# the layouts a file read cannot settle), under --no-optional-locks and a
+# timeout. The git shim logs each call and hands it to the real git, or with
+# GIT_SHIM_HANG=1 hangs the way a git on a dead NFS mount does.
+if REAL_GIT=$(command -v git); then
+  cat > "$HSHIM/git" <<EOF
+#!/bin/sh
+echo "\$*" >> "$T/git-calls"
+[ -n "\$GIT_SHIM_HANG" ] && exec sleep 5
+exec "$REAL_GIT" "\$@"
+EOF
+  chmod +x "$HSHIM/git"
+  G="$T/gitfx"; rm -rf "$G"; mkdir -p "$G/plain" "$G/wt" "$G/det/.git" "$G/rt/.git"
+  gx() { GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 "$REAL_GIT" "$@" >/dev/null 2>&1; }
+  gx init -q "$G/repo"; gx -C "$G/repo" symbolic-ref HEAD refs/heads/feat/x
+  gx -C "$G/repo" remote add origin git@github.com:octo/repo.git
+  mkdir -p "$G/repo/sub/deep" "$G/repo/.git/worktrees/w"
+  # A linked worktree, spelled by hand: a relative gitdir: file.
+  printf 'ref: refs/heads/wt-branch\n' > "$G/repo/.git/worktrees/w/HEAD"
+  printf 'gitdir: ../repo/.git/worktrees/w\n' > "$G/wt/.git"
+  printf '0123456789abcdef0123456789abcdef01234567\n' > "$G/det/.git/HEAD"
+  printf 'ref: refs/heads/.invalid\n' > "$G/rt/.git/HEAD"
+  grender() {  # grender <cwd> [VAR=val...] -> normalized $T/got, $T/git-calls
+    local c="$1"; shift
+    printf '{"session_id":"git-0001","cwd":"%s"}\n' "$c" > "$T/git.json"
+    prepare minimal "$T/git.json"; rm -f "$T/git-calls"
+    render "$T/git.json" 120 PATH="$HSHIM:$PATH_F" AGENTLINE_PROBE_TTL=0 AGENTLINE_LAYOUT=git ${1+"$@"}
+    normalize "$T/out" "$T/got"
+  }
+  git_calls() { if [ -f "$T/git-calls" ]; then wc -l < "$T/git-calls" | tr -d ' '; else echo 0; fi; }
+  for c in repo repo/sub/deep; do
+    grender "$G/$c"
+    check "git [$c]: branch from HEAD, repo from origin" grep -qxF '🌿 octo/repo@feat/x' "$T/got"
+    check "git [$c]: one git call, for the origin URL (got $(git_calls))" [ "$(git_calls)" = 1 ]
+  done
+  check "git: runs with --no-optional-locks" grep -q -- '--no-optional-locks .*remote get-url origin' "$T/git-calls"
+  grender "$G/wt"
+  check "git [worktree]: gitdir: file followed" grep -qF 'wt-branch' "$T/got"
+  grender "$G/det"
+  check "git [detached]: no branch" [ ! -s "$T/got" ]
+  check "git [detached]: no git call (got $(git_calls))" [ "$(git_calls)" = 0 ]
+  grender "$G/plain"
+  check "git [not a repo]: no git call (got $(git_calls))" [ "$(git_calls)" = 0 ]
+  grender "$G/rt"
+  check "git [reftable HEAD]: asks git" grep -q 'branch --show-current' "$T/git-calls"
+  grender "$G/plain" GIT_DIR="$G/repo/.git"
+  check "git [\$GIT_DIR]: asks git" grep -qF 'feat/x' "$T/got"
+  if command -v timeout >/dev/null 2>&1 || command -v gtimeout >/dev/null 2>&1; then
+    t0=$SECONDS; grender "$G/plain" GIT_DIR="$G/repo/.git" GIT_SHIM_HANG=1; dt=$(( SECONDS - t0 ))
+    check "git: a hung git is cut off (render took ${dt}s)" [ "$dt" -lt 4 ]
+    check "git: a hung git still exits 0 (got $rc)" [ "$rc" = 0 ]
+    check "git: a hung git hides the branch" [ ! -s "$T/got" ]
+  else
+    skip "git: no timeout/gtimeout for the hang guard"
+  fi
+else
+  skip "git: git not installed"
+fi
 
 # ===========================================================================
 # 3d. Opt-in /usage fetch: claim file, detached refresh

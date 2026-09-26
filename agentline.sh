@@ -543,16 +543,66 @@ else
   fi
 fi
 
-# Git branch
+# Git branch. Read from HEAD with the `read` builtin: walk up from $cwd to
+# the first .git, follow a `gitdir:` file (worktrees, submodules) to the real
+# git dir, and take "ref: refs/heads/<branch>" from its HEAD. A detached HEAD
+# holds a hash and shows no branch, which is what `git branch
+# --show-current` printed. No git fork at all, in a repo or outside one.
+#
+# git itself still answers wherever the file layout is not the whole story:
+# $GIT_DIR / $GIT_WORK_TREE / $GIT_CEILING_DIRECTORIES in the environment, a
+# bare repository (HEAD, objects/ and refs/ in the directory itself), a
+# reftable repository (its HEAD file reads "ref: refs/heads/.invalid"), or a
+# HEAD that cannot be read. It runs with --no-optional-locks (a status line
+# must never take or wait on the index lock) under a 1 s timeout, so a git
+# stuck on NFS or a huge repo costs one second a probe, not the render.
+# (One difference from git: a repo owned by another user, which git refuses
+# as "dubious ownership", still shows its branch.)
 git_branch=""
 git_repo=""
 if [ -n "$cwd" ] && [ -d "$cwd" ]; then
-  git_branch=$(cd "$cwd" 2>/dev/null && git branch --show-current 2>/dev/null)
+  _git_ask=0; _gd=""
+  if [ -n "${GIT_DIR-}${GIT_WORK_TREE-}${GIT_CEILING_DIRECTORIES-}" ]; then
+    _git_ask=1
+  else
+    _d="$cwd"
+    while :; do
+      if [ -e "$_d/.git" ]; then _gd="$_d/.git"; break; fi
+      if [ -f "$_d/HEAD" ] && [ -d "$_d/objects" ] && [ -d "$_d/refs" ]; then _git_ask=1; break; fi
+      case "$_d" in /|'') break ;; esac
+      _up="${_d%/*}"; [ -z "$_up" ] && _up=/
+      # A relative cwd has no "/" left to strip; stop rather than loop.
+      [ "$_up" = "$_d" ] && break
+      _d="$_up"
+    done
+  fi
+  if [ -n "$_gd" ] && [ -f "$_gd" ]; then
+    # A worktree or submodule: "gitdir: <path>", relative to the .git file.
+    _l=""; IFS= read -r _l < "$_gd"
+    case "$_l" in
+      "gitdir: "/*) _gd="${_l#gitdir: }" ;;
+      "gitdir: "?*) _gd="$_d/${_l#gitdir: }" ;;
+      *) _gd=""; _git_ask=1 ;;
+    esac
+  fi
+  if [ -n "$_gd" ]; then
+    _h=""
+    [ -r "$_gd/HEAD" ] && IFS= read -r _h < "$_gd/HEAD"
+    case "$_h" in
+      "ref: refs/heads/.invalid") _git_ask=1 ;;
+      "ref: refs/heads/"?*) git_branch="${_h#ref: refs/heads/}" ;;
+      ''|"ref: "*) _git_ask=1 ;;
+      # Anything else is a detached HEAD's hash: no branch.
+    esac
+  fi
+  if [ "$_git_ask" = 1 ]; then
+    git_branch=$(_run_to 1 git --no-optional-locks -C "$cwd" branch --show-current 2>/dev/null)
+  fi
   # owner/repo from the origin remote, shown to the left of the branch so it is
   # obvious which repository the branch belongs to. Handles both SSH and HTTPS
   # remotes; stays empty when there is no origin.
   if [ -n "$git_branch" ]; then
-    git_repo=$(cd "$cwd" 2>/dev/null && git remote get-url origin 2>/dev/null \
+    git_repo=$(_run_to 1 git --no-optional-locks -C "$cwd" remote get-url origin 2>/dev/null \
       | sed -E 's#^git@[^:]+:#/#; s#^[a-z]+://[^/]+/#/#; s#\.git$##; s#^/##')
   fi
 fi
