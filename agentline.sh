@@ -1506,10 +1506,14 @@ esac
 [ -n "${AGENTLINE_DROP+set}" ] && _fit=1
 IFS= read -r -d '' _AL_PY <<'PYEOF'
 import os, re, sys, unicodedata
-width, sep, segs, layout, default_layout = max(1, int(sys.argv[1])), sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5]
-fitting, drop_spec = sys.argv[6] == '1', sys.argv[7]
-placeholders = dict(zip(sys.argv[8:11], ('00:00:00', 'max', 'ultracode')))
-grad_re = re.compile(re.escape(sys.argv[11]) + '(.*?)' + re.escape(sys.argv[12]), re.S)
+width, sep, layout, default_layout = max(1, int(sys.argv[1])), sys.argv[2], sys.argv[3], sys.argv[4]
+fitting, drop_spec = sys.argv[5] == '1', sys.argv[6]
+placeholders = dict(zip(sys.argv[7:10], ('00:00:00', 'max', 'ultracode')))
+grad_re = re.compile(re.escape(sys.argv[10]) + '(.*?)' + re.escape(sys.argv[11]), re.S)
+# The segment records come on stdin (a here-string: one trailing newline).
+segs = sys.stdin.buffer.read().decode('utf-8', 'surrogateescape')
+if segs.endswith('\n'):
+    segs = segs[:-1]
 KEEP = ('warn', 'model', 'ctx', '5h', 'week')
 drop = [n for n in re.split(r'[\s,]+', drop_spec) if n and n not in KEEP]
 
@@ -1630,9 +1634,46 @@ else:
             rows += wrap(t) if fitting or i >= 2 else [sep.join(t)]
 sys.stdout.buffer.write(os.fsencode('\\n'.join(rows)))
 PYEOF
-out=$(python3 -I -c "$_AL_PY" "$STATUSLINE_WIDTH" "$P" "$SEGS" "${AGENTLINE_LAYOUT:-$AGENTLINE_LAYOUT_DEFAULT}" \
+# The segments go in on stdin, not as an argument: one argv string is capped
+# (128 KB on Linux, E2BIG past it), and when this python failed for any
+# reason — that, or no python3 at all — $out came back empty and all four
+# lines vanished. A here-string costs no fork.
+out=$(python3 -I -c "$_AL_PY" "$STATUSLINE_WIDTH" "$P" "${AGENTLINE_LAYOUT:-$AGENTLINE_LAYOUT_DEFAULT}" \
   "$AGENTLINE_LAYOUT_DEFAULT" "$_fit" "${AGENTLINE_DROP-$AGENTLINE_DROP_DEFAULT}" \
-  "$CLOCK_TOKEN" "$ANIM_MAX_TOKEN" "$ANIM_ULTRA_TOKEN" "$GRAD_OPEN" "$GRAD_CLOSE")
+  "$CLOCK_TOKEN" "$ANIM_MAX_TOKEN" "$ANIM_ULTRA_TOKEN" "$GRAD_OPEN" "$GRAD_CLOSE" <<< "$SEGS")
+_layout_rc=$?
+
+# If the layout pass failed, bash lays the lines out itself: each line of
+# the layout string, its segments joined with the separator in order — no
+# fitting, no wrapping, no gradient (its markers are removed) — so a failed
+# pass costs the polish, never the status line. The exit status decides, not
+# an empty $out: a layout whose segments all lack data is rightly empty. A
+# layout that names nothing known is the default, as in the python pass.
+if [ "$_layout_rc" != 0 ] && [ -z "$out" ] && [ -n "$SEGS" ]; then
+  _all="${_RS}${SEGS}"
+  _lay="${AGENTLINE_LAYOUT:-$AGENTLINE_LAYOUT_DEFAULT}"; _lay="${_lay// /}"
+  _known=0; _names="${_lay//\//,},"
+  while [ -n "$_names" ]; do
+    _n="${_names%%,*}"; _names="${_names#*,}"
+    case ",${AGENTLINE_LAYOUT_DEFAULT//[\/ ]/,}," in *",${_n},"*) [ -n "$_n" ] && _known=1 ;; esac
+  done
+  [ "$_known" = 1 ] || _lay="$AGENTLINE_LAYOUT_DEFAULT"
+  _lay="warn,${_lay// /}/"
+  while [ -n "$_lay" ]; do
+    _names="${_lay%%/*},"; _lay="${_lay#*/}"; _row=""
+    while [ -n "$_names" ]; do
+      _n="${_names%%,*}"; _names="${_names#*,}"
+      [ -n "$_n" ] || continue
+      case "$_all" in
+        *"${_RS}${_n}${_US}"*)
+          _t="${_all#*"${_RS}${_n}${_US}"}"; _t="${_t%%"${_RS}"*}"
+          _t="${_t//"$GRAD_OPEN"/}"; _t="${_t//"$GRAD_CLOSE"/}"
+          _row="${_row:+${_row}${P}}${_t}" ;;
+      esac
+    done
+    [ -n "$_row" ] && out="${out:+${out}\\n}${_row}"
+  done
+fi
 
 # Prune the cache directory. Every session leaves render_<sid>.* files behind
 # and nothing else ever removes them, so a long-lived host collects thousands.

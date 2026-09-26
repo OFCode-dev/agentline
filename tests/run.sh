@@ -731,6 +731,48 @@ for spec in "effort-ultracode:model,effort" "full:model,clock"; do
   check "layout: $fx [$lay] fits in its own width $lw (got $(n_rows "$T/got") rows)" [ "$(n_rows "$T/got")" = 1 ]
 done
 
+# The layout pass gets the segments on stdin (one argv string is capped at
+# 128 KB), and if it fails anyway bash joins each line itself instead of
+# printing nothing. A python3 shim fails the layout pass alone.
+LSHIM="$T/layoutshim"; mkdir -p "$LSHIM"
+cat > "$LSHIM/python3" <<EOF
+#!/bin/sh
+case "\$*" in *"def fit("*) exit 1 ;; esac
+exec "$(command -v python3)" "\$@"
+EOF
+chmod +x "$LSHIM/python3"
+prepare full "$p"; render "$p" 120 PATH="$LSHIM:$PATH_F"; normalize "$T/out" "$T/got"
+check "layout fallback: exit 0 (got $rc)" [ "$rc" = 0 ]
+check "layout fallback: line 1 joined" grep -q '^Opus 5 🧠 │ .*📊 42% │ S:71%' "$T/got"
+check "layout fallback: line 2 joined" grep -q '^v3.0.24 │ ~/work │ ' "$T/got"
+check "layout fallback: resume line" grep -qF 'claude --resume full-0001' "$T/got"
+fill "$FIX/payloads/fable-max.json" "$PAY/fable-max.json"
+prepare fable-max "$PAY/fable-max.json"; render "$PAY/fable-max.json" 120 PATH="$LSHIM:$PATH_F"
+check "layout fallback: Fable name shown plain" grep -qF '✦ Fable 5.1' "$T/out"
+if grep -q 'AGENTLINE_GRAD' "$T/out"; then fail "layout fallback: gradient marker leaked"; else pass; fi
+# A 7000-character model name reaches the layout pass whole.
+huge=$(printf '%07000d' 0 | tr 0 M)
+printf '{"session_id":"huge-0001","cwd":"%s","model":{"id":"x-custom","display_name":"%s"},"context_window":{"used_percentage":12}}\n' \
+  "$WORK" "$huge" > "$T/huge.json"
+prepare minimal "$T/huge.json"; render "$T/huge.json" 120
+check "7000-char model name: exit 0 (got $rc)" [ "$rc" = 0 ]
+check "7000-char model name: shown whole" grep -qF "$huge" "$T/out"
+check "7000-char model name: the other lines survive" grep -q '📊 12%' "$T/out"
+# Segments past the 128 KB argv cap (host data: a dev-port list patched into
+# the probe cache) used to fail the pass with E2BIG and blank every line.
+prepare full "$p"
+python3 - "$(cbase "$(sid_of "$p")").probes" <<'PYEOF'
+import sys
+path = sys.argv[1]
+lines = open(path).read().split('\n')
+lines = ['dev_ports=' + 'node\\(3000\\)\\ ' * 13000 if l.startswith('dev_ports=') else l for l in lines]
+open(path, 'w').write('\n'.join(lines))
+PYEOF
+render "$p" 120; normalize "$T/out" "$T/got"
+check "140 KB of segments: exit 0 (got $rc)" [ "$rc" = 0 ]
+check "140 KB of segments: line 1 still laid out" grep -q '^Opus 5 🧠 │ ' "$T/got"
+check "140 KB of segments: the long segment shown" grep -qF 'node(3000) node(3000)' "$T/got"
+
 # The render cache is keyed on the width and layout settings too: a resize or
 # a layout change re-renders at once instead of serving the old width for
 # the rest of the TTL.

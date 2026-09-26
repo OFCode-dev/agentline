@@ -41,6 +41,12 @@
   still took two rows. The row count of what is left is now the budget,
   and the dropped segments come back, most important first and in their
   own places, as long as the line keeps that many rows.
+- A failing layout pass no longer blanks the status line. The segments
+  reached it as one argument, which Linux caps at 128 KB ("Argument list
+  too long"), and on any failure of that `python3`, or with no `python3` at
+  all, all four lines vanished. The segments now go in on stdin. If the
+  pass fails anyway, bash joins each line's segments itself: no fitting and
+  no gradient, but every line is there.
 - A render that misses the render cache starts two `python3` instead of
   three, or four for a Fable/Mythos model. That is the render an active turn
   pays about once a second, and each `python3` start costs ~20 ms of CPU.
