@@ -8,10 +8,16 @@
 #                                 (another tool's, or your own script) instead
 #                                 of leaving it and printing the snippet
 #
+# Exit status: 0 installed and active, 1 settings.json unusable (nothing was
+# changed), 2 bad option, 3 installed but NOT active — settings.json runs
+# another status line, which was left alone (re-run with --force, or merge the
+# printed snippet), and --with-hooks was not wired for it.
+#
 # settings.json belongs to the user, so every edit to it is guarded: a file
 # that does not parse is refused rather than rewritten, a timestamped backup is
 # taken before the first write of a run (the newest 5 are kept), and the new
-# content is swapped in atomically.
+# content is swapped in atomically. A symlinked settings.json is edited, and
+# backed up, at the link's target.
 
 set -e
 
@@ -39,8 +45,10 @@ for arg in "$@"; do
 done
 
 # One stamp per run, so the settings.json backup and the script backup of the
-# same upgrade carry the same suffix and a run never backs up twice.
-STAMP=$(date +%Y%m%d-%H%M%S)
+# same upgrade carry the same suffix and a run never backs up twice. UTC, so
+# name order stays age order across a DST change — the backup pruning relies
+# on that.
+STAMP=$(date -u +%Y%m%d-%H%M%S)
 
 # All settings.json handling lives in this one python program, so every step
 # shares the same loader, backup and writer:
@@ -55,20 +63,27 @@ STAMP=$(date +%Y%m%d-%H%M%S)
 # and env override they had, with no backup to recover from.
 settings_py() {
   python3 - "$@" <<'PYEOF'
-import json, os, shlex, shutil, sys, tempfile
+import errno, json, os, shlex, shutil, sys, tempfile
 
 mode, settings_path, stamp = sys.argv[1], sys.argv[2], sys.argv[3]
 args = sys.argv[4:]
 KEEP_BACKUPS = 5
+EXIT_NOT_ACTIVE = 3  # see the header of install.sh
 
 # Match on the script's file name, never on a substring of the command. The
 # old `"statusline" in command` test also matched third-party status lines
 # (`npx -y ccstatusline@latest`) and a user's own `my-statusline.sh`, and
 # silently repointed them. statusline-command.sh (the statusline-5 skill this
-# project grew out of) and statusline.sh are agentline's pre-rename names:
-# those are migrated; anything else is somebody else's and is left alone.
+# project grew out of) and statusline.sh are agentline's pre-rename names —
+# but they are also the most common names of somebody else's status line:
+# ~/.claude/statusline.sh is the docs example and ~/.claude/statusline-command.sh
+# is what Claude Code's own /statusline setup writes. A pre-rename name alone
+# therefore proves nothing; see pre_rename_is_ours().
 AGENTLINE_NAMES = {'agentline.sh'}
 PRE_RENAME_NAMES = {'statusline.sh', 'statusline-command.sh'}
+# Strings only an agentline script contains: the project name, and the
+# service-list file the pre-rename script read (statusline-services.conf).
+AGENTLINE_MARKERS = (b'agentline', b'statusline-services.conf')
 
 # Dotfile managers often make settings.json a symlink into a repo. Writing to
 # the resolved target keeps that link intact; os.replace on the link itself
@@ -114,22 +129,42 @@ def save(d):
     """Write beside the target and rename over it: a crash or a full disk
     mid-write leaves the old file whole instead of a truncated one."""
     backup()
+    text = json.dumps(d, indent=2) + '\n'
     fd, tmp = tempfile.mkstemp(dir=os.path.dirname(real_path), prefix='.settings.json.')
     try:
         with os.fdopen(fd, 'w') as f:
-            json.dump(d, f, indent=2)
-            f.write('\n')
+            f.write(text)
         try:
             os.chmod(tmp, os.stat(real_path).st_mode & 0o7777)
         except OSError:
             pass
-        os.replace(tmp, real_path)
+        try:
+            os.replace(tmp, real_path)
+            return
+        except OSError as e:
+            # A settings.json bind-mounted on its own (a devcontainer's
+            # `-v ~/.claude/settings.json:…`) is a mount point: rename onto it
+            # fails with EBUSY (EXDEV or EPERM on some kernels and overlay
+            # setups) although the file itself is writable. Fall back to
+            # rewriting it in place; the backup above is the safety net that
+            # the atomic swap would otherwise have been.
+            if e.errno not in (errno.EBUSY, errno.EXDEV, errno.EPERM):
+                raise
+        os.unlink(tmp)
     except BaseException:
         try:
             os.unlink(tmp)
         except OSError:
             pass
         raise
+    try:
+        with open(real_path, 'w') as f:
+            f.write(text)
+    except OSError as e:
+        sys.stderr.write(f"✗ could not write {settings_path}: {e.strerror}\n"
+                         f"  Restore it from the backup {real_path}.agentline-bak-{stamp} if it is damaged.\n")
+        sys.exit(1)
+    print("  • settings.json cannot be swapped atomically (a bind mount?); rewritten in place")
 
 def script_path(cmd):
     """The .sh a command runs: "bash ~/x/agentline.sh" -> "/home/u/x/agentline.sh"."""
@@ -141,6 +176,40 @@ def script_path(cmd):
         if part.endswith('.sh'):
             return os.path.expanduser(os.path.expandvars(part))
     return ''
+
+def own_script(cmd, default_dest):
+    """The agentline script `cmd` runs, or '' when that is not certain.
+
+    script_path() takes the first token ending in .sh, which for a wrapper
+    such as `bash -c "AGENTLINE_TZ=UTC exec ~/x/agentline.sh"` is the whole
+    quoted string — once taken for the install path, the installer mkdir'd
+    that string under the cwd. Only an absolute path naming an existing
+    regular file (or the default location, which the install creates) is
+    trusted; any other command is treated as not agentline's."""
+    path = script_path(cmd)
+    if os.path.basename(path) not in AGENTLINE_NAMES:
+        return ''
+    if path == default_dest or (os.path.isabs(path) and os.path.isfile(path)):
+        return path
+    return ''
+
+def pre_rename_is_ours(path):
+    """Whether a statusline.sh / statusline-command.sh is agentline's own
+    pre-rename copy, and so safe to migrate. True when it sits in the
+    pre-rename `statusline/` install directory (the rule the hooks below use
+    too), when it is missing (a dangling command has nothing to lose), or
+    when its text carries an agentline marker. Anything else is somebody
+    else's script that merely has the common name."""
+    if os.path.basename(os.path.dirname(path)) == 'statusline':
+        return True
+    if not os.path.exists(path):
+        return True
+    try:
+        with open(path, 'rb') as f:
+            head = f.read(1 << 16)
+    except OSError:
+        return False
+    return any(m in head for m in AGENTLINE_MARKERS)
 
 d = load_settings()
 sl = d.get('statusLine')
@@ -155,13 +224,13 @@ if mode == 'resolve':
     # a pre-rename one, which is migrated to the default location so the old
     # name does not live on — is never the copy target: `cp` would overwrite
     # somebody else's script.
-    path = script_path(existing)
-    print(path if name in AGENTLINE_NAMES else args[0])
+    print(own_script(existing, args[0]) or args[0])
 
 elif mode == 'statusline':
     # An existing agentline command is left verbatim (it may carry an
-    # interpreter prefix or a custom path); an empty or pre-rename command is
-    # (re)pointed at dest, as is a foreign one under --force.
+    # interpreter prefix or a custom path); an empty command, or agentline's
+    # own pre-rename one, is (re)pointed at dest, as is a foreign one under
+    # --force.
     #
     # statusLine.refreshInterval is what makes the clock tick: without it
     # Claude Code only re-renders the status line on conversation events, so
@@ -169,16 +238,20 @@ elif mode == 'statusline':
     # serves those ticks from its render cache. An interval the user already
     # chose is honoured.
     dest, force = args[0], args[1] == '1'
-    if not existing or name in PRE_RENAME_NAMES or (force and name not in AGENTLINE_NAMES):
+    ours = bool(own_script(existing, dest))
+    legacy = name in PRE_RENAME_NAMES and pre_rename_is_ours(script_path(existing))
+    if not existing or legacy or (force and not ours):
         sl.update({'type': 'command', 'command': dest})
         print(f"✓ settings.json statusLine set to {dest}")
         if existing:
             print(f"  (was: {existing})")
-    elif name in AGENTLINE_NAMES:
+    elif ours:
         print(f"• settings.json left as-is: {existing}")
     else:
         # Someone else's status line. Say so and hand over the exact snippet
-        # instead of taking it over, or of silently leaving a decoy copy.
+        # instead of taking it over, or of silently leaving a decoy copy. The
+        # distinct exit status tells install.sh (and any script driving it)
+        # that agentline is installed but not what Claude Code runs.
         snippet = json.dumps({'statusLine': {'type': 'command', 'command': dest,
                                              'refreshInterval': 1}}, indent=2)
         print(f"⚠ settings.json statusLine is not agentline: {existing}")
@@ -186,7 +259,7 @@ elif mode == 'statusline':
         for row in snippet.splitlines()[1:-1]:
             print(f"  {row}")
         print("  or re-run: bash install.sh --force")
-        sys.exit(0)
+        sys.exit(EXIT_NOT_ACTIVE)
     if sl.get('refreshInterval') is not None:
         print(f"  • statusLine.refreshInterval left as-is: {sl['refreshInterval']}s")
     else:
@@ -295,7 +368,19 @@ elif [ -f "$SVC_EXAMPLE" ]; then
   echo "✓ Seeded $SVC_CONFIG — edit it to list this machine's services"
 fi
 
-settings_py statusline "$SETTINGS" "$STAMP" "$DEST" "$FORCE"
+SL_RC=0
+settings_py statusline "$SETTINGS" "$STAMP" "$DEST" "$FORCE" || SL_RC=$?
+if [ "$SL_RC" = 3 ]; then
+  # Another status line is configured and was left alone. The copy on disk is
+  # not what Claude Code runs, so do not report success, and do not wire hooks
+  # whose only reader is a status line that is not there.
+  echo "⚠ agentline is installed to $DEST but NOT active."
+  echo "  Re-run with --force, or merge the snippet above into $SETTINGS."
+  [ "$WITH_HOOKS" = 1 ] && echo "• Hooks not wired: the configured status line is not agentline."
+  exit 3
+elif [ "$SL_RC" != 0 ]; then
+  exit "$SL_RC"
+fi
 
 # --- Optional hooks -----------------------------------------------------------
 # The 🔤 word-counter (line 1) and 🤖 agent-tracker (line 3) segments read

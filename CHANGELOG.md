@@ -64,6 +64,23 @@
   left alone, with the snippet to paste printed instead; `--force` switches
   anyway. The hook repoint follows the same rule: a hook is repointed only
   when it sits in the old `statusline/` directory or no longer exists.
+- The installer no longer takes over `~/.claude/statusline.sh` or
+  `~/.claude/statusline-command.sh`. Those pre-rename names are also the docs
+  example and what Claude Code's own `/statusline` setup writes, and the name
+  alone was enough to repoint them. A pre-rename script is now migrated only
+  when it sits in the old `statusline/` directory, is missing, or contains
+  agentline's name; anything else is foreign. A compound command such as
+  `bash -c "… exec ~/…/agentline.sh"` is no longer mistaken for a path (the
+  whole string used to become the install target, created under the cwd): an
+  install path is trusted only when it is absolute and names an existing file.
+- A foreign status line no longer reports success. The installer used to say
+  "Done" and wire `--with-hooks` for a status line that was not agentline. It
+  now says agentline is installed but NOT active, skips the hooks, and exits
+  with status 3.
+- `settings.json` bind-mounted on its own (devcontainers) is written in place.
+  The atomic rename fails there with `EBUSY` and printed a traceback; after
+  the backup, the installer now falls back to rewriting the file. Backup
+  stamps are UTC, so name order is age order across a DST change.
 - Local tweaks survive upgrades. `~/.claude/agentline/local.sh`
   (`AGENTLINE_LOCAL`) is sourced on every full render, after the colours and
   before the lines are assembled, and the installer never writes it. It costs

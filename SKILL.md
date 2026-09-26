@@ -17,7 +17,7 @@ bash install.sh
 
 Then restart Claude Code. `install.sh` copies the script to `~/.claude/agentline/agentline.sh`, points `statusLine` in `~/.claude/settings.json` at it, and seeds the machine-local service list. It is safe to re-run and upgrades in place.
 
-- If `settings.json` already runs an `agentline.sh`, the installer upgrades that script in place. A status line that is anything else is left untouched, and the installer prints the snippet to paste. Ask the user before re-running with `bash install.sh --force` to switch.
+- If `settings.json` already runs an `agentline.sh`, the installer upgrades that script in place. A status line that is anything else is left untouched, the installer prints the snippet to paste, skips `--with-hooks`, and exits `3` (installed but NOT active) — treat that as "not done yet", not as success. Ask the user before re-running with `bash install.sh --force` to switch.
 - If `settings.json` is not valid JSON, the installer stops with the line number and changes nothing. Fix the file, then re-run. Every edit is preceded by a backup `settings.json.agentline-bak-<timestamp>` (newest 5 kept).
 - To customize, put overrides in `~/.claude/agentline/local.sh` (sourced before the lines are assembled; `install.sh` never touches it). Do not edit the installed `agentline.sh`: upgrades replace it, keeping the previous copy as `agentline.sh.bak-<timestamp>`.
 - Requirements: Claude Code ≥ 2.x, `bash`, `python3`, `git`, `awk`, `top` (standard on macOS and Linux).

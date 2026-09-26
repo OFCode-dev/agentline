@@ -54,8 +54,9 @@ bash install.sh --with-hooks
 `install.sh` is safe to re-run: it upgrades in place, never overwrites your machine-local service list, and wires hooks idempotently. It treats `~/.claude/settings.json` as yours:
 
 - A `settings.json` that is not valid JSON is refused with the line number. Nothing is rewritten.
-- A timestamped backup (`settings.json.agentline-bak-YYYYmmdd-HHMMSS`, newest 5 kept) is taken before any edit, and the new file is swapped in atomically. A symlinked `settings.json` stays a symlink.
-- A status line that is not agentline (`npx ccstatusline`, your own `my-statusline.sh`, …) is left untouched. The installer prints the snippet to paste instead. Pass `--force` to switch anyway.
+- A timestamped backup (`settings.json.agentline-bak-YYYYmmdd-HHMMSS`, UTC, newest 5 kept) is taken before any edit, and the new file is swapped in atomically. A symlinked `settings.json` stays a symlink; it is edited, and its backups are written, next to the link's **target** (e.g. inside your dotfiles repo). A `settings.json` bind-mounted on its own (devcontainers) cannot be swapped, so it is rewritten in place after the backup.
+- A status line that is not agentline (`npx ccstatusline`, your own `~/.claude/statusline.sh`, …) is left untouched. The installer prints the snippet to paste instead, says agentline is installed but **not active**, skips `--with-hooks`, and exits with status `3`. Pass `--force` to switch anyway. Only agentline's own pre-rename scripts (`statusline.sh` / `statusline-command.sh` inside `~/.claude/statusline/`, or carrying agentline's name) are migrated automatically.
+- Exit status: `0` installed and active, `1` `settings.json` unusable (nothing changed), `2` bad option, `3` installed but not active.
 - If the installed `agentline.sh` differs from the new one, it is kept as `agentline.sh.bak-<timestamp>` before being replaced. Put your tweaks in [`local.sh`](#faq) so they survive upgrades.
 
 ## What each line shows

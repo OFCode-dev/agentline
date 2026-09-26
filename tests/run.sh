@@ -387,8 +387,10 @@ check "reader honours CLAUDE_AGENTS_FILE" grep -q 'relocated' "$T/out"
 # script a clone-and-run install executes.
 H=""; S=""
 inst_home() { H="$T/inst/$1"; rm -rf "$H"; mkdir -p "$H/.claude"; S="$H/.claude/settings.json"; }
+INST_ENV=""  # extra VAR=val words for the next install_run (unquoted on purpose)
 install_run() {  # install_run [args...] -> $T/iout, $irc
-  ( cd "$T" && env -i PATH="$PATH_F" HOME="$H" TZ=UTC LC_ALL=C "$TEST_BASH" "$ROOT/install.sh" ${1+"$@"} \
+  # shellcheck disable=SC2086
+  ( cd "$T" && env -i PATH="$PATH_F" HOME="$H" TZ=UTC LC_ALL=C $INST_ENV "$TEST_BASH" "$ROOT/install.sh" ${1+"$@"} \
       > "$T/iout" 2>&1 )
   irc=$?
 }
@@ -500,14 +502,71 @@ for cmd in 'npx -y ccstatusline@latest' 'bash ~/bin/my-statusline.sh' '~/bin/cus
   mkdir -p "$H/bin"; echo 'echo mine' > "$H/bin/custom.sh"; cp "$H/bin/custom.sh" "$T/custom.orig"
   cp "$S" "$T/orig.json"
   install_run
-  check "foreign '$cmd': exit 0" [ "$irc" = 0 ]
+  check "foreign '$cmd': exit 3 (installed, not active)" [ "$irc" = 3 ]
   check "foreign '$cmd': settings untouched" cmp -s "$S" "$T/orig.json"
   check "foreign '$cmd': warns" grep -q 'not agentline' "$T/iout"
+  check "foreign '$cmd': says NOT active" grep -q 'NOT active' "$T/iout"
+  check "foreign '$cmd': no success line" sh -c "! grep -q '^Done' '$T/iout'"
   check "foreign '$cmd': their script not overwritten" cmp -s "$H/bin/custom.sh" "$T/custom.orig"
 done
 install_run --force
+check "foreign --force: exit 0" [ "$irc" = 0 ]
 jcheck "foreign --force: repointed" "$S" "d['statusLine']['command']" "\"$H/.claude/agentline/agentline.sh\""
 check "foreign --force: backup kept" [ "$(n_backups)" = 1 ]
+
+# --with-hooks on a foreign status line wires nothing: the hooks only feed
+# agentline, which Claude Code is not running.
+inst_home foreign-hooks
+printf '{"statusLine": {"type": "command", "command": "npx -y ccstatusline@latest"}}\n' > "$S"
+cp "$S" "$T/orig.json"
+install_run --with-hooks
+check "foreign --with-hooks: exit 3" [ "$irc" = 3 ]
+check "foreign --with-hooks: settings untouched" cmp -s "$S" "$T/orig.json"
+check "foreign --with-hooks: says hooks not wired" grep -q 'Hooks not wired' "$T/iout"
+check "foreign --with-hooks: no hook scripts copied" [ ! -e "$H/.claude/agentline/wordcount-hook.sh" ]
+
+# The two most common names of somebody else's status line — the docs
+# example and what Claude Code's /statusline setup writes — are pre-rename
+# names too, but a real foreign script under them is never taken over.
+for rel in .claude/statusline.sh .claude/statusline-command.sh; do
+  inst_home "foreign-name"
+  printf '#!/bin/bash\necho "my own line"\n' > "$H/$rel"; cp "$H/$rel" "$T/theirs.orig"
+  printf '{"statusLine": {"type": "command", "command": "~/%s"}}\n' "$rel" > "$S"
+  cp "$S" "$T/orig.json"
+  install_run
+  check "foreign ~/$rel: exit 3" [ "$irc" = 3 ]
+  check "foreign ~/$rel: settings untouched" cmp -s "$S" "$T/orig.json"
+  check "foreign ~/$rel: script untouched" cmp -s "$H/$rel" "$T/theirs.orig"
+done
+# The same names are migrated when the script is provably agentline's: it
+# carries a marker, or it is missing (nothing to lose).
+inst_home marker
+printf '#!/bin/bash\n# agentline — old copy\n' > "$H/.claude/statusline-command.sh"
+printf '{"statusLine": {"type": "command", "command": "~/.claude/statusline-command.sh"}}\n' > "$S"
+install_run
+check "marker: exit 0" [ "$irc" = 0 ]
+jcheck "marker: migrated" "$S" "d['statusLine']['command']" "\"$H/.claude/agentline/agentline.sh\""
+inst_home marker-conf
+printf '#!/bin/bash\nconf=~/.claude/statusline-services.conf\n' > "$H/.claude/statusline.sh"
+printf '{"statusLine": {"type": "command", "command": "~/.claude/statusline.sh"}}\n' > "$S"
+install_run
+jcheck "pre-rename conf marker: migrated" "$S" "d['statusLine']['command']" "\"$H/.claude/agentline/agentline.sh\""
+inst_home dangling
+printf '{"statusLine": {"type": "command", "command": "~/.claude/statusline.sh"}}\n' > "$S"
+install_run
+check "dangling pre-rename: exit 0" [ "$irc" = 0 ]
+jcheck "dangling pre-rename: migrated" "$S" "d['statusLine']['command']" "\"$H/.claude/agentline/agentline.sh\""
+
+# A compound command is not a path: the old resolver took the whole quoted
+# string as the install target and mkdir'd it under the cwd.
+inst_home compound
+printf '%s\n' '{"statusLine": {"type": "command", "command": "bash -c \"AGENTLINE_TZ=UTC exec ~/.claude/agentline/agentline.sh\""}}' > "$S"
+cp "$S" "$T/orig.json"
+install_run
+check "compound: exit 3" [ "$irc" = 3 ]
+check "compound: settings untouched" cmp -s "$S" "$T/orig.json"
+check "compound: installed to the default location" [ -x "$H/.claude/agentline/agentline.sh" ]
+if ls "$T" | grep -q 'AGENTLINE_TZ'; then fail "compound: stray path created under the cwd"; else pass; fi
 
 # Pre-rename names are migrated to the default location.
 inst_home legacy
@@ -515,6 +574,48 @@ printf '{"statusLine": {"type": "command", "command": "~/.claude/statusline/stat
 install_run
 jcheck "legacy: migrated" "$S" "d['statusLine']['command']" "\"$H/.claude/agentline/agentline.sh\""
 check "legacy: prints the old command" grep -q 'was: ~/.claude/statusline/statusline-command.sh' "$T/iout"
+
+# A single-file bind mount refuses os.replace with EBUSY. No mount is possible
+# here, so a sitecustomize makes the rename fail the same way; the installer
+# must rewrite the file in place, keep the backup, and print no traceback.
+inst_home bindmount
+echo '{"model": "opus"}' > "$S"
+mkdir -p "$T/pyhook"
+cat > "$T/pyhook/sitecustomize.py" <<'EOF'
+import errno, os
+_real = os.replace
+def _busy(src, dst, *a, **k):
+    if str(dst).endswith('settings.json'):
+        raise OSError(errno.EBUSY, 'Device or resource busy', str(dst))
+    return _real(src, dst, *a, **k)
+os.replace = _busy
+EOF
+ino_before=$(ls -i "$S" | awk '{print $1}')
+INST_ENV="PYTHONPATH=$T/pyhook"
+install_run
+INST_ENV=""
+check "bind mount: exit 0 (got $irc)" [ "$irc" = 0 ]
+check "bind mount: no traceback" sh -c "! grep -q Traceback '$T/iout'"
+check "bind mount: says rewritten in place" grep -q 'rewritten in place' "$T/iout"
+jcheck "bind mount: statusLine written" "$S" "d['statusLine']['refreshInterval']" 1
+jcheck "bind mount: other keys kept" "$S" "d['model']" '"opus"'
+check "bind mount: same inode (written in place)" [ "$(ls -i "$S" | awk '{print $1}')" = "$ino_before" ]
+check "bind mount: backup taken" [ "$(n_backups)" = 1 ]
+check "bind mount: no temp file left" sh -c "! ls -a '$H/.claude' | grep -q '^\.settings\.json\.'"
+
+# Backup stamps are UTC, so name order is age order across DST.
+inst_home utcstamp
+echo '{}' > "$S"
+u1=$(date -u +%Y%m%d-%H)
+INST_ENV="TZ=Etc/GMT-14"
+install_run
+INST_ENV=""
+u2=$(date -u +%Y%m%d-%H)
+stamp=""; for b in "$S".agentline-bak-*; do stamp="${b##*.agentline-bak-}"; done
+case "$stamp" in
+  "$u1"*|"$u2"*) pass ;;
+  *) fail "backup stamp is not UTC: $stamp (UTC hour $u1)" ;;
+esac
 
 # A custom agentline path is upgraded in place; a chosen interval is kept.
 inst_home custom
