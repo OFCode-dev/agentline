@@ -8,10 +8,13 @@
 #                                 (another tool's, or your own script) instead
 #                                 of leaving it and printing the snippet
 #
-# Exit status: 0 installed and active, 1 settings.json unusable (nothing was
-# changed), 2 bad option, 3 installed but NOT active — settings.json runs
-# another status line, which was left alone (re-run with --force, or merge the
-# printed snippet), and --with-hooks was not wired for it.
+# Exit status: 0 installed and active, 1 settings.json unusable or unwritable
+# (a file that does not parse, or cannot take --with-hooks, is refused before
+# anything is copied or written; a write that fails later leaves the file
+# whole, with the run's backup beside it), 2 bad option, 3 installed but NOT
+# active — settings.json runs another status line, which was left alone
+# (re-run with --force, or merge the printed snippet), and --with-hooks was
+# not wired for it.
 #
 # settings.json belongs to the user, so every edit to it is guarded: a file
 # that does not parse is refused rather than rewritten, a timestamped backup is
@@ -63,7 +66,7 @@ STAMP=$(date -u +%Y%m%d-%H%M%S)
 # and env override they had, with no backup to recover from.
 settings_py() {
   python3 - "$@" <<'PYEOF'
-import errno, json, os, shlex, shutil, sys, tempfile
+import errno, json, os, shlex, shutil, stat, sys, tempfile
 
 mode, settings_path, stamp = sys.argv[1], sys.argv[2], sys.argv[3]
 args = sys.argv[4:]
@@ -81,9 +84,15 @@ EXIT_NOT_ACTIVE = 3  # see the header of install.sh
 # therefore proves nothing; see pre_rename_is_ours().
 AGENTLINE_NAMES = {'agentline.sh'}
 PRE_RENAME_NAMES = {'statusline.sh', 'statusline-command.sh'}
-# Strings only an agentline script contains: the project name, and the
+# Strings only an agentline script itself contains: its header line, and the
 # service-list file the pre-rename script read (statusline-services.conf).
-AGENTLINE_MARKERS = (b'agentline', b'statusline-services.conf')
+# Not the bare word "agentline" — a user's wrapper that runs agentline and
+# pipes it through sed contains that too, and was replaced.
+AGENTLINE_MARKERS = (
+    '# agentline — a four-line, zero-dependency status bar for Claude Code.'.encode(),
+    b'statusline-services.conf',
+)
+MARKER_SCAN = 1 << 16  # the header is line 2; the conf name sits near the top
 
 # Dotfile managers often make settings.json a symlink into a repo. Writing to
 # the resolved target keeps that link intact; os.replace on the link itself
@@ -166,6 +175,15 @@ def save(d):
         sys.exit(1)
     print("  • settings.json cannot be swapped atomically (a bind mount?); rewritten in place")
 
+def words(s):
+    """Shell words of `s`, with ; | & ( ) < > split off as words of their own."""
+    try:
+        lex = shlex.shlex(s, posix=True, punctuation_chars=True)
+        lex.whitespace_split = True
+        return list(lex)
+    except ValueError:
+        return s.split()
+
 def script_path(cmd):
     """The .sh a command runs: "bash ~/x/agentline.sh" -> "/home/u/x/agentline.sh"."""
     try:
@@ -178,38 +196,76 @@ def script_path(cmd):
     return ''
 
 def own_script(cmd, default_dest):
-    """The agentline script `cmd` runs, or '' when that is not certain.
+    """(path, wrapped): the agentline script `cmd` runs, or ('', False) when
+    that is not certain. wrapped is True when the script is not the command
+    itself but is run from inside it — `bash -c "AGENTLINE_TZ=UTC exec
+    ~/x/agentline.sh"`, or agentline piped through sed.
 
-    script_path() takes the first token ending in .sh, which for a wrapper
-    such as `bash -c "AGENTLINE_TZ=UTC exec ~/x/agentline.sh"` is the whole
-    quoted string — once taken for the install path, the installer mkdir'd
-    that string under the cwd. Only an absolute path naming an existing
+    script_path() takes the first token ending in .sh, which for such a
+    wrapper is the whole quoted string — once taken for the install path, the
+    installer mkdir'd that string under the cwd. So the words inside each
+    argument are searched too, and only an absolute path naming an existing
     regular file (or the default location, which the install creates) is
     trusted; any other command is treated as not agentline's."""
+    def trusted(path):
+        return path == default_dest or (os.path.isabs(path) and os.path.isfile(path))
     path = script_path(cmd)
-    if os.path.basename(path) not in AGENTLINE_NAMES:
-        return ''
-    if path == default_dest or (os.path.isabs(path) and os.path.isfile(path)):
-        return path
-    return ''
+    if os.path.basename(path) in AGENTLINE_NAMES and trusted(path):
+        return path, False
+    for part in words(cmd):
+        for w in words(part):
+            if os.path.basename(w) in AGENTLINE_NAMES:
+                path = os.path.expanduser(os.path.expandvars(w))
+                if trusted(path):
+                    return path, True
+    return '', False
 
-def pre_rename_is_ours(path):
-    """Whether a statusline.sh / statusline-command.sh is agentline's own
-    pre-rename copy, and so safe to migrate. True when it sits in the
-    pre-rename `statusline/` install directory (the rule the hooks below use
-    too), when it is missing (a dangling command has nothing to lose), or
-    when its text carries an agentline marker. Anything else is somebody
-    else's script that merely has the common name."""
-    if os.path.basename(os.path.dirname(path)) == 'statusline':
-        return True
-    if not os.path.exists(path):
-        return True
+def has_marker(path):
+    """Whether `path` is a regular file whose head carries an agentline
+    marker. Opened non-blocking and checked with fstat before any read: a
+    FIFO or a device at that name must never be read from — a FIFO with no
+    writer would hang the installer, a tty or a device could block or eat
+    input."""
+    if not os.path.isabs(path):
+        return False
     try:
-        with open(path, 'rb') as f:
-            head = f.read(1 << 16)
+        fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | getattr(os, 'O_NOCTTY', 0))
     except OSError:
         return False
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            return False
+        head = os.read(fd, MARKER_SCAN)
+    except OSError:
+        return False
+    finally:
+        os.close(fd)
     return any(m in head for m in AGENTLINE_MARKERS)
+
+def pre_rename_is_ours(cmd):
+    """Whether `cmd` runs agentline's own pre-rename statusline.sh /
+    statusline-command.sh, and so is safe to repoint at the new install.
+
+    Those names are also the commonest names of somebody else's status line,
+    so neither the name nor the directory proves anything: the third-party
+    rz1989s/claude-code-statusline installs to ~/.claude/statusline/statusline.sh,
+    which a `statusline/`-directory rule silently took over. Two cases count:
+      - the file carries an agentline marker (see AGENTLINE_MARKERS);
+      - the command is one absolute path (after ~ expansion) that does not
+        exist — a dangling command has nothing to lose. Only a lone token:
+        in `bash -c "source ~/.profile; ~/.claude/statusline.sh"` the whole
+        quoted string looks like a missing file, and an unexpanded
+        `$XDG_CONFIG_HOME/claude/statusline.sh` may well exist at run time."""
+    path = script_path(cmd)
+    if os.path.basename(path) not in PRE_RENAME_NAMES:
+        return False
+    parts = words(cmd)
+    if len(parts) == 1 and '$' not in parts[0]:
+        lone = os.path.expanduser(parts[0])
+        if (os.path.isabs(lone) and os.path.basename(lone) in PRE_RENAME_NAMES
+                and not os.path.lexists(lone)):
+            return True
+    return has_marker(path)
 
 d = load_settings()
 sl = d.get('statusLine')
@@ -217,14 +273,19 @@ sl = dict(sl) if isinstance(sl, dict) else {}
 existing = sl.get('command') or ''
 if not isinstance(existing, str):
     existing = ''
-name = os.path.basename(script_path(existing))
 
 if mode == 'resolve':
-    # A custom agentline path is upgraded in place. Any other .sh — including
-    # a pre-rename one, which is migrated to the default location so the old
-    # name does not live on — is never the copy target: `cp` would overwrite
-    # somebody else's script.
-    print(own_script(existing, args[0]) or args[0])
+    # A custom agentline path is upgraded in place, also when a wrapper runs
+    # it. Any other .sh — including a pre-rename one, which is migrated to the
+    # default location so the old name does not live on — is never the copy
+    # target: `cp` would overwrite somebody else's script.
+    #
+    # This first pass is also the validation pass, so a settings.json that
+    # --with-hooks could not use either is refused here, before the script is
+    # copied or statusLine is written, rather than half-way through the run.
+    if args[1:2] == ['1'] and not isinstance(d.get('hooks', {}), dict):
+        fail(f"{settings_path}: \"hooks\" is not a JSON object")
+    print(own_script(existing, args[0])[0] or args[0])
 
 elif mode == 'statusline':
     # An existing agentline command is left verbatim (it may carry an
@@ -238,13 +299,20 @@ elif mode == 'statusline':
     # serves those ticks from its render cache. An interval the user already
     # chose is honoured.
     dest, force = args[0], args[1] == '1'
-    ours = bool(own_script(existing, dest))
-    legacy = name in PRE_RENAME_NAMES and pre_rename_is_ours(script_path(existing))
+    own, wrapped = own_script(existing, dest)
+    ours = bool(own)
+    legacy = pre_rename_is_ours(existing)
     if not existing or legacy or (force and not ours):
         sl.update({'type': 'command', 'command': dest})
         print(f"✓ settings.json statusLine set to {dest}")
         if existing:
             print(f"  (was: {existing})")
+    elif wrapped:
+        # The wrapper is the user's (an env prefix, a pipe through sed) and
+        # the copy it runs was just upgraded in place, so agentline is live.
+        # --force is not suggested, and does not apply: it would drop the
+        # wrapper along with whatever it sets.
+        print(f"• agentline behind a wrapper — left as-is, upgraded in place: {existing}")
     elif ours:
         print(f"• settings.json left as-is: {existing}")
     else:
@@ -339,7 +407,7 @@ mkdir -p "$(dirname "$SETTINGS")"
 # Resolve the install target from settings.json. This also validates the file
 # before anything is touched: an unparsable settings.json stops the install
 # here, with the script not yet copied either.
-DEST=$(settings_py resolve "$SETTINGS" "$STAMP" "$DEFAULT_DEST")
+DEST=$(settings_py resolve "$SETTINGS" "$STAMP" "$DEFAULT_DEST" "$WITH_HOOKS")
 
 mkdir -p "$(dirname "$DEST")"
 # The README used to say "edit agentline.sh directly", and every upgrade then

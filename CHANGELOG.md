@@ -113,11 +113,23 @@
   `~/.claude/statusline-command.sh`. Those pre-rename names are also the docs
   example and what Claude Code's own `/statusline` setup writes, and the name
   alone was enough to repoint them. A pre-rename script is now migrated only
-  when it sits in the old `statusline/` directory, is missing, or contains
-  agentline's name; anything else is foreign. A compound command such as
+  on positive proof: its first 64 KB carry agentline's header line or the
+  pre-rename `statusline-services.conf`, or the command is one absolute path
+  that does not exist. A directory rule (`*/statusline/statusline.sh`) would
+  have taken over rz1989s/claude-code-statusline, which installs exactly
+  there. The bare word "agentline" would have matched a user's wrapper that
+  pipes agentline through `sed`. A "missing" compound command
+  (`bash -c "source ~/.profile; ~/.claude/statusline.sh"`) or an unexpanded
+  `$XDG_CONFIG_HOME/…` path is not proof either. The marker check reads
+  regular files only and never opens a FIFO. A compound command such as
   `bash -c "… exec ~/…/agentline.sh"` is no longer mistaken for a path (the
   whole string used to become the install target, created under the cwd): an
   install path is trusted only when it is absolute and names an existing file.
+  agentline run through such a wrapper is reported as "behind a wrapper — left
+  as-is", its copy is upgraded in place, and the install exits 0 instead of
+  claiming it is not active and pointing at a `--force` that would drop the
+  wrapper's environment. `--with-hooks` on a `settings.json` whose `hooks`
+  is not an object is refused before anything is copied or written.
 - A foreign status line no longer reports success. The installer used to say
   "Done" and wire `--with-hooks` for a status line that was not agentline. It
   now says agentline is installed but NOT active, skips the hooks, and exits

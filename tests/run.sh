@@ -799,10 +799,60 @@ for rel in .claude/statusline.sh .claude/statusline-command.sh; do
   check "foreign ~/$rel: settings untouched" cmp -s "$S" "$T/orig.json"
   check "foreign ~/$rel: script untouched" cmp -s "$H/$rel" "$T/theirs.orig"
 done
-# The same names are migrated when the script is provably agentline's: it
-# carries a marker, or it is missing (nothing to lose).
-inst_home marker
+# Neither the directory nor a missing-looking compound command proves a
+# pre-rename script is ours. rz1989s/claude-code-statusline documents
+# ~/.claude/statusline/statusline.sh; a `statusline/` project dir is common;
+# a compound command or an unexpanded variable is not a path that can be
+# judged missing; a wrapper that runs agentline mentions it by name.
+foreign_kept() {  # foreign_kept <label> <command-json-string>
+  printf '{"statusLine": {"type": "command", "command": "%s"}}\n' "$2" > "$S"
+  cp "$S" "$T/orig.json"
+  install_run
+  check "$1: exit 3 (got $irc)" [ "$irc" = 3 ]
+  check "$1: settings untouched" cmp -s "$S" "$T/orig.json"
+}
+for rel in .claude/statusline/statusline.sh code/statusline/statusline.sh; do
+  inst_home foreign-dir
+  mkdir -p "$(dirname "$H/$rel")"
+  printf '#!/bin/bash\necho "third-party line"\n' > "$H/$rel"; cp "$H/$rel" "$T/theirs.orig"
+  foreign_kept "foreign ~/$rel" "~/$rel"
+  check "foreign ~/$rel: script untouched" cmp -s "$H/$rel" "$T/theirs.orig"
+done
+inst_home compound-missing
+foreign_kept "compound missing pre-rename" 'bash -c \"source ~/.profile; ~/.claude/statusline.sh\"'
+inst_home unexpanded
+foreign_kept "unexpanded \$XDG pre-rename" '$XDG_CONFIG_HOME/claude/statusline.sh'
+inst_home wrapper-file
+printf '#!/bin/bash\n~/.claude/agentline/agentline.sh | sed "s/x/y/"\n' > "$H/.claude/statusline.sh"
+cp "$H/.claude/statusline.sh" "$T/theirs.orig"
+foreign_kept "wrapper naming agentline" '~/.claude/statusline.sh'
+check "wrapper naming agentline: wrapper untouched" cmp -s "$H/.claude/statusline.sh" "$T/theirs.orig"
+inst_home old-marker-word
 printf '#!/bin/bash\n# agentline — old copy\n' > "$H/.claude/statusline-command.sh"
+foreign_kept "bare word 'agentline' is no marker" '~/.claude/statusline-command.sh'
+# A FIFO at the name is never opened for reading: the old open() blocked
+# forever on one with no writer. Killed after 20 s so a regression fails
+# instead of hanging the suite.
+if command -v mkfifo >/dev/null 2>&1; then
+  inst_home fifo
+  mkfifo "$H/.claude/statusline.sh"
+  printf '{"statusLine": {"type": "command", "command": "~/.claude/statusline.sh"}}\n' > "$S"
+  install_run & ipid=$!
+  i=0; while kill -0 "$ipid" 2>/dev/null && [ "$i" -lt 200 ]; do sleep 0.1; i=$((i + 1)); done
+  if kill -0 "$ipid" 2>/dev/null; then
+    kill -9 "$ipid" 2>/dev/null; wait "$ipid" 2>/dev/null; fail "fifo pre-rename: installer hung"
+  else
+    wait "$ipid"; pass
+  fi
+else
+  skip "fifo pre-rename: mkfifo not installed"
+fi
+
+# The same names are migrated when the script is provably agentline's: it
+# carries agentline's header or the pre-rename conf name, or the command is
+# one absolute path that is missing (nothing to lose).
+inst_home marker
+head -n 3 "$ROOT/agentline.sh" > "$H/.claude/statusline-command.sh"
 printf '{"statusLine": {"type": "command", "command": "~/.claude/statusline-command.sh"}}\n' > "$S"
 install_run
 check "marker: exit 0" [ "$irc" = 0 ]
@@ -819,15 +869,40 @@ check "dangling pre-rename: exit 0" [ "$irc" = 0 ]
 jcheck "dangling pre-rename: migrated" "$S" "d['statusLine']['command']" "\"$H/.claude/agentline/agentline.sh\""
 
 # A compound command is not a path: the old resolver took the whole quoted
-# string as the install target and mkdir'd it under the cwd.
+# string as the install target and mkdir'd it under the cwd. agentline run
+# from inside a wrapper is still agentline: the copy it runs is upgraded in
+# place and the wrapper (and the env it sets) is left alone — no "NOT
+# active", and no --force suggestion that would drop the wrapper.
 inst_home compound
-printf '%s\n' '{"statusLine": {"type": "command", "command": "bash -c \"AGENTLINE_TZ=UTC exec ~/.claude/agentline/agentline.sh\""}}' > "$S"
+printf '%s\n' '{"statusLine": {"type": "command", "command": "bash -c \"AGENTLINE_TZ=UTC exec ~/.claude/agentline/agentline.sh\"", "refreshInterval": 1}}' > "$S"
 cp "$S" "$T/orig.json"
 install_run
-check "compound: exit 3" [ "$irc" = 3 ]
-check "compound: settings untouched" cmp -s "$S" "$T/orig.json"
-check "compound: installed to the default location" [ -x "$H/.claude/agentline/agentline.sh" ]
+check "wrapped default: exit 0 (got $irc)" [ "$irc" = 0 ]
+check "wrapped default: says behind a wrapper" grep -q 'behind a wrapper' "$T/iout"
+check "wrapped default: no NOT active, no --force" sh -c "! grep -qE 'NOT active|--force' '$T/iout'"
+check "wrapped default: settings untouched" cmp -s "$S" "$T/orig.json"
+check "wrapped default: installed to the default location" cmp -s "$ROOT/agentline.sh" "$H/.claude/agentline/agentline.sh"
 if ls "$T" | grep -q 'AGENTLINE_TZ'; then fail "compound: stray path created under the cwd"; else pass; fi
+# A wrapped custom copy is the one upgraded, piped or not.
+inst_home wrapped-custom
+mkdir -p "$H/opt"; echo '# old local copy' > "$H/opt/agentline.sh"
+printf '%s\n' '{"statusLine": {"type": "command", "command": "bash -c \"~/opt/agentline.sh | sed s/x/y/\"", "refreshInterval": 1}}' > "$S"
+cp "$S" "$T/orig.json"
+install_run
+check "wrapped custom: exit 0 (got $irc)" [ "$irc" = 0 ]
+check "wrapped custom: upgraded in place" cmp -s "$ROOT/agentline.sh" "$H/opt/agentline.sh"
+check "wrapped custom: default location unused" [ ! -e "$H/.claude/agentline/agentline.sh" ]
+check "wrapped custom: settings untouched" cmp -s "$S" "$T/orig.json"
+
+# --with-hooks on a settings.json whose "hooks" is not an object is refused
+# up front — before the old code had already copied the script and saved
+# statusLine, then failed with "Nothing was changed".
+inst_home bad-hooks
+printf '{"hooks": []}\n' > "$S"; cp "$S" "$T/orig.json"
+install_run --with-hooks
+check "bad hooks: exit 1 (got $irc)" [ "$irc" = 1 ]
+check "bad hooks: settings untouched" cmp -s "$S" "$T/orig.json"
+check "bad hooks: script not installed" [ ! -e "$H/.claude/agentline/agentline.sh" ]
 
 # Pre-rename names are migrated to the default location.
 inst_home legacy
