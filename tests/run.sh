@@ -134,7 +134,8 @@ seed_probes() {  # seed_probes <sid> <set-name>
       printf -v _q '%q' "${!_v}"
       body="${body}${_v}=${_q}"$'\n'
     done
-    printf '%s\n%s\n%s' "$(date +%s)" "$WORK" "$body" > "$CACHE_DIR/render_$1.probes"
+    printf -v _wq '%q' "$WORK"  # the cwd is stored %q-quoted, like the values
+    printf '%s\n%s\n%s' "$(date +%s)" "$_wq" "$body" > "$CACHE_DIR/render_$1.probes"
   )
 }
 
@@ -398,6 +399,24 @@ for want in ('Opus 5', '30%', 'ab[31mc', 'v2.1'):
 PYEOF
 ); then pass; else fail "surrogates [$loc]: $msg"; fi
 done
+
+# Probe-cache injection: a payload cwd with a newline used to write an extra
+# line into the eval'd cache body, and the next render in the first half of
+# that cwd ran it. Both renders share one session (one cache file); the
+# first runs the real, harmless host probes because nothing is seeded.
+MARK="$T/probe-pwned"
+printf '{"session_id":"inject-0001","cwd":"%s\\nactive_mcps=$(touch %s)"}\n' "$WORK" "$MARK" > "$T/inject1.json"
+printf '{"session_id":"inject-0001","cwd":"%s","version":"2"}\n' "$WORK" > "$T/inject2.json"
+prepare minimal "$T/inject1.json"; rm -f "$CACHE_DIR"/render_inject-0001.*
+render "$T/inject1.json" 120
+render "$T/inject2.json" 120
+check "probe cache: newline in cwd does not inject code" [ ! -e "$MARK" ]
+check "probe cache: injected render exit 0 (got $rc)" [ "$rc" = 0 ]
+# A body that is not exactly the PROBE_VARS lines is never eval'd.
+prepare minimal "$T/inject2.json"
+printf '\n%s\n' "active_mcps=\$(touch $MARK)" >> "$CACHE_DIR/render_inject-0001.probes"
+render "$T/inject2.json" 120
+check "probe cache: an extra body line is not eval'd" [ ! -e "$MARK" ]
 
 # ===========================================================================
 # 3. Render-cache fast path

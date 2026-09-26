@@ -417,15 +417,32 @@ fi
 # the live subagent list is the thing worth watching in real time.
 PROBE_TTL="${AGENTLINE_PROBE_TTL:-15}"
 PROBE_VARS="active_mcps cpu_usage cron_count dev_ports disk_pct git_branch git_repo mem_used_gb ssh_count svc_panel"
+#
+# The file is line-oriented and its body is eval'd, so nothing may reach it
+# that could add a line. The cwd comes from the payload and used to be stored
+# raw: a cwd of "/tmp/x<newline>active_mcps=$(cmd)" wrote an extra line, and
+# the next render in /tmp/x within the TTL matched the first half and eval'd
+# the rest — running cmd. The cwd is now stored and compared `printf %q`
+# quoted (always one line), like every value in the body, and the body is
+# only eval'd when it is exactly one `name=` line per PROBE_VARS entry, in
+# order — the shape this script writes and nothing else.
+printf -v _cwd_q '%q' "$cwd"
 _probes_fresh=0
 if [ -n "$CACHE_BASE" ] && [ -f "${CACHE_BASE}.probes" ]; then
-  _pc=$(<"${CACHE_BASE}.probes")
+  _pc=""
+  IFS= read -r -d '' _pc < "${CACHE_BASE}.probes"
   _pc_ts="${_pc%%$'\n'*}";   _pc_rest="${_pc#*$'\n'}"
   _pc_cwd="${_pc_rest%%$'\n'*}"; _pc_body="${_pc_rest#*$'\n'}"
+  _pc_ok=1; _pc_left="$_pc_body"
+  for _v in $PROBE_VARS; do
+    case "$_pc_left" in "$_v="*) ;; *) _pc_ok=0; break ;; esac
+    case "$_pc_left" in *$'\n'*) _pc_left="${_pc_left#*$'\n'}" ;; *) _pc_left="" ;; esac
+  done
+  [ -n "$_pc_left" ] && _pc_ok=0
   case "$_pc_ts" in
     ''|*[!0-9]*) ;;
     *)
-      if [ "$_pc_cwd" = "$cwd" ] && [ $(( _now_epoch - _pc_ts )) -lt "$PROBE_TTL" ]; then
+      if [ "$_pc_ok" = 1 ] && [ "$_pc_cwd" = "$_cwd_q" ] && [ $(( _now_epoch - _pc_ts )) -lt "$PROBE_TTL" ]; then
         eval "$_pc_body"
         _probes_fresh=1
       fi
@@ -639,7 +656,7 @@ if [ "$_probes_fresh" != 1 ] && [ -n "$CACHE_BASE" ]; then
     printf -v _q '%q' "${!_v}"
     _pc_out="${_pc_out}${_v}=${_q}"$'\n'
   done
-  printf '%s\n%s\n%s' "$_now_epoch" "$cwd" "$_pc_out" > "${CACHE_BASE}.probes" 2>/dev/null
+  printf '%s\n%s\n%s' "$_now_epoch" "$_cwd_q" "$_pc_out" > "${CACHE_BASE}.probes" 2>/dev/null
 fi
 
 # === Display sanitization ===

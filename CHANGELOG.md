@@ -9,6 +9,13 @@
   program, in `agentline.sh` and the word-count hook, is now read into a
   variable at top level and run with `python3 -c`. The test suite rejects
   an unbalanced apostrophe in any heredoc left inside `$(…)`.
+- The host-probe cache can no longer run code from the payload. It stored
+  the cwd raw on its own line, and its body is `eval`'d. A payload cwd of
+  `/tmp/x` + newline + `active_mcps=$(cmd)` wrote an extra line, and the
+  next render in `/tmp/x` within the probe TTL ran `cmd`. The cwd is now
+  stored and compared `printf %q`-quoted. The body is only evaluated when it
+  is exactly one `name=` line per probe variable, in the order agentline
+  writes them.
 
 - Displayed text can no longer inject terminal escapes. The final output
   goes through `printf %b`, so a branch, remote, directory, session name,
