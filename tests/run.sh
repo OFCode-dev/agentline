@@ -400,6 +400,27 @@ PYEOF
 ); then pass; else fail "surrogates [$loc]: $msg"; fi
 done
 
+# The folder segment is built from a cleaned cwd: a lone surrogate or a raw
+# invalid byte in the payload cwd used to come out as a bare 0x9B/0x9D.
+printf '{"session_id":"cwd-0001","cwd":"/nonexistent/a\\udc9b[31m\\u009d0;x"}\n' > "$T/cwd1.json"
+printf '{"session_id":"cwd-0002","cwd":"/nonexistent/b\233[32m"}\n' > "$T/cwd2.json"
+for cj in cwd1 cwd2; do
+  prepare minimal "$T/$cj.json"
+  render "$T/$cj.json" 120
+  if msg=$(python3 -c '
+import sys
+b = open(sys.argv[1], "rb").read()
+try:
+    s = b.decode("utf-8")
+except UnicodeDecodeError as e:
+    sys.exit("not valid UTF-8: %s" % e)
+if any(0x80 <= ord(c) <= 0x9f for c in s):
+    sys.exit("C1 survived")
+if sys.argv[2] not in s:
+    sys.exit("folder missing: %r" % sys.argv[2])
+' "$T/out" "$([ "$cj" = cwd1 ] && echo '/nonexistent/a[31m0;x' || echo '/nonexistent/b[32m')" 2>&1); then pass; else fail "$cj: $msg"; fi
+done
+
 # Probe-cache injection: a payload cwd with a newline used to write an extra
 # line into the eval'd cache body, and the next render in the first half of
 # that cwd ran it. Both renders share one session (one cache file); the

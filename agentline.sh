@@ -321,8 +321,12 @@ warn_200k = '1' if d.get('exceeds_200k_tokens') is True and over(size, 200000) e
 
 fields = {
     # cwd stays raw: it is a filesystem path (git, the probe-cache key, the
-    # transcript lookup). Only its displayed form, $folder, is cleaned.
+    # transcript lookup). Its displayed form, $folder, is built from this
+    # cleaned copy: a raw invalid byte in the payload cwd comes back out of
+    # surrogateescape as that byte (a bare 0x9B CSI), which _clean in bash
+    # cannot tell from a UTF-8 continuation byte.
     'cwd': g('cwd'),
+    'cwd_disp': clean(g('cwd')),
     'model_raw': mid,
     'model': clean(model),
     'used_pct': num(g('context_window', 'used_percentage')),
@@ -380,6 +384,8 @@ sys.stdout.buffer.write(b'\n'.join(line(k, v) for k, v in fields.items()))
 PYEOF
 eval "$(PAYLOAD="$input" python3 -c "$_AL_PARSER")"
 [ -z "$cwd" ] && cwd="$(pwd)"
+# (A host-derived pwd is cleaned with the other host strings via $folder.)
+[ -z "$cwd_disp" ] && cwd_disp="$cwd"
 
 # === Platform detection ===
 # One source tree runs on macOS laptops and Linux servers. Resolve the
@@ -564,10 +570,10 @@ fi
 
 # Home-relative path (~/projects/agentline) rather than the bare folder name.
 # Paths outside $HOME are shown absolute.
-case "$cwd" in
+case "$cwd_disp" in
   "$HOME")   folder="~" ;;
-  "$HOME"/*) folder="~${cwd#"$HOME"}" ;;
-  *)         folder="$cwd" ;;
+  "$HOME"/*) folder="~${cwd_disp#"$HOME"}" ;;
+  *)         folder="$cwd_disp" ;;
 esac
 
 if [ "$_probes_fresh" != 1 ]; then
