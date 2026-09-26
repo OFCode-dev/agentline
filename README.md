@@ -23,7 +23,7 @@ Most Claude Code status lines show a model name and a folder. agentline is the m
 What makes it different:
 
 - **Zero dependencies.** One bash file using `python3`, `awk`, `git`, `top` — tools already on every macOS and Linux box. No npm, no cargo, no daemon, no network requests.
-- **Adaptive layout.** Lines 3 and 4 disappear entirely when they have nothing to say, merge into one line when their combined width fits, and wrap onto continuation rows at segment boundaries when a busy host outgrows the width budget. A quiet laptop gets two lines; a crowded server gets exactly as many as it needs.
+- **Adaptive layout.** Lines 3 and 4 disappear entirely when they have nothing to say, merge into one line when their combined width fits, and wrap onto continuation rows at segment boundaries when a busy host outgrows the width budget. A quiet laptop gets two lines; a crowded server gets exactly as many as it needs. On a narrow terminal the least important segments step aside first, and one `AGENTLINE_LAYOUT` string picks, orders and groups segments without touching the script.
 - **Crash insurance.** The `♻️ claude --resume` command is always visible, so if Claude Code exits unexpectedly you paste one line and continue where you left off.
 - **Host awareness.** Few Claude Code status lines watch your systemd units, SSH sessions, and dev servers — agentline does, so your status bar tells you nginx went down before your monitoring does.
 - **Cross-platform from one file.** BSD/GNU differences (`date`, `top`, `vm_stat`, `lsof`/`ss`) are resolved once at startup, not probed per segment.
@@ -114,7 +114,7 @@ Every `│`-separated segment below is independent: when its value cannot be mea
 | `⏰ cron:5` | User cron jobs | Non-empty, non-comment lines of `crontab -l`. Dim; hidden when the crontab is empty or missing. |
 | `🌐 node(3000) vite(5173)` | Listening dev servers | Your processes listening on TCP ports 3000–9999 (`ss` on Linux, `lsof` on macOS), shown as `process(port)`. System daemons outside that range are excluded. Hidden when nothing listens. |
 
-Lines 3 and 4 are omitted when empty, joined into one line when the combined width fits within 120 columns, and wrapped onto continuation rows at segment (`│`) boundaries when either grows past that budget — a segment is never split mid-way. Tune the budget with `AGENTLINE_WIDTH` (set it near your real terminal width). That is by design: information density without wasted rows or overflow.
+Lines 3 and 4 are omitted when empty, joined into one line when the combined width fits, and wrapped onto continuation rows at segment (`│`) boundaries when either grows past the width — a segment is never split mid-way. That is by design: information density without wasted rows or overflow. The width is your live terminal width (Claude Code ≥ 2.1.153 passes it as `COLUMNS`), otherwise 120; on a terminal narrower than line 1 or 2, low-priority segments give way first — see [Layout and narrow terminals](#layout-and-narrow-terminals).
 
 ## Service health panel
 
@@ -135,7 +135,9 @@ Everything is optional — agentline works with zero configuration.
 | Variable | Default | Effect |
 |---|---|---|
 | `AGENTLINE_SERVICES` | `~/.claude/agentline-services.conf` | Path to the service list |
-| `AGENTLINE_WIDTH` | `120` | Column budget for merging and wrapping lines 3 + 4 |
+| `AGENTLINE_LAYOUT` | the four lines above | Which segments show, in what order, on which line — see [Layout and narrow terminals](#layout-and-narrow-terminals) |
+| `AGENTLINE_DROP` | `tok_in,tok_out,words,dur,date,version,email,lines` | Segments that give way on a line too wide for the terminal, lowest priority first. `model`, `ctx`, `5h` and `week` are never dropped. Set to empty to wrap instead of dropping anything |
+| `AGENTLINE_WIDTH` | live terminal width − 2, else `120` | Column budget for fitting, merging and wrapping lines. Overrides the live width when set |
 | `AGENTLINE_TZ` | system timezone | Pin the clock, e.g. `Europe/Istanbul` on a UTC server |
 | `AGENTLINE_CACHE_TTL` | `5` | Seconds a cached render may serve clock ticks before the line is rebuilt |
 | `AGENTLINE_PROBE_TTL` | `15` | Seconds the host layer (CPU, RAM, disk, ports, services, MCP, git) may be reused. Independent of the render cache, and unaffected by payload changes — see below |
@@ -151,6 +153,39 @@ Set them in the `env` block of `~/.claude/settings.json` so Claude Code passes t
   "env": { "AGENTLINE_TZ": "Europe/Istanbul" }
 }
 ```
+
+### Layout and narrow terminals
+
+`AGENTLINE_LAYOUT` is one string: `/` starts a line, `,` separates segment names, and a segment you leave out is hidden. Order and grouping are exactly what you write; empty lines collapse, and unknown names are ignored. The default is today's four lines:
+
+```
+model,effort,fast,ctx,5h,week,cost,dur,tok_in,tok_out,words,lines,cpu,mem,disk / version,dir,git,session,email,date,clock / mcp,agents,resume / services,ssh,cron,ports
+```
+
+| Name | Segment | Name | Segment |
+|---|---|---|---|
+| `model` | model name | `version` | Claude Code version |
+| `effort` | effort level | `dir` | folder |
+| `fast` | ⚡Fast | `git` | 🌿 repo@branch |
+| `ctx` | 📊 context used | `session` | 🏷️ session name |
+| `5h` | `S:` 5-hour limit | `email` | 🤖 masked account |
+| `week` | `W:`/`F:` weekly limits | `date` | date |
+| `cost` | 💰 cost | `clock` | live clock |
+| `dur` | ⏱️ duration | `mcp` | ⚙️ MCP servers |
+| `tok_in` / `tok_out` | 📥 / 📤 tokens | `agents` | 🤖 live subagents |
+| `words` | 🔤 word counts | `resume` | ♻️ resume command |
+| `lines` | 📝 lines changed | `services` | 🛡️ service health |
+| `cpu` / `mem` / `disk` | 🔥 / 💾 / 💽 | `ssh` / `cron` / `ports` | 🔐 / ⏰ / 🌐 |
+
+A compact two-line bar, for example:
+
+```json
+{
+  "env": { "AGENTLINE_LAYOUT": "model,effort,ctx,5h,week,cost / dir,git,clock" }
+}
+```
+
+**Narrow terminals.** Claude Code ≥ 2.1.153 tells the status line the terminal width (`COLUMNS`); agentline takes 2 cells off as a margin, because the value is read when the render starts and can trail a resize. When a line is wider than that, segments are dropped from it in `AGENTLINE_DROP` order until it fits, and whatever still does not fit wraps at `│` boundaries. The model, context and both rate limits are never dropped. A resize takes effect on the next tick — the width is part of the render cache key. On older Claude Code there is no `COLUMNS`, so the width is a guess (120, or `AGENTLINE_WIDTH`) and lines 1 and 2 are never trimmed on a guess; set `AGENTLINE_DROP` to opt in anyway.
 
 ## Optional hooks: word counter + agent tracker
 
@@ -226,7 +261,7 @@ Two caches keep that affordable, because they answer different questions.
 
 The **render cache** holds the finished line, and is invalidated by any change to the payload — which happens constantly during a turn. The **probe cache** holds the host layer (CPU, RAM, disk, ports, services, MCP, git) and deliberately survives payload changes, because a `top` reading does not stop being true just because the token count moved. Without that split, a busy turn would re-run `top -bn1`, `df`, `ss`, `crontab`, `who` and a `systemctl is-active` per unit once a second, which is most of a render's cost spent on numbers that barely move. With it, a render that misses the render cache but hits the probe cache costs ~0.11 s instead of ~0.5 s. The working directory is part of the probe cache's validity check, so changing directory re-probes git immediately rather than showing the previous repo's branch; the live subagent list is never throttled.
 
-Once a second is far too often to pay for a full render, so the finished line is cached per session with the clock left as a placeholder. A tick whose payload is byte-identical and whose cache is younger than `AGENTLINE_CACHE_TTL` just stamps the current time into the cached line and prints — no `python3`, no probes, no `date` at all on bash ≥ 5.0, which uses the built-in `$EPOCHSECONDS` and `printf '%(%H:%M:%S)T'`. Any real event changes the payload and invalidates the cache on the spot, so a ticking clock never means stale numbers next to it.
+Once a second is far too often to pay for a full render, so the finished line is cached per session with the clock left as a placeholder. A tick whose payload (and terminal width and layout settings) is byte-identical and whose cache is younger than `AGENTLINE_CACHE_TTL` just stamps the current time into the cached line and prints — no `python3`, no probes, no `date` at all on bash ≥ 5.0, which uses the built-in `$EPOCHSECONDS` and `printf '%(%H:%M:%S)T'`. Any real event changes the payload and invalidates the cache on the spot, so a ticking clock never means stale numbers next to it.
 
 ## Development / tests
 
@@ -236,13 +271,13 @@ bash tests/run.sh             # the whole suite, ~10 s, no network
 bash tests/run.sh --update    # regenerate tests/golden/ after an intended output change
 ```
 
-The suite needs only `bash` and `python3`. It renders every payload in `tests/fixtures/payloads/` (full, minimal, `{}`, malformed JSON, empty stdin, a null context window after compaction, a 1M-context model, Fable + `max`, xhigh vs ultracode transcripts, hostile values) at `AGENTLINE_WIDTH` 120, 80 and 40, and compares the output, with ANSI codes stripped and the clock masked, against `tests/golden/`. Every render must exit 0 with empty stderr, and lines 3/4 may only wrap at `│` boundaries. It also checks that a cached tick is served from the render cache and that `install.sh` behaves correctly: a malformed `settings.json` is refused untouched, backups are timestamped, a foreign status line is left alone, re-runs are idempotent, and `--with-hooks` can be run twice. Where `strace` exists, it asserts that the once-a-second fast path forks nothing beyond reading stdin.
+The suite needs only `bash` and `python3`. It renders every payload in `tests/fixtures/payloads/` (full, minimal, `{}`, malformed JSON, empty stdin, a null context window after compaction, a 1M-context model, Fable + `max`, xhigh vs ultracode transcripts, hostile values) at `AGENTLINE_WIDTH` 120, 80 and 40, and compares the output, with ANSI codes stripped and the clock masked, against `tests/golden/`. Every render must exit 0 with empty stderr, and lines 3/4 may only wrap at `│` boundaries. The layout checks cover `AGENTLINE_LAYOUT`, `AGENTLINE_DROP` and live `COLUMNS`: the model, context and limits survive at narrow widths, every row fits, and a resize bypasses the render cache. It also checks that a cached tick is served from the render cache and that `install.sh` behaves correctly: a malformed `settings.json` is refused untouched, backups are timestamped, a foreign status line is left alone, re-runs are idempotent, and `--with-hooks` can be run twice. Where `strace` exists, it asserts that the once-a-second fast path forks nothing beyond reading stdin.
 
 Runs are hermetic. They use a temp `TMPDIR` and `HOME`, `TZ=UTC`, and `LC_ALL=C`, with host probes seeded through the probe cache and the hook side files under `AGENTLINE_TMP`, so no real host data reaches the output. CI runs it on Ubuntu (bash 5, shellcheck, strace) and macOS (system bash 3.2).
 
 ## Requirements
 
-- Claude Code ≥ 2.x
+- Claude Code ≥ 2.x (≥ 2.1.153 for live terminal width; older versions fall back to 120 columns)
 - `bash`, `python3`, `git`, `awk`, `top` — standard on macOS and Linux
 - Optional: `systemctl` (Linux) for the service panel
 
@@ -270,7 +305,7 @@ Those two segments are fed by the optional hooks. Run `bash install.sh --with-ho
 It is always masked (`o****r@g***l.com`) before display, and it never leaves your machine. When it has to be looked up via `claude auth status`, the unmasked address is cached per profile inside agentline's owner-only cache directory (`$TMPDIR/agentline-<uid>/`, mode 700; every file mode 600), never loose in `/tmp`.
 
 **How do I customize segments or colors?**
-Put your overrides in `~/.claude/agentline/local.sh` (or the path in `AGENTLINE_LOCAL`). agentline sources it on every full render, after the payload parse, host probes and colours and before any line is assembled. `install.sh` never touches it, so it survives upgrades:
+To hide, reorder or regroup segments, set `AGENTLINE_LAYOUT` (see [Layout and narrow terminals](#layout-and-narrow-terminals)). For anything else, put your overrides in `~/.claude/agentline/local.sh` (or the path in `AGENTLINE_LOCAL`). agentline sources it on every full render, after the payload parse, host probes and colours and before any line is assembled. `install.sh` never touches it, so it survives upgrades:
 
 ```bash
 # ~/.claude/agentline/local.sh

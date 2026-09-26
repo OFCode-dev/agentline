@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+- One string now chooses the layout. `AGENTLINE_LAYOUT` lists segment
+  names: `/` starts a line, `,` separates names, and a name left out is
+  hidden. The default reproduces the four lines exactly. Before, the only
+  way to hide or move a segment was to edit `agentline.sh`, which the next
+  install overwrote.
+- The status line follows the real terminal width. Claude Code ≥ 2.1.153
+  passes it as `COLUMNS`, and agentline used a fixed 120 and never measured
+  lines 1 and 2. Line 1 alone can carry 15 segments and ran off narrow
+  terminals. Now, with `COLUMNS` known, a line that does not fit (less a
+  2-cell resize margin) sheds segments in `AGENTLINE_DROP` order: tokens,
+  word counts, duration, date, version, e-mail, lines changed. Whatever still
+  does not fit wraps at `│` boundaries. Model, context and both rate limits
+  are never dropped. Without `COLUMNS` nothing is dropped on a guessed width.
+  `AGENTLINE_WIDTH` still wins when set. The width and layout settings are
+  part of the render-cache key, so a resize shows on the next tick instead
+  of after the cache TTL.
+
 - Runs under bash 3.2 again (the macOS `/bin/bash`). bash 3.2 parses a
   heredoc body inside `$(…)` as shell text, so one apostrophe in a comment
   of the embedded Python parser opened a quote. Every full render then

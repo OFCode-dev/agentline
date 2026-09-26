@@ -163,10 +163,12 @@ prepare() {  # prepare <fixture-name> <filled-payload>
   : > "$CACHE_DIR/email.${key//[!A-Za-z0-9]/_}"
 }
 
-render() {  # render <payload> <width> [VAR=val...] -> $T/out $T/err $rc
+render() {  # render <payload> <width|-> [VAR=val...] -> $T/out $T/err $rc
   local p="$1" w="$2"; shift 2
+  # A width of "-" leaves AGENTLINE_WIDTH unset, for the live-COLUMNS tests.
+  [ "$w" = - ] || set -- AGENTLINE_WIDTH="$w" ${1+"$@"}
   # ${1+"$@"}: bash 3.2 under `set -u` rejects an empty "$@".
-  ( cd "$WORK" && run_env AGENTLINE_WIDTH="$w" ${1+"$@"} "$TEST_BASH" "$ROOT/agentline.sh" \
+  ( cd "$WORK" && run_env ${1+"$@"} "$TEST_BASH" "$ROOT/agentline.sh" \
       < "$p" > "$T/out" 2> "$T/err" )
   rc=$?
 }
@@ -540,6 +542,124 @@ PYEOF
   done
   check "seeded probes: no host probe ran (got:$leaked)" [ -z "$leaked" ]
 fi
+
+# ===========================================================================
+# 3a. Layout: AGENTLINE_LAYOUT, AGENTLINE_DROP, live COLUMNS
+# ===========================================================================
+# Every row fits the width, or is a single segment (a segment is never split).
+rows_fit() {  # rows_fit <normalized> <width>
+  python3 - "$1" "$2" <<'PYEOF'
+import sys, unicodedata
+rows = open(sys.argv[1], encoding="utf-8").read().splitlines()
+width = int(sys.argv[2])
+def vis(s):
+    return sum(2 if unicodedata.east_asian_width(c) in ("W", "F") else 1 for c in s)
+for r in rows:
+    if vis(r) > width and " │ " in r:
+        sys.exit("row over %d cells holds more than one segment: %r" % (width, r))
+PYEOF
+}
+vis_line() {  # vis_line <normalized> -> width of its first row
+  python3 - "$1" <<'PYEOF'
+import sys, unicodedata
+r = open(sys.argv[1], encoding="utf-8").read().splitlines()[0]
+print(sum(2 if unicodedata.east_asian_width(c) in ("W", "F") else 1 for c in r))
+PYEOF
+}
+has() { grep -qF -- "$2" "$1"; }  # has <file> <text>
+n_rows() { wc -l < "$1" | tr -d ' '; }
+
+p="$PAY/full.json"
+LAYOUT_DEFAULT=$(sed -n 's/^AGENTLINE_LAYOUT_DEFAULT="\(.*\)"$/\1/p' "$ROOT/agentline.sh")
+check "layout: default layout readable from the script" [ -n "$LAYOUT_DEFAULT" ]
+
+# No COLUMNS, no AGENTLINE_WIDTH: the 120 fallback, nothing dropped — the
+# golden. The default layout spelled out, and a layout that names nothing
+# known (a typo), are the default too.
+prepare full "$p"; render "$p" -; normalize "$T/out" "$T/got"
+check "layout: no width anywhere = 120 golden" cmp -s "$T/got" "$GOLD/full.w120.txt"
+prepare full "$p"; render "$p" 120 AGENTLINE_LAYOUT="$LAYOUT_DEFAULT"; normalize "$T/out" "$T/got"
+check "layout: explicit default layout = golden" cmp -s "$T/got" "$GOLD/full.w120.txt"
+prepare full "$p"; render "$p" 120 AGENTLINE_LAYOUT="modle, ctxx"; normalize "$T/out" "$T/got"
+check "layout: all-unknown layout falls back to the default" cmp -s "$T/got" "$GOLD/full.w120.txt"
+
+# A live width with room for everything renders exactly what the same fixed
+# width does: fit mode changes nothing that already fits.
+prepare full "$p"; render "$p" 200; normalize "$T/out" "$T/fixed"
+prepare full "$p"; render "$p" - COLUMNS=202; normalize "$T/out" "$T/got"
+check "layout: COLUMNS=202 (fits) = fixed 200 render" cmp -s "$T/got" "$T/fixed"
+check "layout: COLUMNS=202 exit 0 (got $rc)" [ "$rc" = 0 ]
+check "layout: COLUMNS=202 stderr empty" [ ! -s "$T/err" ]
+
+# Narrow live width: low-priority segments go first, model/context/limits
+# always survive, and every row fits (COLUMNS minus the 2-cell margin).
+for cols in 122 62 30; do
+  prepare full "$p"; render "$p" - COLUMNS="$cols"; normalize "$T/out" "$T/got"
+  check "layout: COLUMNS=$cols exit 0 (got $rc)" [ "$rc" = 0 ]
+  check "layout: COLUMNS=$cols stderr empty" [ ! -s "$T/err" ]
+  for want in 'Opus 5' '📊 42%' 'S:71%' 'W:58%'; do
+    check "layout: COLUMNS=$cols keeps $want" has "$T/got" "$want"
+  done
+  for gone in '📥' '📤' '⏱️'; do
+    if has "$T/got" "$gone"; then fail "layout: COLUMNS=$cols kept low-priority $gone"; else pass; fi
+  done
+  if msg=$(rows_fit "$T/got" $((cols - 2)) 2>&1); then pass; else fail "layout: COLUMNS=$cols: $msg"; fi
+done
+# AGENTLINE_WIDTH is an explicit override and wins over COLUMNS.
+prepare full "$p"; render "$p" 200 COLUMNS=62; normalize "$T/out" "$T/got"
+check "layout: AGENTLINE_WIDTH wins over COLUMNS" has "$T/got" '📥 8.4m'
+# The protected four stay even when AGENTLINE_DROP names them.
+prepare full "$p"; render "$p" 20 AGENTLINE_DROP="model,ctx,5h,week,cost"; normalize "$T/out" "$T/got"
+for want in 'Opus 5' '📊 42%' 'S:71%' 'W:58%'; do
+  check "layout: AGENTLINE_DROP cannot drop $want" has "$T/got" "$want"
+done
+if has "$T/got" '💰'; then fail "layout: AGENTLINE_DROP=cost kept cost"; else pass; fi
+# AGENTLINE_DROP="" asks for fit mode without dropping: every segment of the
+# unconstrained render is still there, wrapped to fit.
+prepare full "$p"; render "$p" 60 AGENTLINE_DROP=; normalize "$T/out" "$T/got"
+if msg=$(python3 - "$T/got" "$T/fixed" <<'PYEOF' 2>&1
+import sys
+a, b = (sorted(s for r in open(f, encoding="utf-8").read().splitlines() for s in r.split(" │ ")) for f in sys.argv[1:3])
+if a != b:
+    sys.exit("segments differ: %r vs %r" % (a, b))
+PYEOF
+); then pass; else fail "layout: AGENTLINE_DROP= lost a segment: $msg"; fi
+if msg=$(rows_fit "$T/got" 60 2>&1); then pass; else fail "layout: AGENTLINE_DROP=: $msg"; fi
+
+# A custom layout: order and grouping follow the string, anything left out is
+# hidden, empty lines collapse.
+prepare full "$p"; render "$p" 120 AGENTLINE_LAYOUT="clock,model / / ctx, resume"; normalize "$T/out" "$T/got"
+check "layout: custom layout has two rows (got $(n_rows "$T/got"))" [ "$(n_rows "$T/got")" = 2 ]
+check "layout: custom order kept" grep -q '^HH:MM:SS │ Opus 5 🧠$' "$T/got"
+check "layout: custom second line" grep -q '^📊 42% │ ♻️  claude --resume full-0001$' "$T/got"
+if has "$T/got" 'v3.0.24' || has "$T/got" '💰'; then fail "layout: omitted segment still shown"; else pass; fi
+
+# Placeholders are measured at their printed width, not their token length:
+# a line exactly as wide as its rendered text stays one row in fit mode.
+for spec in "effort-ultracode:model,effort" "full:model,clock"; do
+  fx="${spec%%:*}"; lay="${spec#*:}"
+  fill "$FIX/payloads/$fx.json" "$PAY/$fx.json"
+  prepare "$fx" "$PAY/$fx.json"; render "$PAY/$fx.json" 10000 AGENTLINE_LAYOUT="$lay"; normalize "$T/out" "$T/got"
+  lw=$(vis_line "$T/got")
+  prepare "$fx" "$PAY/$fx.json"; render "$PAY/$fx.json" "$lw" AGENTLINE_LAYOUT="$lay" AGENTLINE_DROP=; normalize "$T/out" "$T/got"
+  check "layout: $fx [$lay] fits in its own width $lw (got $(n_rows "$T/got") rows)" [ "$(n_rows "$T/got")" = 1 ]
+done
+
+# The render cache is keyed on the width and layout settings too: a resize or
+# a layout change re-renders at once instead of serving the old width for
+# the rest of the TTL.
+sid=$(sid_of "$p")
+prepare full "$p"
+render "$p" - COLUMNS=202
+printf '%s\n%s' "$(date +%s)" "CACHED" > "$(cbase "$sid").render"
+render "$p" - COLUMNS=202
+check "layout: same COLUMNS serves the cache" grep -qx 'CACHED' "$T/out"
+render "$p" - COLUMNS=62
+check "layout: changed COLUMNS bypasses the cache" grep -q 'Opus 5' "$T/out"
+printf '%s\n%s' "$(date +%s)" "CACHED" > "$(cbase "$sid").render"
+render "$p" - COLUMNS=62 AGENTLINE_LAYOUT="model"
+check "layout: changed AGENTLINE_LAYOUT bypasses the cache" grep -q 'Opus 5' "$T/out"
+rm -f "$(cbase "$sid")".*
 
 # ===========================================================================
 # 3b. Opt-in /usage fetch: claim file, detached refresh

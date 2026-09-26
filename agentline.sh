@@ -20,7 +20,8 @@ input=$(cat)
 # line 2 tick in real time instead of freezing between conversation events.
 # A full render costs ~20 subprocesses — far too much to pay once a second —
 # so the finished output is cached with the clock replaced by a placeholder.
-# While the payload is byte-identical and the cache is younger than
+# While the payload (and the terminal width and layout settings, see the
+# cache key below) is byte-identical and the cache is younger than
 # $AGENTLINE_CACHE_TTL, a tick only substitutes the current time and prints:
 # zero subprocesses on bash >= 5.0. Any real event (token counts, cost, cwd,
 # model) changes the payload and invalidates the cache on the spot, so no
@@ -185,6 +186,12 @@ _anim_frame() {
 }
 
 _tick_now
+# The cache key is the payload plus every setting the layout reads from the
+# environment. COLUMNS is the one that changes under a running session — a
+# terminal resize — and it is not in the payload, so without it a resize kept
+# serving the old width's render until the TTL ran out. `+set:` tells an
+# empty AGENTLINE_DROP (drop nothing) from an unset one (the default list).
+_cache_key="${input}${_US}${COLUMNS-}|${AGENTLINE_WIDTH-}|${AGENTLINE_LAYOUT-}|${AGENTLINE_DROP+set:}${AGENTLINE_DROP-}"
 # The cache files are read with the `read` builtin, not `$(<file)`: bash 5
 # serves `$(<file)` in-process, but bash 3.2 (macOS) forks a subshell for
 # each, which cost this path two forks a second. `IFS= read -r -d ''` takes
@@ -194,7 +201,7 @@ _cached=""
 if [ -n "$CACHE_BASE" ] && [ -f "${CACHE_BASE}.payload" ]; then
   IFS= read -r -d '' _prev_payload < "${CACHE_BASE}.payload"
 fi
-if [ -n "$_prev_payload" ] && [ "$_prev_payload" = "$input" ] && [ -f "${CACHE_BASE}.render" ]; then
+if [ -n "$_prev_payload" ] && [ "$_prev_payload" = "$_cache_key" ] && [ -f "${CACHE_BASE}.render" ]; then
   IFS= read -r -d '' _cached < "${CACHE_BASE}.render"
   _cached_ts="${_cached%%$'\n'*}"
   _cached_body="${_cached#*$'\n'}"
@@ -1223,27 +1230,65 @@ fi
 [ -n "$dev_ports" ] && _seg ports "🌐 ${DIM}${dev_ports}${RESET}"
 
 # === Layout ===
-# One python pass turns the segment records into rows. The layout is a list
-# of lines, each an ordered list of segment names; the default reproduces the
-# historical four lines exactly.
+# One python pass turns the segment records into rows. $AGENTLINE_LAYOUT is
+# the order: "/" starts a line, "," separates segment names, and a name left
+# out is a segment hidden (the starship / l0ng-ai format-string idea — order
+# and grouping come free from an ordered list). The default reproduces the
+# historical four lines byte for byte.
 #
 # Lines 3 and 4 are separate layers (Claude vs system). On a quiet host the
 # split wastes a row, so they are joined when the combined width fits. On a
 # busy host either line can outgrow the terminal, so each is wrapped onto
 # continuation rows at segment (│) boundaries instead of overflowing — a
 # segment is never split internally. Width is measured after stripping colour
-# escapes, counting wide glyphs as two cells; tune with $AGENTLINE_WIDTH.
+# escapes, counting wide glyphs as two cells.
+#
+# The width: $AGENTLINE_WIDTH when set (an explicit override wins), else the
+# live terminal width, else 120. Claude Code >= 2.1.153 exports COLUMNS to the
+# status-line command; 2 cells come off it as a margin, because COLUMNS is
+# read when the command starts and can trail a resize, and because the
+# emoji-with-VS16 glyphs (⚠️ ♻️ ⚙️ 🛡️) are counted one cell narrower than
+# some terminals draw them.
+#
+# Fit mode. When the width is known — COLUMNS is there — every line, not just
+# 3 and 4, is fitted to it: segments are dropped from an over-wide line in
+# $AGENTLINE_DROP order (lowest priority first) until it fits, then whatever
+# still does not fit wraps. model, ctx, 5h and week are never dropped,
+# whatever the list says. Without COLUMNS the width is only a guess, and
+# hiding data on a guess is worse than overflowing, so lines 1 and 2 are left
+# whole as they always were — unless AGENTLINE_DROP is set, which asks for fit
+# mode against whatever the width is. AGENTLINE_DROP="" fits by wrapping
+# alone, dropping nothing.
 #
 # The rows come back joined by a literal \n, the form printf %b renders, so
 # the output is used as-is. It is written as bytes through os.fsencode, which
 # reverses exactly how python decoded argv: a byte the locale cannot decode
 # round-trips instead of raising on the way out.
 AGENTLINE_LAYOUT_DEFAULT="model,effort,fast,ctx,5h,week,cost,dur,tok_in,tok_out,words,lines,cpu,mem,disk / version,dir,git,session,email,date,clock / mcp,agents,resume / services,ssh,cron,ports"
-STATUSLINE_WIDTH="${AGENTLINE_WIDTH:-120}"
+AGENTLINE_DROP_DEFAULT="tok_in,tok_out,words,dur,date,version,email,lines"
+# Leading zeros and absurd lengths are refused: bash arithmetic reads "08" as
+# bad octal, and a width is never six digits.
+_cols="${COLUMNS-}"
+case "$_cols" in ''|0*|*[!0-9]*|??????*) _cols="" ;; esac
+_fit=0
+if [ -n "$_cols" ]; then
+  _fit=1
+  STATUSLINE_WIDTH=$(( _cols - 2 ))
+else
+  STATUSLINE_WIDTH=120
+fi
+case "${AGENTLINE_WIDTH-}" in
+  ''|*[!0-9]*|??????*) ;;
+  *) STATUSLINE_WIDTH="$AGENTLINE_WIDTH" ;;
+esac
+[ -n "${AGENTLINE_DROP+set}" ] && _fit=1
 IFS= read -r -d '' _AL_PY <<'PYEOF'
 import os, re, sys, unicodedata
-width, sep, segs, layout, default_layout = int(sys.argv[1]), sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5]
-placeholders = dict(zip(sys.argv[6:9], ('00:00:00', 'max', 'ultracode')))
+width, sep, segs, layout, default_layout = max(1, int(sys.argv[1])), sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5]
+fitting, drop_spec = sys.argv[6] == '1', sys.argv[7]
+placeholders = dict(zip(sys.argv[8:11], ('00:00:00', 'max', 'ultracode')))
+KEEP = ('warn', 'model', 'ctx', '5h', 'week')
+drop = [n for n in re.split(r'[\s,]+', drop_spec) if n and n not in KEEP]
 
 seg = {}
 for rec in segs.split('\x1e'):
@@ -1271,9 +1316,11 @@ def vis(s):
     # substituted after layout; count them at the width they will print at.
     for tok, shown in placeholders.items():
         s = s.replace(tok, shown)
-    # Colour codes are still in backslash-escape form here (rendered later by
-    # printf %b), so strip the literal \033[..m sequences before measuring.
-    s = re.sub(r'\\033\[[0-9;]*m', '', s)
+    # Colour codes are mostly still in backslash-escape form here (rendered
+    # later by printf %b), so strip the literal \033[..m sequences before
+    # measuring — and real ESC ones too, which color_pct prints already
+    # expanded (the context, limit and disk segments).
+    s = re.sub(r'(?:\\033|\x1b)\[[0-9;]*m', '', s)
     return sum(2 if unicodedata.east_asian_width(c) in ('W', 'F') else 1 for c in s)
 
 def wrap(texts):
@@ -1289,22 +1336,48 @@ def wrap(texts):
         rows.append(cur)
     return rows
 
+def fit(names):
+    names = [n for n in names if n in seg]
+    if fitting:
+        for d in drop:
+            if vis(sep.join(seg[n] for n in names)) <= width:
+                break
+            if d in names:
+                names.remove(d)
+    return [seg[n] for n in names]
+
 lines = parse(layout)
+# A layout that names no segment at all is a typo, not a request for a blank
+# status line.
+if not any(lines):
+    lines = parse(default_layout)
+is_default = lines == parse(default_layout)
 if 'warn' in seg:
     lines[0].insert(0, 'warn')
-texts = [[seg[n] for n in names if n in seg] for names in lines]
+texts = [fit(names) for names in lines]
 
-# Lines 1 and 2 are always printed, as they always were; lines 3 and 4 merge
-# when they fit together, wrap when they do not, and vanish when empty.
-rows = [sep.join(texts[0]), sep.join(texts[1])]
-l3, l4 = texts[2], texts[3]
-if l3 and l4 and vis(sep.join(l3 + l4)) <= width:
-    rows.append(sep.join(l3 + l4))
+rows = []
+if is_default:
+    # Lines 1 and 2 are always printed, as they always were, and are only
+    # measured in fit mode; lines 3 and 4 merge when they fit together, wrap
+    # when they do not, and vanish when empty.
+    for t in texts[:2]:
+        rows += (wrap(t) if fitting else []) or [sep.join(t)]
+    l3, l4 = texts[2], texts[3]
+    if l3 and l4 and vis(sep.join(l3 + l4)) <= width:
+        rows.append(sep.join(l3 + l4))
+    else:
+        rows += wrap(l3) + wrap(l4)
 else:
-    rows += wrap(l3) + wrap(l4)
+    # A custom layout: empty lines collapse, and the same rule decides what
+    # is measured — every line in fit mode, the third line on otherwise.
+    for i, t in enumerate(texts):
+        if t:
+            rows += wrap(t) if fitting or i >= 2 else [sep.join(t)]
 sys.stdout.buffer.write(os.fsencode('\\n'.join(rows)))
 PYEOF
-out=$(python3 -c "$_AL_PY" "$STATUSLINE_WIDTH" "$P" "$SEGS" "$AGENTLINE_LAYOUT_DEFAULT" "$AGENTLINE_LAYOUT_DEFAULT" \
+out=$(python3 -c "$_AL_PY" "$STATUSLINE_WIDTH" "$P" "$SEGS" "${AGENTLINE_LAYOUT:-$AGENTLINE_LAYOUT_DEFAULT}" \
+  "$AGENTLINE_LAYOUT_DEFAULT" "$_fit" "${AGENTLINE_DROP-$AGENTLINE_DROP_DEFAULT}" \
   "$CLOCK_TOKEN" "$ANIM_MAX_TOKEN" "$ANIM_ULTRA_TOKEN")
 
 # Prune the cache directory. Every session leaves render_<sid>.* files behind
@@ -1346,7 +1419,7 @@ case "$out" in
   *$'\n'*) ;;
   *)
     if [ -n "$CACHE_BASE" ]; then
-      printf '%s' "$input" > "${CACHE_BASE}.payload" 2>/dev/null
+      printf '%s' "$_cache_key" > "${CACHE_BASE}.payload" 2>/dev/null
       printf '%s\n%s' "$_now_epoch" "$out" > "${CACHE_BASE}.render" 2>/dev/null
     fi
     ;;
