@@ -161,12 +161,17 @@ _anim_frame() {
 }
 
 _tick_now
+# The cache files are read with the `read` builtin, not `$(<file)`: bash 5
+# serves `$(<file)` in-process, but bash 3.2 (macOS) forks a subshell for
+# each, which cost this path two forks a second. `IFS= read -r -d ''` takes
+# the file verbatim; its non-zero status at end of file is expected.
 _prev_payload=""
+_cached=""
 if [ -n "$CACHE_BASE" ] && [ -f "${CACHE_BASE}.payload" ]; then
-  _prev_payload=$(<"${CACHE_BASE}.payload")
+  IFS= read -r -d '' _prev_payload < "${CACHE_BASE}.payload"
 fi
 if [ -n "$_prev_payload" ] && [ "$_prev_payload" = "$input" ] && [ -f "${CACHE_BASE}.render" ]; then
-  _cached=$(<"${CACHE_BASE}.render")
+  IFS= read -r -d '' _cached < "${CACHE_BASE}.render"
   _cached_ts="${_cached%%$'\n'*}"
   _cached_body="${_cached#*$'\n'}"
   case "$_cached_ts" in
