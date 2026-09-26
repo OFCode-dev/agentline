@@ -16,6 +16,11 @@
   to the raw path, which put a bare 0x9B (the 8-bit CSI) on screen. The
   folder segment now simply disappears. Only a missing cwd still falls back
   to `pwd`.
+- On bash 3.2 (macOS), a repo name with a tilde no longer turns into a home
+  directory on cached ticks. bash 3.2's `printf %q` leaves `~` unescaped, so
+  replaying the probe cache expanded a remote like
+  `https://git.sr.ht/~root/x` to `/root/x`. The writer now escapes a leading
+  `~` and any `:~` or `=~` itself, as bash 5 does.
 - A render that misses the render cache starts two `python3` instead of
   three, or four for a Fable/Mythos model. That is the render an active turn
   pays about once a second, and each `python3` start costs ~20 ms of CPU.

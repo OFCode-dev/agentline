@@ -848,6 +848,16 @@ EOF
   check "git [reftable HEAD]: asks git" grep -q 'branch --show-current' "$T/git-calls"
   grender "$G/plain" GIT_DIR="$G/repo/.git"
   check "git [\$GIT_DIR]: asks git" grep -qF 'feat/x' "$T/got"
+  # A tilde in the repo name survives the probe cache. bash 3.2's %q left
+  # `~` bare, so the replayed assignment expanded "~root/x" to "/root/x".
+  gx -C "$G/repo" remote set-url origin https://git.sr.ht/~root/x
+  grender "$G/repo"
+  check "git [tilde]: probed repo name" grep -qxF '🌿 ~root/x@feat/x' "$T/got"
+  rm -f "$(cbase git-0001).render" "$(cbase git-0001).payload"
+  render "$T/git.json" 120 PATH="$HSHIM:$PATH_F" AGENTLINE_LAYOUT=git
+  normalize "$T/out" "$T/got"
+  check "git [tilde]: replayed from the probe cache unexpanded" grep -qxF '🌿 ~root/x@feat/x' "$T/got"
+  gx -C "$G/repo" remote set-url origin git@github.com:octo/repo.git
   if command -v timeout >/dev/null 2>&1 || command -v gtimeout >/dev/null 2>&1; then
     t0=$SECONDS; grender "$G/plain" GIT_DIR="$G/repo/.git" GIT_SHIM_HANG=1; dt=$(( SECONDS - t0 ))
     check "git: a hung git is cut off (render took ${dt}s)" [ "$dt" -lt 4 ]

@@ -813,10 +813,22 @@ fi  # end of throttled host probes (part 2)
 # escapes in $svc_panel through eval intact. Skipped when the probes came from
 # the cache (nothing new to store) or when the cache directory failed its
 # ownership check at stage 0.
+#
+# bash 3.2's %q leaves `~` unescaped, and the body is replayed as assignments,
+# where a tilde at the start of the value or after a `:` or `=` is expanded:
+# a remote like https://git.sr.ht/~root/x (git_repo "~root/x") came back as
+# "/root/x" on every cached tick. Those tildes are escaped by hand, as bash 5
+# does. Not inside $'...' (a value with control bytes), where `\~` would stay
+# a literal backslash — and where tildes are never expanded anyway.
 if [ "$_probes_fresh" != 1 ] && [ -n "$CACHE_BASE" ]; then
   _pc_out=""
   for _v in $PROBE_VARS; do
     printf -v _q '%q' "${!_v}"
+    case "$_q" in
+      \$\'*) ;;
+      *) case "$_q" in '~'*) _q="\\$_q" ;; esac
+         _q="${_q//:~/:\\~}"; _q="${_q//=~/=\\~}" ;;
+    esac
     _pc_out="${_pc_out}${_v}=${_q}"$'\n'
   done
   printf '%s\n%s\n%s' "$_now_epoch" "$_cwd_q" "$_pc_out" > "${CACHE_BASE}.probes" 2>/dev/null
