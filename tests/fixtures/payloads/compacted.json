@@ -1,0 +1,1 @@
+{"session_id":"compacted-0001","cwd":"@@CWD@@","version":"3.0.24","transcript_path":"@@FIXTURES@@/transcripts/compacted.jsonl","model":{"id":"claude-opus-5","display_name":"Opus 5"},"effort":{"level":"high"},"context_window":{"used_percentage":null,"current_usage":null,"context_window_size":200000},"cost":{"total_cost_usd":3.1,"total_duration_ms":5400000}}

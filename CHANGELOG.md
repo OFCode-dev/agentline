@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- Line 1 counts compactions: a dim `🔄 2` after the context figure, hidden
+  at 0. The count comes from the `compact_boundary` entries Claude Code
+  writes into the session transcript. It needs no hook: a PreCompact hook
+  fires before the compaction, also fires for one that then fails, and
+  would be one more thing to install. A transcript can reach tens of MB, so
+  it is read incrementally. A per-session cache keeps the file's inode, the
+  size already read and the count, so a render reads only the bytes added
+  since, and an unchanged transcript costs one `stat`. A replaced or
+  shrunk file is rescanned once. Right after `/compact` the payload has no
+  context figure until the next API call. The context segment used to
+  vanish then; now it shows a dim `📊 ~16%` estimate from the compaction's
+  own `postTokens` until the real figure returns. The transcript format is
+  undocumented, so anything unexpected just hides the segment. New layout
+  name `compact`, also added to the default `AGENTLINE_DROP` after `words`.
 - Line 2 shows the branch's pull request and a linked worktree, both read
   from the payload with no gh CLI, no network and no extra fork. `🔀 ✅ #1234`
   puts the review state first (`📝` draft, `👀` pending, `🔴` changes

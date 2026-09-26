@@ -1,0 +1,4 @@
+{"type":"user","message":{"role":"user","content":"quoting \"subtype\":\"compact_boundary\" in text never counts"},"uuid":"u1"}
+{"parentUuid":"u1","type":"system","subtype":"compact_boundary","content":"Conversation compacted","level":"info","compactMetadata":{"trigger":"manual","preTokens":180000,"postTokens":41000},"uuid":"s1"}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"ok"}]},"uuid":"a1"}
+{"parentUuid":"a1","type":"system","subtype":"compact_boundary","content":"Conversation compacted","level":"info","compactMetadata":{"trigger":"auto","preTokens":190000,"postTokens":32614},"uuid":"s2"}

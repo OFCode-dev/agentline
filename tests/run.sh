@@ -160,7 +160,7 @@ seed_probes() {  # seed_probes <sid> <set-name>
 prepare() {  # prepare <fixture-name> <filled-payload>
   local name="$1" sid pset now label key
   sid=$(sid_of "$2")
-  rm -f "$CACHE_DIR"/render_* "$SIDE"/claude_*
+  rm -f "$CACHE_DIR"/render_* "$CACHE_DIR"/compact.* "$SIDE"/claude_*
   pset=busy
   [ -f "$FIX/payloads/$name.probes" ] && pset=$(cat "$FIX/payloads/$name.probes")
   seed_probes "$sid" "$pset"
@@ -835,6 +835,72 @@ normalize "$T/out" "$T/lk1"
 render "$T/prw.json" - COLUMNS=60 AGENTLINE_LINKS=0
 normalize "$T/out" "$T/lk0"
 check "links: layout identical with links on and off" cmp -s "$T/lk1" "$T/lk0"
+
+# Compaction counter (C05): compact_boundary lines in the transcript, read
+# incrementally through ${CACHE_DIR}/compact.<sid>. The transcript is a
+# scratch copy the tests grow, truncate and replace.
+TR="$T/transcript.jsonl"
+BND='{"type":"system","subtype":"compact_boundary","compactMetadata":{"trigger":"auto","preTokens":190000,"postTokens":@P@}}'
+bnd() { printf '%s\n' "${BND/@P@/$1}"; }  # bnd <postTokens> -> one boundary line
+filler() { printf '{"type":"assistant","message":{"content":"x%s"}}\n' "$1"; }
+cmp_render() {  # cmp_render [used_pct-json] -> raw $T/out, line 1 in $T/l1
+  printf '{"session_id":"cmp-0001","cwd":"%s","transcript_path":"%s","model":{"id":"claude-opus-5"},"context_window":{"used_percentage":%s,"context_window_size":200000}}\n' \
+    "$WORK" "$TR" "${1:-null}" > "$T/cmp.json"
+  # The payload stays the same while the transcript changes: no render cache.
+  rm -f "$(cbase cmp-0001).render" "$(cbase cmp-0001).payload"
+  render "$T/cmp.json" 300
+  normalize "$T/out" "$T/cn"; head -n 1 "$T/cn" > "$T/l1"
+}
+CCACHE="$CACHE_DIR/compact.cmp-0001"
+# 0 boundaries: no segment, no estimate.
+filler 1 > "$TR"
+printf '{"session_id":"cmp-0001"}\n' > "$T/cmp.json"
+prepare minimal "$T/cmp.json"
+cmp_render
+check "compact: exit 0 (got $rc)" [ "$rc" = 0 ]
+check "compact: stderr empty" [ ! -s "$T/err" ]
+if grep -qE '🔄|📊' "$T/l1"; then fail "compact: no boundary, no segment"; else pass; fi
+check "compact: cache written" [ -f "$CCACHE" ]
+# 1 boundary, appended: counted from the new bytes; estimate from postTokens.
+bnd 20000 >> "$TR"
+cmp_render
+check "compact: one boundary shows 🔄 1" grep -qF '🔄 1' "$T/l1"
+check "compact: null used% shows the dim estimate ~10%" grep -qF '📊 ~10% │ 🔄 1' "$T/l1"
+check "compact: the estimate is dim" grep -q "${ESC}\[2m📊 ~10%" "$T/out"
+# Growth to 3: only the appended bytes are read; the latest postTokens wins.
+{ filler 2; bnd 30000; filler 3; bnd 41000; } >> "$TR"
+cmp_render
+check "compact: three boundaries show 🔄 3" grep -qF '🔄 3' "$T/l1"
+check "compact: latest postTokens drives the estimate (~21%)" grep -qF '📊 ~21%' "$T/l1"
+# Same size: served from the cache, the file is not read. Blank the
+# boundaries in place, same length; the count must not move.
+LC_ALL=C sed 's/compact_boundary/compact_xxxxxxxx/' "$TR" > "$TR.same"; cat "$TR.same" > "$TR"
+cmp_render
+check "compact: same size is not re-read" grep -qF '🔄 3' "$T/l1"
+# A real figure replaces the estimate; the counter stays.
+bnd 5000 > "$TR.new"; mv "$TR.new" "$TR"
+cmp_render 47
+check "compact: real used% wins over the estimate" grep -qF '📊 47% │ 🔄 1' "$T/l1"
+# Replaced (new inode, here also smaller): a full rescan, not an addition.
+check "compact: a replaced transcript is rescanned (🔄 1, not 4)" grep -qF '🔄 1' "$T/l1"
+# Truncated in place (same inode, smaller): rescanned too.
+filler 5 > "$TR"
+cmp_render
+if grep -q '🔄' "$T/l1"; then fail "compact: truncated in place rescans to 0"; else pass; fi
+# Missing transcript, or garbage in the cache: no segment, no error.
+rm -f "$TR"
+cmp_render
+check "compact: missing transcript, exit 0 (got $rc)" [ "$rc" = 0 ]
+check "compact: missing transcript, stderr empty" [ ! -s "$T/err" ]
+if grep -q '🔄' "$T/l1"; then fail "compact: missing transcript shows nothing"; else pass; fi
+bnd 9000 > "$TR"; printf 'x y $(touch %s) z\n' "$T/cmp-pwned" > "$CCACHE"
+cmp_render
+check "compact: a garbage cache is rebuilt" grep -qF '🔄 1' "$T/l1"
+check "compact: cache contents never run" [ ! -e "$T/cmp-pwned" ]
+# An absurd postTokens (> window) gives no estimate, only the counter.
+bnd 999999 > "$TR.new"; mv "$TR.new" "$TR"
+cmp_render
+if grep -q '📊' "$T/l1"; then fail "compact: estimate over 100% is dropped"; else pass; fi
 
 # ===========================================================================
 # 3. Render-cache fast path

@@ -513,6 +513,8 @@ fields = {
     'model_raw': mid,
     'model': clean(model),
     'used_pct': num(g('context_window', 'used_percentage')),
+    # For the post-compaction estimate only (see "Compaction").
+    'ctx_size': num(size),
     'warn_200k': warn_200k,
     'payload_err': payload_err,
     'five_hour': num(g('rate_limits', 'five_hour', 'used_percentage')),
@@ -1295,6 +1297,86 @@ pace_arrow() {  # pace_arrow <used%> <resets_epoch> <window_secs> <min_elapsed%>
   fi
 }
 
+# === Compaction ===
+# How many times this session's context has been compacted: "🔄 2" on line
+# 1, hidden at 0. Claude Code writes one line per compaction into the
+# session transcript — {"type":"system","subtype":"compact_boundary",
+# "compactMetadata":{"trigger":…,"preTokens":…,"postTokens":…}} — and a
+# session keeps the same .jsonl across compactions, so the count of those
+# lines is the session's count. No hook: a PreCompact hook fires before the
+# compaction (and for one that then fails), and would be one more opt-in
+# install step for a number the transcript already holds. The schema is
+# undocumented, so the segment fails silent: no match, no segment. Quoted in
+# a message, the pattern arrives with escaped quotes and cannot match.
+#
+# A transcript runs to tens of MB; grepping it whole on every full render
+# cost ~0.15 s. So the count is kept in ${CACHE_DIR}/compact.<sid> as
+# "inode size count postTokens" and only the bytes appended since are read:
+# the same size costs one stat and no read, growth costs one tail|grep over
+# the new bytes, and a new inode or a smaller file (rewritten, rotated)
+# costs one full scan. The cache is written through a temp file and mv, so
+# two renders racing never leave half a line. A compact_boundary line split
+# across two reads (caught mid-write) can be missed; Claude Code appends
+# each line in one write, so that window is a few bytes wide. The payload's
+# transcript_path only — the path guess the ultracode probe falls back to
+# costs a sed per render, for a Claude Code too old to have compaction
+# metadata anyway — and only with a trusted cache directory: without one
+# every render would be a full scan.
+#
+# postTokens of the last compaction backs one estimate. Right after /compact
+# the payload's used_percentage is null until the next API call, and the
+# context segment hides; with a count > 0 and a known window size it shows
+# a dim "📊 ~6%" (postTokens / window) instead, until the real figure is
+# back. The last postTokens is only looked for when the count changes.
+if [ "$OS" = Darwin ]; then _stat_is() { stat -f '%i %z' -- "$1" 2>/dev/null; }
+else _stat_is() { stat -c '%i %s' -- "$1" 2>/dev/null; }
+fi
+# Bytes [from, to) of the transcript, never past the size stat saw: a file
+# still growing between the stat and the read would otherwise hand the next
+# render bytes this one already counted.
+_compact_chunk() {  # _compact_chunk <from> <to>
+  if [ "$1" = 0 ]; then head -c "$2" "$payload_transcript" 2>/dev/null
+  else tail -c "+$(( $1 + 1 ))" "$payload_transcript" 2>/dev/null | head -c "$(( $2 - $1 ))"
+  fi
+}
+_compact_last_post() {  # _compact_last_post <from> <to> -> last postTokens of a boundary line
+  _compact_chunk "$1" "$2" | LC_ALL=C grep -F '"subtype":"compact_boundary"' \
+    | LC_ALL=C grep -o '"postTokens":[0-9]*' | tail -n 1 | LC_ALL=C tr -cd '0-9'
+}
+compact_n=0; compact_post=""
+if [ -n "$CACHE_BASE" ] && [ -n "$payload_transcript" ] && [ -f "$payload_transcript" ]; then
+  _cst=$(_stat_is "$payload_transcript")
+  _ino="${_cst%% *}"; _size="${_cst#* }"
+  case "$_ino$_size" in
+    ''|*[!0-9]*) ;;
+    *)
+      _cfile="${CACHE_DIR}/compact.${_sid}"
+      _c_ino=""; _c_size=""; _c_n=""; _c_post=""
+      [ -f "$_cfile" ] && read -r _c_ino _c_size _c_n _c_post < "$_cfile"
+      case "$_c_ino$_c_size$_c_n" in ''|*[!0-9]*) _c_ino="" ;; esac
+      case "$_c_post" in *[!0-9]*) _c_post="" ;; esac
+      if [ -n "$_c_ino" ] && [ "$_c_ino" = "$_ino" ] && [ "$_c_size" = "$_size" ]; then
+        compact_n="$_c_n"; compact_post="$_c_post"
+      else
+        if [ -n "$_c_ino" ] && [ "$_c_ino" = "$_ino" ] && [ "$_size" -gt "$_c_size" ]; then
+          _from="$_c_size"; compact_n="$_c_n"; compact_post="$_c_post"  # only what was appended
+        else
+          _from=0; compact_n=0; compact_post=""  # new or rewritten file: all of it
+        fi
+        _new=$(_compact_chunk "$_from" "$_size" | LC_ALL=C grep -c -F '"subtype":"compact_boundary"')
+        case "$_new" in ''|*[!0-9]*) _new=0 ;; esac
+        compact_n=$(( 10#$compact_n + _new ))
+        if [ "$_new" -gt 0 ]; then
+          _p=$(_compact_last_post "$_from" "$_size")
+          [ -n "$_p" ] && compact_post="$_p"
+        fi
+        printf '%s %s %s %s\n' "$_ino" "$_size" "$compact_n" "$compact_post" > "${_cfile}.$$" 2>/dev/null \
+          && mv -f "${_cfile}.$$" "$_cfile" 2>/dev/null
+      fi
+      ;;
+  esac
+fi
+
 thinking_icon=""
 [ "$thinking" = "True" ] && thinking_icon="🧠"
 
@@ -1418,7 +1500,21 @@ if [ -n "$used_pct" ]; then
     ctx_tag=" ${DIM}>200k${RESET}"
   fi
   _seg ctx "${c}${ctx_icon} $(printf '%.0f' "$used_pct")%${RESET}${ctx_tag}"
+elif [ "$compact_n" -gt 0 ] && [ -n "$compact_post" ]; then
+  # Just compacted, and the payload has no figure until the next API call:
+  # an approximate one from the compaction's own postTokens (see
+  # "Compaction"). Dim and marked "~" — it is an estimate. Plain integers
+  # only (a window size is), and a result past 100 is no estimate at all.
+  case "$ctx_size" in
+    ''|0|*[!0-9]*) ;;
+    *)
+      if [ ${#ctx_size} -le 12 ] && [ ${#compact_post} -le 12 ] && [ $(( 10#$ctx_size )) -gt 0 ]; then
+        ctx_est=$(( (10#$compact_post * 100 + 10#$ctx_size / 2) / 10#$ctx_size ))
+        [ "$ctx_est" -le 100 ] && _seg ctx "${DIM}📊 ~${ctx_est}%${RESET}"
+      fi ;;
+  esac
 fi
+[ "$compact_n" -gt 0 ] && _seg compact "${DIM}🔄 ${compact_n}${RESET}"
 if [ -n "$five_hour" ]; then
   c=$(color_pct "$five_hour" 90 70)
   reset_part=""; [ -n "$five_hour_reset_fmt" ] && reset_part="${DIM}↻${five_hour_reset_fmt}${RESET}"
@@ -1886,13 +1982,13 @@ fi
 # the output is used as-is. It is written as bytes through os.fsencode, which
 # reverses exactly how python decoded argv: a byte the locale cannot decode
 # round-trips instead of raising on the way out.
-AGENTLINE_LAYOUT_DEFAULT="model,effort,fast,ctx,5h,week,cache,cost,dur,tok_in,tok_out,words,lines,cpu,mem,disk / version,dir,git,pr,worktree,session,email,date,clock / mcp,agents,resume / services,ssh,cron,ports"
+AGENTLINE_LAYOUT_DEFAULT="model,effort,fast,ctx,compact,5h,week,cache,cost,dur,tok_in,tok_out,words,lines,cpu,mem,disk / version,dir,git,pr,worktree,session,email,date,clock / mcp,agents,resume / services,ssh,cron,ports"
 # cpu, mem and disk close the list: they are host readings, the least a line
 # about the session needs, and without them a busy line 1 at COLUMNS≈122
 # still overflowed by a few cells and wrapped them onto a row of their own.
 # cache (the prompt-cache warning) goes last of all: it only shows when it
 # is about to cost something, and then it outranks any host reading.
-AGENTLINE_DROP_DEFAULT="tok_in,tok_out,words,dur,date,version,email,lines,cpu,mem,disk,cache"
+AGENTLINE_DROP_DEFAULT="tok_in,tok_out,words,compact,dur,date,version,email,lines,cpu,mem,disk,cache"
 # Leading zeros and absurd lengths are refused: bash arithmetic reads "08" as
 # bad octal, and a width is never six digits.
 _cols="${COLUMNS-}"
