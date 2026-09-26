@@ -25,7 +25,18 @@ input=$(cat)
 # zero subprocesses on bash >= 5.0. Any real event (token counts, cost, cwd,
 # model) changes the payload and invalidates the cache on the spot, so no
 # segment is ever shown stale across a state change.
-CLOCK_TOKEN='@@AGENTLINE_CLOCK@@'
+#
+# Each placeholder carries a C0 byte (\x02). Every displayed string has its
+# control characters stripped (see "Display sanitization"), so no session
+# name, branch or label can contain one — and a session named
+# "@@AGENTLINE_CLOCK@@" can no longer have the clock, or the animated effort
+# gradients, substituted into it. \x02 rather than \x01: bash uses \x01 (and
+# \x7f) as internal quoting markers, and old versions mishandle them in
+# pattern substitution.
+_AL_TOK=$'\x02'
+CLOCK_TOKEN="@@${_AL_TOK}AGENTLINE_CLOCK@@"
+ANIM_MAX_TOKEN="@@${_AL_TOK}AGENTLINE_ANIM_MAX@@"
+ANIM_ULTRA_TOKEN="@@${_AL_TOK}AGENTLINE_ANIM_ULTRA@@"
 CACHE_TTL="${AGENTLINE_CACHE_TTL:-5}"
 
 # The UTF-8 encoding of a C1 control (U+0080-U+009F) is the byte C2 followed
@@ -180,14 +191,14 @@ if [ -n "$_prev_payload" ] && [ "$_prev_payload" = "$input" ] && [ -f "${CACHE_B
       if [ -n "$_cached_body" ] && [ $(( _now_epoch - _cached_ts )) -lt "$CACHE_TTL" ]; then
         _tick_out="${_cached_body//$CLOCK_TOKEN/$_now_clock}"
         case "$_tick_out" in
-          *'@@AGENTLINE_ANIM_MAX@@'*)
+          *"$ANIM_MAX_TOKEN"*)
             _anim_frame max rainbow
-            _tick_out="${_tick_out//@@AGENTLINE_ANIM_MAX@@/$_anim_out}" ;;
+            _tick_out="${_tick_out//$ANIM_MAX_TOKEN/$_anim_out}" ;;
         esac
         case "$_tick_out" in
-          *'@@AGENTLINE_ANIM_ULTRA@@'*)
+          *"$ANIM_ULTRA_TOKEN"*)
             _anim_frame ultracode violet
-            _tick_out="${_tick_out//@@AGENTLINE_ANIM_ULTRA@@/$_anim_out}" ;;
+            _tick_out="${_tick_out//$ANIM_ULTRA_TOKEN/$_anim_out}" ;;
         esac
         printf "%b" "$_tick_out"
         exit 0
@@ -763,12 +774,12 @@ case "$effort_raw" in
       # Mirrors the /effort picker's violet-ripple, rotated one wheel step
       # per tick by _anim_frame/_VIOLET_WHEEL above instead of a single
       # frozen frame. Token substituted at print time, same as $CLOCK_TOKEN.
-      effort="@@AGENTLINE_ANIM_ULTRA@@"
+      effort="$ANIM_ULTRA_TOKEN"
     else
       effort="🔴${RED}xhigh${RESET}"
     fi ;;
   # max mirrors the picker's rainbow-animated look with a live-ticking wheel.
-  max)    effort="@@AGENTLINE_ANIM_MAX@@" ;;
+  max)    effort="$ANIM_MAX_TOKEN" ;;
   *)      [ -n "$effort_raw" ] && effort="⚙️  $effort_raw" ;;
 esac
 
@@ -1291,13 +1302,13 @@ case "$out" in
 esac
 out="${out//$CLOCK_TOKEN/$_now_clock}"
 case "$out" in
-  *'@@AGENTLINE_ANIM_MAX@@'*)
+  *"$ANIM_MAX_TOKEN"*)
     _anim_frame max rainbow
-    out="${out//@@AGENTLINE_ANIM_MAX@@/$_anim_out}" ;;
+    out="${out//$ANIM_MAX_TOKEN/$_anim_out}" ;;
 esac
 case "$out" in
-  *'@@AGENTLINE_ANIM_ULTRA@@'*)
+  *"$ANIM_ULTRA_TOKEN"*)
     _anim_frame ultracode violet
-    out="${out//@@AGENTLINE_ANIM_ULTRA@@/$_anim_out}" ;;
+    out="${out//$ANIM_ULTRA_TOKEN/$_anim_out}" ;;
 esac
 printf "%b" "$out"

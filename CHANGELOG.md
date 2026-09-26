@@ -43,6 +43,10 @@
   size past 64 bits broke bash's `[ -gt ]`. Such values, and anything from
   1e15 up, now hide their segment. The 200k-warning decision is made in the
   parser, which compares any size.
+- A session name (or any displayed string) can no longer forge the clock or
+  effort-animation placeholders. `@@AGENTLINE_CLOCK@@` in a session name
+  used to be replaced by the live clock. The placeholders now contain a
+  control byte, and no cleaned string can contain one.
 - Payload robustness and a truthful context warning. A payload that does not
   decode, or decodes to something other than an object, used to become `{}`:
   the model and context segments vanished with no hint why. It now shows a

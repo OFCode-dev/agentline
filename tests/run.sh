@@ -272,7 +272,11 @@ for tpl in "$FIX"/payloads/*.json; do
       diff -u "$g" "$T/got" | head -n 20 | sed 's/^/    /'
     fi
     if msg=$(check_wrap "$T/got" "$T/wide" "$w" 2>&1); then pass; else fail "$label: wrap: $msg"; fi
-    if grep -q '@@AGENTLINE_' "$T/got"; then fail "$label: placeholder leaked"; else pass; fi
+    if grep -qE 'AGENTLINE_(CLOCK|ANIM)' "$T/got" || grep -q "$(printf '\002')" "$T/out"; then
+      fail "$label: placeholder leaked"
+    else
+      pass
+    fi
   done
 
   # A tick with the same payload is served from the render cache and must be
@@ -421,6 +425,17 @@ if sys.argv[2] not in s:
 ' "$T/out" "$([ "$cj" = cwd1 ] && echo '/nonexistent/a[31m0;x' || echo '/nonexistent/b[32m')" 2>&1); then pass; else fail "$cj: $msg"; fi
 done
 
+# Placeholder forging: a session name spelling the old placeholders stays
+# text — on the full render and on a cached tick — because the real tokens
+# carry a C0 byte that no cleaned string can contain.
+printf '{"session_id":"forge-0001","cwd":"%s","session_name":"@@AGENTLINE_ANIM_MAX@@","version":"@@AGENTLINE_CLOCK@@"}\n' "$WORK" > "$T/forge.json"
+prepare minimal "$T/forge.json"
+for pass_no in 1 2; do
+  render "$T/forge.json" 120
+  check "forging [render $pass_no]: session name kept literally" grep -qF '@@AGENTLINE_ANIM_MAX@@' "$T/out"
+  check "forging [render $pass_no]: version kept literally" grep -qF 'v@@AGENTLINE_CLOCK@@' "$T/out"
+done
+
 # Probe-cache injection: a payload cwd with a newline used to write an extra
 # line into the eval'd cache body, and the next render in the first half of
 # that cwd ran it. Both renders share one session (one cache file); the
@@ -450,15 +465,16 @@ render "$p" 120
 # body with a marker and expect it back with the clock re-stamped.
 render_file="$CACHE_DIR/render_$sid.render"
 ts=$(head -n 1 "$render_file")
-printf '%s\n%s' "$ts" 'CACHED @@AGENTLINE_CLOCK@@' > "$render_file"
+CLOCK_TOK=$(printf '@@\002AGENTLINE_CLOCK@@')  # the script's CLOCK_TOKEN
+printf '%s\n%s' "$ts" "CACHED $CLOCK_TOK" > "$render_file"
 render "$p" 120
 check "tick serves the cached body" grep -Eq '^CACHED [0-9]{2}:[0-9]{2}:[0-9]{2}$' "$T/out"
 # Expired (epoch 0) -> full render again.
-printf '%s\n%s' 0 'CACHED @@AGENTLINE_CLOCK@@' > "$render_file"
+printf '%s\n%s' 0 "CACHED $CLOCK_TOK" > "$render_file"
 render "$p" 120
 check "expired cache re-renders" grep -q 'Opus 5' "$T/out"
 # A changed payload invalidates on the spot, whatever the cache age.
-printf '%s\n%s' "$(date +%s)" 'CACHED @@AGENTLINE_CLOCK@@' > "$render_file"
+printf '%s\n%s' "$(date +%s)" "CACHED $CLOCK_TOK" > "$render_file"
 sed 's/"used_percentage":42.4/"used_percentage":43/' "$p" > "$T/changed.json"
 render "$T/changed.json" 120
 check "payload change bypasses the cache" grep -q '43%' "$T/out"
