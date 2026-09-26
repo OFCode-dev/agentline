@@ -11,6 +11,11 @@
   `PYTHONSTARTUP`. The opt-in /usage fetch also survives a render killed
   within its first few milliseconds: it used to die if the kill came
   before it had left the render's process group.
+- A payload working directory made only of control bytes no longer reaches
+  the terminal raw. Its cleaned form is empty, and line 2 used to fall back
+  to the raw path, which put a bare 0x9B (the 8-bit CSI) on screen. The
+  folder segment now simply disappears. Only a missing cwd still falls back
+  to `pwd`.
 - A render that misses the render cache starts two `python3` instead of
   three, or four for a Fable/Mythos model. That is the render an active turn
   pays about once a second, and each `python3` start costs ~20 ms of CPU.

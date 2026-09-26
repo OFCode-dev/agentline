@@ -422,9 +422,12 @@ def line(k, v):
 sys.stdout.buffer.write(b'\n'.join(line(k, v) for k, v in fields.items()))
 PYEOF
 eval "$(PAYLOAD="$input" python3 -I -c "$_AL_PARSER")"
-[ -z "$cwd" ] && cwd="$(pwd)"
-# (A host-derived pwd is cleaned with the other host strings via $folder.)
-[ -z "$cwd_disp" ] && cwd_disp="$cwd"
+# Only a pwd fallback may seed the displayed path from the raw one (it is
+# host data, cleaned with the other host strings via $folder). A payload cwd
+# whose cleaned form is empty — nothing but control bytes, say "\x9b\x1b" —
+# stays empty on screen: falling back to the raw value there put a bare 0x9B
+# (the 8-bit CSI) straight onto line 2, and the folder segment just vanishes.
+[ -z "$cwd" ] && { cwd="$(pwd)"; cwd_disp="$cwd"; }
 
 # === Platform detection ===
 # One source tree runs on macOS laptops and Linux servers. Resolve the

@@ -414,7 +414,9 @@ done
 # invalid byte in the payload cwd used to come out as a bare 0x9B/0x9D.
 printf '{"session_id":"cwd-0001","cwd":"/nonexistent/a\\udc9b[31m\\u009d0;x"}\n' > "$T/cwd1.json"
 printf '{"session_id":"cwd-0002","cwd":"/nonexistent/b\233[32m"}\n' > "$T/cwd2.json"
-for cj in cwd1 cwd2; do
+# A cwd that cleans to nothing used to fall back to the raw value on screen.
+printf '{"session_id":"cwd-0003","cwd":"\233\\u001b\233"}\n' > "$T/cwd3.json"
+for cj in cwd1 cwd2 cwd3; do
   prepare minimal "$T/$cj.json"
   render "$T/$cj.json" 120
   if msg=$(python3 -c '
@@ -428,7 +430,8 @@ if any(0x80 <= ord(c) <= 0x9f for c in s):
     sys.exit("C1 survived")
 if sys.argv[2] not in s:
     sys.exit("folder missing: %r" % sys.argv[2])
-' "$T/out" "$([ "$cj" = cwd1 ] && echo '/nonexistent/a[31m0;x' || echo '/nonexistent/b[32m')" 2>&1); then pass; else fail "$cj: $msg"; fi
+' "$T/out" "$(case $cj in cwd1) echo '/nonexistent/a[31m0;x' ;; cwd2) echo '/nonexistent/b[32m' ;; esac)" 2>&1); then pass; else fail "$cj: $msg"; fi
+  check "$cj: exit 0 (got $rc)" [ "$rc" = 0 ]
 done
 
 # Placeholder forging: a session name spelling the old placeholders stays
