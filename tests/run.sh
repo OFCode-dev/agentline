@@ -1111,6 +1111,13 @@ else
   printf '[Core]\n\tFileMode = true\n[remote "x"]\n\tpartialclonefilter = blob:none\n' >> "$GM/benign/.git/config"
   : > "$GM/benign/new"; gst "$GM/benign"
   check "git benign config: counts shown" grep -qF '@main ↑1 ?1' "$T/g2"
+  # Past 64 KB of status output one awk counts, not the read loop (H0b):
+  # 1,600 untracked files with long names are ~74 KB, counted exactly.
+  mkrepo big
+  i=0; while [ "$i" -lt 1600 ]; do : > "$GM/big/untracked-file-with-a-rather-long-name-$i"; i=$((i + 1)); done
+  printf 'z\n' > "$GM/big/f"
+  gst "$GM/big"
+  check "git status: a >64 KB status is counted in full" grep -qF '@main ↑1 ±1 ?1600' "$T/g2"
 fi
 
 # Breadcrumb (C14): project_dir differing from cwd leads the path, dim.
@@ -1611,6 +1618,7 @@ if REAL_GIT=$(command -v git); then
 #!/bin/sh
 echo "\$*" >> "$T/git-calls"
 [ -n "\$GIT_SHIM_HANG" ] && exec sleep 5
+[ -n "\$GIT_SHIM_STATUS_HANG" ] && case "\$*" in *" status "*) exec sleep 5 ;; esac
 exec "$REAL_GIT" "\$@"
 EOF
   chmod +x "$HSHIM/git"
@@ -1651,6 +1659,28 @@ EOF
     check "git status: detached HEAD, no call (got $(git_calls))" [ "$(git_calls)" = 0 ]
     grender "$G/plain" AGENTLINE_GIT_STATUS=1
     check "git status: not a repo, no call (got $(git_calls))" [ "$(git_calls)" = 0 ]
+    # A status that times out is remembered: the next probe misses in that
+    # directory skip it (only the origin URL is asked) until the back-off
+    # runs out; the branch shows throughout (H0b).
+    GS_FILE="$(cbase git-0001).gitslow"
+    grender "$G/repo" AGENTLINE_GIT_STATUS=1 GIT_SHIM_STATUS_HANG=1
+    check "git status: a timed-out status keeps the branch" grep -qxF '🌿 octo/repo@feat/x' "$T/got"
+    check "git status: a timeout is remembered" [ -f "$GS_FILE" ]
+    grerender() {  # grerender — the same payload again, the session's caches kept but the render's
+      rm -f "$T/git-calls" "$(cbase git-0001).render" "$(cbase git-0001).payload"
+      render "$T/git.json" 120 PATH="$HSHIM:$PATH_F" AGENTLINE_PROBE_TTL=0 AGENTLINE_LAYOUT=git \
+        AGENTLINE_GIT_STATUS=1 GIT_SHIM_STATUS_HANG=1
+      normalize "$T/out" "$T/got"
+    }
+    grerender
+    check "git status: backed off, origin URL only (got $(git_calls) calls)" [ "$(git_calls)" = 1 ]
+    check "git status: backed off, branch kept" grep -qxF '🌿 octo/repo@feat/x' "$T/got"
+    { printf '1\n'; sed -n 2p "$GS_FILE"; } > "$T/gs.tmp"; cat "$T/gs.tmp" > "$GS_FILE"
+    grerender
+    check "git status: asked again once the back-off ran out (got $(git_calls) calls)" [ "$(git_calls)" = 2 ]
+    printf '%s\n%s' 9999999999 /some/other/dir > "$GS_FILE"
+    grerender
+    check "git status: a back-off for another cwd does not apply (got $(git_calls) calls)" [ "$(git_calls)" = 2 ]
   fi
   grender "$G/wt"
   check "git [worktree]: gitdir: file followed" grep -qF 'wt-branch' "$T/got"

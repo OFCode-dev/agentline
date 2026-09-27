@@ -1039,22 +1039,58 @@ if [ -n "$cwd" ] && [ -d "$cwd" ]; then
       fi
     fi
   fi
+  # A repository slow enough to hit the timeout would hit it on every probe
+  # miss, a second each time, for nothing: the answer is thrown away. So a
+  # timeout is remembered in ${CACHE_BASE}.gitslow ("<until-epoch>" and the
+  # %q-quoted cwd, one line each), and the call sits out four probe TTLs (at
+  # least a minute) in that directory; the branch still shows. Another cwd,
+  # or the time passing, asks again. Read with builtins, like the caches.
+  _gs_file=""
+  [ -n "$CACHE_BASE" ] && _gs_file="${CACHE_BASE}.gitslow"
+  if [ "$_git_st_ok" = 1 ] && [ -n "$_gs_file" ] && [ -f "$_gs_file" ]; then
+    _gs_until=""; _gs_cwd=""
+    { IFS= read -r _gs_until; IFS= read -r _gs_cwd; } 2>/dev/null < "$_gs_file"
+    case "$_gs_until" in
+      ''|*[!0-9]*) ;;
+      *) [ "$_gs_cwd" = "$_cwd_q" ] && [ "$_now_epoch" -lt "$_gs_until" ] && _git_st_ok=0 ;;
+    esac
+  fi
   if [ "$_git_st_ok" = 1 ]; then
     _uflag="-unormal"; [ "${AGENTLINE_GIT_UNTRACKED:-1}" = 0 ] && _uflag="-uno"
-    if _st=$(GIT_NO_LAZY_FETCH=1 "$_TIMEOUT" 1 git --no-optional-locks -c core.fsmonitor=false \
-               -c core.hooksPath=/dev/null -C "$cwd" status --porcelain=v2 --branch \
-               --ignore-submodules=dirty "$_uflag" 2>/dev/null); then
+    _st=$(GIT_NO_LAZY_FETCH=1 "$_TIMEOUT" 1 git --no-optional-locks -c core.fsmonitor=false \
+            -c core.hooksPath=/dev/null -C "$cwd" status --porcelain=v2 --branch \
+            --ignore-submodules=dirty "$_uflag" 2>/dev/null)
+    _st_rc=$?
+    if [ "$_st_rc" = 124 ] && [ -n "$_gs_file" ]; then
+      _gs_for=60
+      case "$PROBE_TTL" in ''|*[!0-9]*|??????*) ;; *) [ $(( 10#$PROBE_TTL * 4 )) -gt 60 ] && _gs_for=$(( 10#$PROBE_TTL * 4 )) ;; esac
+      printf '%s\n%s' "$(( _now_epoch + _gs_for ))" "$_cwd_q" > "$_gs_file" 2>/dev/null
+    fi
+    if [ "$_st_rc" = 0 ]; then
       _ahead=0; _behind=0; _chg=0; _unt=0; _cfl=0
-      while IFS= read -r _l; do
-        case "$_l" in
-          "# branch.ab +"*" -"*)
-            _ahead="${_l#\# branch.ab +}"; _behind="${_ahead#* -}"; _ahead="${_ahead%% *}" ;;
-          "1 "*|"2 "*) _chg=$(( _chg + 1 )) ;;
-          "u "*) _cfl=$(( _cfl + 1 )) ;;
-          "? "*) _unt=$(( _unt + 1 )) ;;
-        esac
-      done <<< "$_st"
-      case "$_ahead$_behind" in *[!0-9]*) _ahead=0; _behind=0 ;; esac
+      # The read loop runs after the timeout, unguarded: 80,000 untracked
+      # files took it 1.4 s on bash 5 and 3.4 s on bash 3.2. Past 64 KB of
+      # output (~1,500 entries) one awk counts instead, in milliseconds.
+      if [ ${#_st} -gt 65536 ]; then
+        IFS=' ' read -r _ahead _behind _chg _unt _cfl <<< "$(printf '%s\n' "$_st" | awk '
+          /^# branch\.ab / { a = $3; b = $4; sub(/^\+/, "", a); sub(/^-/, "", b) }
+          /^[12] / { c++ }
+          /^\? / { q++ }
+          /^u / { u++ }
+          END { printf "%d %d %d %d %d\n", a, b, c, q, u }')"
+        case "$_chg$_unt$_cfl" in ''|*[!0-9]*) _chg=0; _unt=0; _cfl=0 ;; esac
+      else
+        while IFS= read -r _l; do
+          case "$_l" in
+            "# branch.ab +"*" -"*)
+              _ahead="${_l#\# branch.ab +}"; _behind="${_ahead#* -}"; _ahead="${_ahead%% *}" ;;
+            "1 "*|"2 "*) _chg=$(( _chg + 1 )) ;;
+            "u "*) _cfl=$(( _cfl + 1 )) ;;
+            "? "*) _unt=$(( _unt + 1 )) ;;
+          esac
+        done <<< "$_st"
+      fi
+      case "$_ahead$_behind" in ''|*[!0-9]*) _ahead=0; _behind=0 ;; esac
       [ "$_ahead" != 0 ] && git_ab="↑${_ahead}"
       [ "$_behind" != 0 ] && git_ab="${git_ab}↓${_behind}"
       [ "$_chg" -gt 0 ] && git_dirty="±${_chg}"

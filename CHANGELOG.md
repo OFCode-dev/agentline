@@ -22,6 +22,13 @@
   user. `git branch --show-current` and `git remote get-url` read config
   and refs only and run nothing. Your global config is yours and is not
   second-guessed.
+- A repository too big for the git counts no longer costs time on every
+  probe. The status output was counted by a bash read loop that ran after
+  the 1 s timeout, unguarded: 80,000 untracked files added 1.4 s (bash 5)
+  or 3.4 s (bash 3.2) to a render. Past 64 KB of output one `awk` counts it
+  in milliseconds. And a status that times out is remembered: that
+  directory skips the call for four probe intervals (a minute at least)
+  instead of paying the full second on each, the branch still shown.
 - Themes, an ASCII glyph set and colour overrides, all set by environment
   variable (in `settings.json`'s env block, which upgrades never touch).
   Before, the only answer to "change a colour" was editing the script,
