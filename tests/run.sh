@@ -962,6 +962,16 @@ prw ',"workspace":{"current_dir":"/x"}'
 if grep -q '🌳' "$T/l2"; then fail "worktree: hidden in the main clone"; else pass; fi
 prw ',"workspace":{"git_worktree":{"x":1}}'
 if grep -q '🌳' "$T/l2"; then fail "worktree: a non-string is no name"; else pass; fi
+prw ',"workspace":{"git_worktree":"/w/feature-an-unusually-long-worktree-name-for-line-two"}'
+check "worktree: a long name is capped at 24 characters (H0h)" grep -qF '🌳 feature-an-unusually-... ' "$T/l2"
+# The multiplexer is part of the render-cache key (H0h): a render cached
+# outside tmux, links and all, was replayed inside it within the TTL.
+prw ",\"pr\":{\"number\":7,\"url\":\"$PRURL\"}"
+check "pr: linked outside a multiplexer" grep -qF "${BEL}#7${ESC}]8;;${BEL}" "$T/out"
+render "$T/prw.json" 300 TMUX=/tmp/tmux-1/default,1,0
+if grep -qF "${ESC}]8;;" "$T/out"; then fail "pr: a cached render with links is not replayed under tmux"; else pass; fi
+render "$T/prw.json" 300
+check "pr: back outside, the links return" grep -qF "${BEL}#7${ESC}]8;;${BEL}" "$T/out"
 # The layout measures a linked segment by its text: at 80 columns line 2
 # still fits the same way with links on and off.
 prw ",\"pr\":{\"number\":7,\"url\":\"$PRURL\"},\"workspace\":{\"git_worktree\":\"wt-a\"},\"version\":\"3.0.24\""
@@ -1236,6 +1246,18 @@ check "breadcrumb: dim" grep -q "${ESC}\[2m↖ launch" "$T/out"
 printf '{"session_id":"crumb-0001","cwd":"%s","workspace":{"project_dir":"%s/"}}\n' "$WORK" "$WORK" > "$T/crumb.json"
 render "$T/crumb.json" 300; normalize "$T/out" "$T/cr"
 if grep -q '↖' "$T/cr"; then fail "breadcrumb: same dir (trailing slash) shows none"; else pass; fi
+# Only outside the launch directory (H0h): below it the path already starts
+# with it; a sibling that merely shares the prefix is outside.
+printf '{"session_id":"crumb-0001","cwd":"%s","workspace":{"project_dir":"%s"}}\n' "$WORK" "$HOME_F" > "$T/crumb.json"
+render "$T/crumb.json" 300; normalize "$T/out" "$T/cr"
+if grep -q '↖' "$T/cr"; then fail "breadcrumb: a subdirectory of the launch dir shows none"; else pass; fi
+printf '{"session_id":"crumb-0001","cwd":"%s","workspace":{"project_dir":"%s"}}\n' "$WORK" "${WORK%k}" > "$T/crumb.json"
+render "$T/crumb.json" 300; normalize "$T/out" "$T/cr"
+check "breadcrumb: a shared prefix is not a parent (↖ wor)" grep -qF '↖ wor ~/work' "$T/cr"
+# A long launch folder name is capped at 24 characters, by character.
+printf '{"session_id":"crumb-0001","cwd":"%s","workspace":{"project_dir":"/src/ççççççççççççççççççççççççççççççç"}}\n' "$WORK" > "$T/crumb.json"
+render "$T/crumb.json" 300; normalize "$T/out" "$T/cr"
+check "breadcrumb: a long name is capped (21 + ...)" grep -qF '↖ ççççççççççççççççççççç... ~/work' "$T/cr"
 
 # ===========================================================================
 # 3. Render-cache fast path

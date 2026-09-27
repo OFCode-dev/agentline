@@ -303,8 +303,12 @@ _tick_now
 # terminal resize — and it is not in the payload, so without it a resize kept
 # serving the old width's render until the TTL ran out. `+set:` tells an
 # empty AGENTLINE_DROP (drop nothing) from an unset one (the default list).
-# The theme, glyph set and colour overrides change the render too.
-_cache_key="${input}${_US}${COLUMNS-}|${AGENTLINE_WIDTH-}|${AGENTLINE_LAYOUT-}|${AGENTLINE_DROP+set:}${AGENTLINE_DROP-}|${AGENTLINE_LINKS-}|${_AL_THEME}|${AGENTLINE_GLYPHS-}|${AGENTLINE_COLOR_FABLE_FROM-}|${AGENTLINE_COLOR_FABLE_TO-}|${AGENTLINE_COLOR_GOLD-}|${AGENTLINE_COLOR_ORANGE-}"
+# The theme, glyph set and colour overrides change the render too, and so
+# does a multiplexer: under tmux, screen or zellij the OSC-8 links are left
+# out (see "Hyperlinks"), and without their presence in the key a render
+# made outside one was replayed, links and all, inside one for up to
+# $AGENTLINE_CACHE_TTL. Only presence counts, as it does there.
+_cache_key="${input}${_US}${COLUMNS-}|${AGENTLINE_WIDTH-}|${AGENTLINE_LAYOUT-}|${AGENTLINE_DROP+set:}${AGENTLINE_DROP-}|${AGENTLINE_LINKS-}|${_AL_THEME}|${AGENTLINE_GLYPHS-}|${AGENTLINE_COLOR_FABLE_FROM-}|${AGENTLINE_COLOR_FABLE_TO-}|${AGENTLINE_COLOR_GOLD-}|${AGENTLINE_COLOR_ORANGE-}|${TMUX:+t}${STY:+s}${ZELLIJ:+z}"
 # The cache files are read with the `read` builtin, not `$(<file)`: bash 5
 # serves `$(<file)` in-process, but bash 3.2 (macOS) forks a subshell for
 # each, which cost this path two forks a second.
@@ -602,6 +606,13 @@ pr_kind = 'mr' if pr.get('kind') == 'mr' else ''
 # servers) and cut a multibyte character in half at byte 27.
 sname = clean(g('session_name'))
 
+# The worktree segment and the breadcrumb show only a last path component,
+# cut here by characters like the session name (bash would cut bytes). A
+# 60-character branch-named worktree took most of line 2 at 80 columns.
+def last(v, cap=24):
+    v = v.rstrip('/').rsplit('/', 1)[-1]
+    return v if len(v) <= cap else v[:cap - 3] + '...'
+
 fields = {
     # cwd stays raw: it is a filesystem path (git, the probe-cache key, the
     # transcript lookup). Its displayed form, $folder, is built from this
@@ -663,11 +674,11 @@ fields = {
     # A linked worktree: workspace.git_worktree is set for any `git worktree
     # add` checkout (absent in the main clone), worktree.name only in Claude
     # Code's own worktree sessions, so the first is preferred.
-    'git_worktree': text('workspace', 'git_worktree'),
-    'wt_name': text('worktree', 'name'),
+    'wt_disp': last(text('workspace', 'git_worktree') or text('worktree', 'name')),
     # Where the session was launched; differs from cwd once it has cd'd
     # away. Only its last component is shown (the breadcrumb on line 2).
     'project_dir': text('workspace', 'project_dir'),
+    'crumb': last(text('workspace', 'project_dir')),
 }
 # Encoded here, not by print(): stdout's encoding follows the locale, and any
 # surrogate left in a raw field would make print() raise and take every field
@@ -2223,11 +2234,16 @@ fi
 [ -n "$version" ]          && _seg version "${DIM}v${version}${RESET}"
 # Breadcrumb: when the session has cd'd away from where it was launched
 # (workspace.project_dir), the launch folder's name leads the path, dim:
-# "↖ agentline ~/src/other". Trailing slashes aside, the same directory
-# shows nothing. The name comes by expansion, no fork.
+# "↖ agentline ~/src/other". Only outside it: in the launch directory, or
+# anywhere below it, the path shown already starts with that folder, and
+# "↖ agentline ~/src/agentline/tests" said it twice. A directory that merely
+# shares the prefix (~/src/agentline2) is outside. The name ($crumb, capped
+# in the parser) and the test come by expansion, no fork.
 _pd="${project_dir%/}"; _cd="${cwd_disp%/}"
-if [ -n "$folder" ] && [ -n "$_pd" ] && [ "$_pd" != "$_cd" ] && [ -n "${_pd##*/}" ]; then
-  _seg dir "${DIM}${G_BACK}${_pd##*/}${RESET} ${BLUE}${folder}${RESET}"
+_crumb_in=0
+case "$_cd/" in "$_pd"/*) _crumb_in=1 ;; esac
+if [ -n "$folder" ] && [ -n "$_pd" ] && [ "$_crumb_in" = 0 ] && [ -n "$crumb" ]; then
+  _seg dir "${DIM}${G_BACK}${crumb}${RESET} ${BLUE}${folder}${RESET}"
 else
   [ -n "$folder" ] && _seg dir "${BLUE}${folder}${RESET}"
 fi
@@ -2255,9 +2271,9 @@ if [ -n "$pr_number" ]; then
 fi
 # Linked worktree: "🌳 name", only when the session runs in one (the main
 # clone has neither field). The last path component, whether Claude Code
-# hands over a name or a path.
-wt="${git_worktree:-$wt_name}"; wt="${wt%/}"; wt="${wt##*/}"
-[ -n "$wt" ] && _seg worktree "${G_TREE}${GREEN}${wt}${RESET}"
+# hands over a name or a path, capped at 24 characters (the parser's
+# $wt_disp).
+[ -n "$wt_disp" ] && _seg worktree "${G_TREE}${GREEN}${wt_disp}${RESET}"
 [ -n "$session_name_fmt" ] && _seg session "${G_SESSION}${session_name_fmt}"
 
 # Masked email. The payload's account.email is free; only when it is absent is

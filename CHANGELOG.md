@@ -44,6 +44,14 @@
   one short for the rest of the session. Only whole lines are consumed now.
   An unterminated tail is read again by the next render and counted once,
   complete.
+- Three small line-2 fixes. A render cached outside tmux, screen or zellij
+  is no longer replayed inside one with its OSC-8 links for the cache TTL:
+  the multiplexer's presence is now part of the render-cache key. The
+  `↖` breadcrumb only shows when the working directory is outside the
+  launch directory. Below it, the path already starts with the launch
+  folder, so `↖ agentline ~/src/agentline/tests` said it twice. A sibling
+  that only shares the prefix (`~/src/agentline2`) still counts as outside.
+  The worktree name and the breadcrumb are capped at 24 characters.
 - The PR link is checked before it is cleaned, and as strictly as the
   repository link. A `pr.url` with a token in its user-info
   (`https://user:TOKEN@github.com/…`), or a `?token=` query, went into the
