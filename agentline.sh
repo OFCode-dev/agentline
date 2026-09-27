@@ -579,13 +579,21 @@ if isinstance(pc, dict) and pc.get('caching_observed') is not False:
 # positive integer, the review state one of the four documented values (an
 # unknown one shows the number alone), and the URL plain https -- it ends up
 # inside an OSC-8 hyperlink, so anything else (javascript:, file:, a URL with
-# a space or a quote) is no link at all. clean() has already taken the
-# controls and backslashes that printf %b or the terminal would act on.
+# a space or a quote) is no link at all.
+#
+# The raw value is judged, before clean(), against the same rules git_url
+# follows: a host of letters, digits, dots and dashes (an optional port), a
+# path from a spelled-out URL charset, and no user-info, query or fragment.
+# Cleaning first let "…/1\x07\x1b]8;;https://evil" through as a link to
+# "…/1]8;;https://evil" -- the controls went, the forged sequence stayed --
+# and "https://user:TOKEN@host/…" or "?token=…" went into the link as is,
+# where git_url strips them. A URL that fails is no link; the number stays.
 pr = d.get('pr') if isinstance(d.get('pr'), dict) else {}
 pr_number = num(pr.get('number'))
 pr_number = pr_number if re.fullmatch(r'[1-9][0-9]{0,11}', pr_number) else ''
-pr_url = clean(pr.get('url') or '') if isinstance(pr.get('url'), str) else ''
-pr_url = pr_url if re.fullmatch(r'https://[^\s"<>`]+', pr_url) and len(pr_url) <= 2048 else ''
+pr_url = pr.get('url') if isinstance(pr.get('url'), str) else ''
+pr_url = clean(pr_url) if (len(pr_url) <= 2048 and re.fullmatch(
+    r'https://[A-Za-z0-9.-]+(:[0-9]{1,5})?(/[A-Za-z0-9._~:/%+=-]*)?', pr_url)) else ''
 pr_state = pr.get('review_state') if pr.get('review_state') in ('approved', 'pending', 'changes_requested', 'draft') else ''
 pr_kind = 'mr' if pr.get('kind') == 'mr' else ''
 

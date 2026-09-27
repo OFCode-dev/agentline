@@ -929,6 +929,23 @@ if grep -qF 'evil' "$T/out" && ! grep -qF "${ESC}]8;;https://x/]8;;evil${BEL}" "
 else
   pass
 fi
+# The raw URL is judged before it is cleaned (H0f): stripping the controls
+# first left a forged "]8;;https://evil" inside a live link. User-info, a
+# query or a fragment is no link either (the token would ride in the
+# escape sequence), as git_url already refuses them. The number stays.
+for u in 'https://github.com/o/r/pull/1\u0007\u001b]8;;https://evil.example/x' \
+         'https://user:ghp_SECRETTOKEN@github.com/o/r/pull/1' \
+         'https://github.com/o/r/pull/1?token=SECRETTOKEN' \
+         'https://github.com/o/r/pull/1#SECRETTOKEN' \
+         'https://github.com\\@evil.example/o/r/pull/1'; do
+  prw ",\"pr\":{\"number\":1,\"url\":\"$u\"}"
+  if grep -qF "${BEL}#1${ESC}]8;;${BEL}" "$T/out"; then fail "pr: no link for $u"; else pass; fi
+  if grep -qE 'SECRETTOKEN|evil\.example' "$T/out"; then fail "pr: nothing of $u reaches the terminal"; else pass; fi
+  check "pr: the number stays without its link ($u)" grep -qF '🔀 #1' "$T/l2"
+done
+prw ',"pr":{"number":42,"kind":"mr","url":"https://gitlab.example:8443/o/r/-/merge_requests/42"}'
+check "pr: a plain URL with a port still links" \
+  grep -qF "${ESC}]8;;https://gitlab.example:8443/o/r/-/merge_requests/42${BEL}!42" "$T/out"
 prw ',"pr":{"number":"7; rm -rf /","url":"https://x/y"}'
 if grep -q '🔀' "$T/l2"; then fail "pr: a non-integer number shows no badge"; else pass; fi
 prw ',"pr":{"number":0}'

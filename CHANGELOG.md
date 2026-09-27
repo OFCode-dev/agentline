@@ -44,6 +44,14 @@
   one short for the rest of the session. Only whole lines are consumed now.
   An unterminated tail is read again by the next render and counted once,
   complete.
+- The PR link is checked before it is cleaned, and as strictly as the
+  repository link. A `pr.url` with a token in its user-info
+  (`https://user:TOKEN@github.com/…`), or a `?token=` query, went into the
+  OSC-8 link as is, where the repository link strips both. And since the
+  check ran after the control bytes were stripped, `…/1\x07\x1b]8;;https://evil`
+  became a live link to `…/1]8;;https://evil`. Now the raw URL must be a
+  plain `https://host[:port]/path` with no user-info, query, fragment or
+  control byte, or there is no link. The number is shown either way.
 - The dim `📊 ~N%` post-compaction estimate only shows while the compaction
   is the latest event in the transcript. A resumed session whose payload
   carried a null `used_percentage` showed the `postTokens` of a compaction
