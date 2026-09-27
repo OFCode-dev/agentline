@@ -38,6 +38,12 @@
   on never saved its progress, so the next one started over. Now one pass
   does both, and a render reads at most 8 MB and records how far it got. A
   big transcript is caught up over a few renders.
+- A compaction line caught half-written is no longer lost. The scan moved
+  its offset to the end of whatever it read, so a boundary line cut in the
+  middle of its `"subtype"` matched in neither read, and the count stayed
+  one short for the rest of the session. Only whole lines are consumed now.
+  An unterminated tail is read again by the next render and counted once,
+  complete.
 - The test suite no longer fails on a slow machine. Reset times were
   stamped as "now + 2 h" when a fixture was filled, and some renders came
   a minute later, which floored `↻2h0m` to `↻1h59m` and `⇡12%` to `⇡11%`.

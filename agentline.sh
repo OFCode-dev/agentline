@@ -1685,9 +1685,8 @@ pace_arrow() {  # pace_arrow <used%> <resets_epoch> <window_secs> <min_elapsed%>
 # read: the same size costs one stat and no read, growth costs one tail|awk
 # over the new bytes (8 MB at most, see _CMP_CAP), and a new inode or a
 # smaller file (rewritten, rotated) starts again from 0. The cache is written through a temp file and mv, so
-# two renders racing never leave half a line. A compact_boundary line split
-# across two reads (caught mid-write) can be missed; Claude Code appends
-# each line in one write, so that window is a few bytes wide. The payload's
+# two renders racing never leave half a line. A line caught mid-write is
+# left for the next render (see _compact_scan), never counted in halves. The payload's
 # transcript_path only — the path guess the ultracode probe falls back to
 # costs a sed per render, for a Claude Code too old to have compaction
 # metadata anyway — and only with a trusted cache directory: without one
@@ -1712,17 +1711,37 @@ _compact_chunk() {  # _compact_chunk <from> <to>
   else tail -c "+$(( $1 + 1 ))" "$payload_transcript" 2>/dev/null | head -c "$(( $2 - $1 ))"
   fi
 }
-# One pass over the chunk: "<boundaries> <last postTokens>". It used to be two
-# (grep -c, then grep|grep|tail for the postTokens), so the first scan of a
-# big transcript read it twice. awk under C: bytes, and no awk aborts on an
-# invalid one.
+# One pass over the chunk: "<boundaries> <bytes consumed> <last postTokens>".
+# It used to be two (grep -c, then grep|grep|tail for the postTokens), so the
+# first scan of a big transcript read it twice. awk under C: length() counts
+# bytes, and no awk aborts on an invalid one.
+#
+# Only whole lines are consumed. A chunk can end inside a line — one Claude
+# Code is still writing, or the 8 MB cap — and the offset used to move past
+# it anyway: a boundary line cut inside its "subtype" matched in neither
+# read and was lost for good (3 counted where the transcript held 4). So the
+# unterminated tail is handed back, uncounted, and the next render reads it
+# again from its first byte. awk cannot see whether its last record had a
+# newline, but the byte sum can: every record adds length + 1, so a sum one
+# past the chunk's length means the last one had none. A sum that fits
+# neither (an awk that stops a record at a NUL byte) takes the chunk whole,
+# as does a full-cap chunk with no newline at all, which could otherwise
+# never be got past.
 _compact_scan() {  # _compact_scan <from> <to>
-  _compact_chunk "$1" "$2" | LC_ALL=C awk '
-    index($0, "\"subtype\":\"compact_boundary\"") {
-      n++
-      if (match($0, /"postTokens":[0-9]+/)) p = substr($0, RSTART + 13, RLENGTH - 13)
+  _compact_chunk "$1" "$2" | LC_ALL=C awk -v len="$(( $2 - $1 ))" -v cap="$_CMP_CAP" '
+    {
+      ln = length($0) + 1; b += ln; pp = p; m = 0
+      if (index($0, "\"subtype\":\"compact_boundary\"")) {
+        m = 1; n++
+        if (match($0, /"postTokens":[0-9]+/)) p = substr($0, RSTART + 13, RLENGTH - 13)
+      }
     }
-    END { print n + 0, p }'
+    END {
+      if (b == len + 1) { b -= ln; if (m) { n--; p = pp } }
+      else if (b != len) b = len
+      if (b == 0 && len >= cap) b = len
+      print n + 0, b + 0, p
+    }'
 }
 # At most this many bytes are read per render. The first scan used to take
 # the whole file at once: a 4 GB sparse transcript held a render for 5.3 s,
@@ -1752,15 +1771,19 @@ if [ -n "$CACHE_BASE" ] && [ -n "$payload_transcript" ] && [ -f "$payload_transc
           _from=0; compact_n=0; compact_post=""  # new or rewritten file: all of it
         fi
         _to=$(( _from + _CMP_CAP )); [ "$_to" -gt "$_size" ] && _to="$_size"
-        _new=0; _p=""
-        read -r _new _p <<< "$(_compact_scan "$_from" "$_to")"
+        _new=0; _adv=""; _p=""
+        read -r _new _adv _p <<< "$(_compact_scan "$_from" "$_to")"
         case "$_new" in ''|*[!0-9]*) _new=0 ;; esac
         case "$_p" in *[!0-9]*) _p="" ;; esac
+        # No answer at all (awk missing, killed) consumes nothing and counts
+        # nothing: the next render tries the same bytes again.
+        case "$_adv" in ''|*[!0-9]*|?????????????*) _adv=0; _new=0 ;; esac
+        [ "$_adv" -gt $(( _to - _from )) ] && _adv=$(( _to - _from ))
         compact_n=$(( 10#$compact_n + _new ))
         [ "$_new" -gt 0 ] && [ -n "$_p" ] && compact_post="$_p"
         # The "size" field is how far the scan got, not the file's size:
         # short of it, the next render carries on from there.
-        printf '%s %s %s %s\n' "$_ino" "$_to" "$compact_n" "$compact_post" > "${_cfile}.$$" 2>/dev/null \
+        printf '%s %s %s %s\n' "$_ino" "$(( _from + _adv ))" "$compact_n" "$compact_post" > "${_cfile}.$$" 2>/dev/null \
           && mv -f "${_cfile}.$$" "$_cfile" 2>/dev/null
       fi
       ;;

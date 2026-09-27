@@ -1049,6 +1049,27 @@ cmp_render
 check "compact: third render reaches the end (🔄 2)" grep -qF '🔄 2' "$T/l1"
 check "compact: third render reaches the end, ~15% from the last postTokens" grep -qF '📊 ~15%' "$T/l1"
 rm -f "$TR"
+# A boundary line caught half-written (H0e): the offset used to move past
+# it, the half with "subtype":"compact_bo matched neither read, and the
+# count stayed one short for good. Now the unterminated tail is read again.
+{ bnd 10000; bnd 20000; bnd 30000; } > "$TR"
+half=$(bnd 40000); printf '%s' "${half%%compact_boundary*}compact_bo" >> "$TR"
+rm -f "$CCACHE"
+cmp_render
+check "compact: a half-written boundary is not counted yet (🔄 3)" grep -qF '🔄 3' "$T/l1"
+check "compact: a half-written boundary leaves the estimate at ~15%" grep -qF '📊 ~15%' "$T/l1"
+printf '%s\n' "undary${half#*compact_boundary}" >> "$TR"
+cmp_render
+check "compact: once complete it is counted (🔄 4)" grep -qF '🔄 4' "$T/l1"
+check "compact: once complete its postTokens counts (~20%)" grep -qF '📊 ~20%' "$T/l1"
+# Cut after the pattern: counted once, with the postTokens of the full line.
+printf '%s' "${half%%postTokens*}" >> "$TR"
+cmp_render
+check "compact: a line cut after its subtype is not counted early (🔄 4)" grep -qF '🔄 4' "$T/l1"
+printf '%s\n' "postTokens${half#*postTokens}" | LC_ALL=C sed 's/40000/50000/' >> "$TR"
+cmp_render
+check "compact: ... and counted once when complete (🔄 5, ~25%)" grep -qF '📊 ~25% │ 🔄 5' "$T/l1"
+rm -f "$TR"
 
 # Git ahead/behind and dirty counts (C14), against a real repository: the
 # probe runs because the payload cwd is not the seeded one. main is one
