@@ -29,6 +29,12 @@
   in milliseconds. And a status that times out is remembered: that
   directory skips the call for four probe intervals (a minute at least)
   instead of paying the full second on each, the branch still shown.
+- The test suite no longer fails on a slow machine. Reset times were
+  stamped as "now + 2 h" when a fixture was filled, and some renders came
+  a minute later, which floored `↻2h0m` to `↻1h59m` and `⇡12%` to `⇡11%`.
+  Every render now reads one pinned epoch, `AGENTLINE_NOW`, set when the run
+  starts. The script accepts it only as a string of digits. The tests that
+  need real time to pass (cache ages, the `/usage` TTL) opt out.
 - Themes, an ASCII glyph set and colour overrides, all set by environment
   variable (in `settings.json`'s env block, which upgrades never touch).
   Before, the only answer to "change a colour" was editing the script,

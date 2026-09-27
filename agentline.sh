@@ -109,6 +109,13 @@ _tick_now() {  # -> $_now_epoch, $_now_clock, without forking where possible
     _now_epoch=$(date +%s)
     _now_clock=$(date +%H:%M:%S)
   fi
+  # Test seam: AGENTLINE_NOW, when it is all digits, is the epoch every
+  # countdown, pace arrow and cache age is worked out from. tests/run.sh pins
+  # it to the moment its fixtures were stamped, so a render a minute later
+  # on a slow host still reads "↻2h0m ⇡12%", not "↻1h59m ⇡11%". The printed
+  # clock stays live (the tests mask it). Anything else is ignored; a case,
+  # no fork.
+  case "${AGENTLINE_NOW-}" in ''|*[!0-9]*|?????????????*) ;; *) _now_epoch=$(( 10#$AGENTLINE_NOW )) ;; esac
 }
 
 # The cache is keyed by session so concurrent Claude Code windows never trade

@@ -42,6 +42,17 @@ esac
 TEST_BASH="${AGENTLINE_TEST_BASH:-$BASH}"
 TEST_BASH_MAJOR=$("$TEST_BASH" -c 'echo "${BASH_VERSINFO[0]}"')
 
+# One pinned clock for the whole run. Fixtures are stamped relative to TNOW
+# (@@NOW+<s>@@, the pace and prompt-cache payloads), and every render gets
+# AGENTLINE_NOW=$TNOW, so a countdown or a pace arrow is the same number
+# however long the suite takes to reach it: renders a minute after the
+# fixture was filled used to floor ↻2h0m to ↻1h59m and ⇡12% to ⇡11% on a
+# slow host. The probe cache and agent rows the harness writes carry TNOW
+# too (an agent row newer than "now" is not shown). The tests that need
+# time to pass for real — cache ages, the /usage TTL and claim — render with
+# AGENTLINE_NOW= (empty, ignored by the script).
+TNOW=$(date +%s)
+
 # pwd -P: macOS hands out /var/folders/… where /var is a symlink. Under
 # `env -i` bash rebuilds $PWD from getcwd(), i.e. the physical path, and the
 # probe cache is only honoured when its recorded cwd matches byte for byte.
@@ -96,7 +107,7 @@ check() {  # check <name> <command...> — pass when the command succeeds
 # locale, which is where most users run it.
 run_env() {  # run a command in the hermetic environment; extra VAR=val first
   env -i PATH="$PATH_F" HOME="$HOME_F" TMPDIR="$TMP_F" AGENTLINE_TMP="$SIDE" \
-    TZ=UTC LC_ALL="${AGENTLINE_TEST_LC:-C}" AGENTLINE_PROBE_TTL=3600 "$@"
+    TZ=UTC LC_ALL="${AGENTLINE_TEST_LC:-C}" AGENTLINE_PROBE_TTL=3600 AGENTLINE_NOW="$TNOW" "$@"
 }
 
 # The session id exactly as agentline.sh derives it — parameter expansion on
@@ -113,17 +124,17 @@ sid_of() {
 }
 
 # Fill a fixture template: @@HOME@@, @@CWD@@, @@FIXTURES@@ and @@NOW+<s>@@
-# (an epoch <s> seconds from now, for reset timestamps rendered relative to
-# the clock: +7230 s renders as 2h0m however long the suite takes to get
-# there). The file is copied byte for byte otherwise — the malformed and empty
-# fixtures must reach the script exactly as written.
+# (the epoch <s> seconds after TNOW, the pinned clock every render reads:
+# +7230 s renders as 2h0m however long the suite takes to get there). The
+# file is copied byte for byte otherwise — the malformed and empty fixtures
+# must reach the script exactly as written.
 fill() {  # fill <template> <out>
-  python3 - "$1" "$2" "$HOME_F" "$WORK" "$FIX" <<'PYEOF'
-import re, sys, time
+  python3 - "$1" "$2" "$HOME_F" "$WORK" "$FIX" "$TNOW" <<'PYEOF'
+import re, sys
 src, dst, home, cwd, fix = sys.argv[1:6]
 data = open(src, 'rb').read().decode('utf-8')
 data = data.replace('@@HOME@@', home).replace('@@CWD@@', cwd).replace('@@FIXTURES@@', fix)
-now = int(time.time())
+now = int(sys.argv[6])
 data = re.sub(r'@@NOW\+(\d+)@@', lambda m: str(now + int(m.group(1))), data)
 open(dst, 'wb').write(data.encode('utf-8'))
 PYEOF
@@ -151,7 +162,7 @@ seed_probes() {  # seed_probes <sid> <set-name>
       body="${body}${_v}=${_q}"$'\n'
     done
     printf -v _wq '%q' "$WORK"  # the cwd is stored %q-quoted, like the values
-    printf '%s\n%s\n%s' "$(date +%s)" "$_wq" "$body" > "$(cbase "$1").probes"
+    printf '%s\n%s\n%s' "$TNOW" "$_wq" "$body" > "$(cbase "$1").probes"
   )
 }
 
@@ -166,7 +177,7 @@ prepare() {  # prepare <fixture-name> <filled-payload>
   seed_probes "$sid" "$pset"
   [ -f "$FIX/payloads/$name.wordcount" ] && cp "$FIX/payloads/$name.wordcount" "$SIDE/claude_wordcount.txt"
   if [ -f "$FIX/payloads/$name.agents" ]; then
-    now=$(date +%s)
+    now=$TNOW
     while IFS= read -r label; do
       [ -n "$label" ] && printf '%s %s\n' "$now" "$label"
     done < "$FIX/payloads/$name.agents" > "$SIDE/claude_agents.txt"
@@ -636,7 +647,7 @@ if [ -n "$UTF8_LOCALE" ]; then esc_locales="C $UTF8_LOCALE"; else skip "escapes:
 for loc in $esc_locales; do
 fill "$FIX/payloads/escapes.json" "$PAY/escapes.json"
 prepare escapes "$PAY/escapes.json"
-printf '%s agent\302\2332J-\302\235x\n' "$(date +%s)" >> "$SIDE/claude_agents.txt"
+printf '%s agent\302\2332J-\302\235x\n' "$TNOW" >> "$SIDE/claude_agents.txt"
 render "$PAY/escapes.json" 120 LC_ALL="$loc"
 check "escapes [$loc]: exit 0 (got $rc)" [ "$rc" = 0 ]
 check "escapes [$loc]: stderr empty" [ ! -s "$T/err" ]
@@ -741,8 +752,8 @@ render "$T/inject2.json" 120
 check "probe cache: an extra body line is not eval'd" [ ! -e "$MARK" ]
 
 # Pace arrows (C01): used% − elapsed% beside S:/W:, elapsed inferred from
-# resets_at − window length. Timestamps are taken now, so the elapsed share
-# is stable to the second: +9000 s is 50% of 5 h, +302400 s 50% of 7 d.
+# resets_at − window length. Timestamps are relative to the pinned TNOW, so
+# the elapsed share is exact: +9000 s is 50% of 5 h, +302400 s 50% of 7 d.
 pace() {  # pace <five_hour-json> <seven_day-json> [VAR=val...] -> raw $T/out, line 1 in $T/pl
   local f="$1" s="$2"; shift 2
   printf '{"session_id":"pace-0001","cwd":"%s","model":{"id":"claude-opus-5"},"rate_limits":{"five_hour":%s,"seven_day":%s}}\n' \
@@ -751,7 +762,7 @@ pace() {  # pace <five_hour-json> <seven_day-json> [VAR=val...] -> raw $T/out, l
   render "$T/pace.json" 300 ${1+"$@"}
   normalize "$T/out" "$T/pn"; head -n 1 "$T/pn" > "$T/pl"
 }
-pnow=$(date +%s)
+pnow=$TNOW
 pace "{\"used_percentage\":80.5,\"resets_at\":$((pnow + 9000))}" "{\"used_percentage\":58,\"resets_at\":$((pnow + 302400))}"
 check "pace: exit 0 (got $rc)" [ "$rc" = 0 ]
 check "pace: stderr empty" [ ! -s "$T/err" ]
@@ -799,7 +810,7 @@ pcache() {  # pcache <prompt_cache-json> [VAR=val...] -> raw $T/out, line 1 in $
   render "$T/pcache.json" 300 ${1+"$@"}
   normalize "$T/out" "$T/pn"; head -n 1 "$T/pn" > "$T/pl"
 }
-pnow=$(date +%s)
+pnow=$TNOW
 pcache "{\"warm\":true,\"ttl\":\"5m\",\"expires_at\":$((pnow + 200)),\"hit_ratio\":0.9}"
 check "cache: exit 0 (got $rc)" [ "$rc" = 0 ]
 check "cache: stderr empty" [ ! -s "$T/err" ]
@@ -815,7 +826,7 @@ import re, sys
 p, t = sys.argv[1], sys.argv[2]
 b = open(p, "rb").read()
 open(p, "wb").write(re.sub(rb"AGENTLINE_PCEXP:[0-9]+@@", b"AGENTLINE_PCEXP:" + t.encode() + b"@@", b))
-' "$(cbase pcache-0002).render" "$(( $(date +%s) + 125 ))"
+' "$(cbase pcache-0002).render" "$(( TNOW + 125 ))"
 render "$T/pcache.json" 300
 check "cache: a cached tick re-fills the countdown" grep -qE '↻2m0[0-5]s' "$T/out"
 pcache "{\"warm\":true,\"ttl\":\"1h\",\"expires_at\":$((pnow + 250))}"
@@ -852,7 +863,7 @@ check "cache: 999,400 recache tokens read ~999k" grep -qF '🗄️ cold ~999k' "
 # (F3): with AGENTLINE_CACHE_WARN=720 it prints "11m40s", one cell wider
 # than the old "0m00s" guess. At one cell under line 1's real width, a
 # line measured right wraps; one measured a cell short overflowed instead.
-pcache "{\"warm\":true,\"ttl\":\"5m\",\"expires_at\":$(( $(date +%s) + 700 ))}" AGENTLINE_CACHE_WARN=720
+pcache "{\"warm\":true,\"ttl\":\"5m\",\"expires_at\":$(( TNOW + 700 ))}" AGENTLINE_CACHE_WARN=720
 check "cache: a 12-minute window counts down in NNmSSs" grep -qE '🗄️ ↻11m[0-9]{2}s' "$T/pl"
 row1w() {  # row1w <normalized> -> cells of its first row
   python3 -c '
@@ -1276,6 +1287,16 @@ prepare full "$p"; render "$p" 120 AGENTLINE_LAYOUT="$LAYOUT_DEFAULT"; normalize
 check "layout: explicit default layout = golden" cmp -s "$T/got" "$GOLD/full.w120.txt"
 prepare full "$p"; render "$p" 120 AGENTLINE_LAYOUT="modle, ctxx"; normalize "$T/out" "$T/got"
 check "layout: all-unknown layout falls back to the default" cmp -s "$T/got" "$GOLD/full.w120.txt"
+# The pinned clock (H3): time passing between the fixture and the render
+# changes nothing, and AGENTLINE_NOW is what the countdown is worked out
+# from — full.json resets at TNOW + 7230, an hour on from TNOW it is 1h0m.
+# A value that is not all digits is ignored.
+prepare full "$p"; sleep 2; render "$p" 120; normalize "$T/out" "$T/got"
+check "clock: a render 2 s after the fixture still matches the golden" cmp -s "$T/got" "$GOLD/full.w120.txt"
+prepare full "$p"; render "$p" 120 AGENTLINE_NOW=$(( TNOW + 3600 )); normalize "$T/out" "$T/got"
+check "clock: AGENTLINE_NOW drives the countdown" grep -qF '↻1h0m' "$T/got"
+prepare full "$p"; render "$p" 120 AGENTLINE_NOW="$(( TNOW + 3600 ))x"; normalize "$T/out" "$T/got"
+if grep -qF '↻1h0m' "$T/got"; then fail "clock: a non-numeric AGENTLINE_NOW is ignored"; else pass; fi
 
 # A live width with room for everything renders exactly what the same fixed
 # width does: fit mode changes nothing that already fits.
@@ -1348,7 +1369,7 @@ check "layout: COLUMNS=30 keeps a cold cache" has "$T/got" '🗄️ cold'
 # of their own. cpu, mem and disk now close the list (host info, the least
 # a line about the session needs), so line 1 fits one row.
 printf '{"session_id":"cols-0001","cwd":"%s","model":{"id":"claude-fable-5-1"},"effort":{"level":"xhigh"},"thinking":{"enabled":true},"fast_mode":true,"exceeds_200k_tokens":true,"context_window":{"used_percentage":25,"context_window_size":1000000,"total_input_tokens":250000},"rate_limits":{"five_hour":{"used_percentage":71,"resets_at":%s},"seven_day":{"used_percentage":58,"resets_at":1790208000},"seven_day_overage_included":{"used_percentage":30}},"cost":{"total_cost_usd":123.468,"total_duration_ms":600000}}\n' \
-  "$WORK" "$(( $(date +%s) + 7230 ))" > "$T/cols.json"
+  "$WORK" "$(( TNOW + 7230 ))" > "$T/cols.json"
 prepare minimal "$T/cols.json"; seed_probes cols-0001 busy
 render "$T/cols.json" - COLUMNS=122; normalize "$T/out" "$T/got"
 check "layout: busy session at COLUMNS=122 keeps line 1 on one row" sh -c "sed -n 2p '$T/got' | grep -q '~/work'"
@@ -1889,7 +1910,8 @@ cache_is() { [ "$(cat "$UCACHE" 2>/dev/null)" = "$1" ]; }
 p="$PAY/minimal.json"
 urender() {  # urender [delay] [VAR=val...]
   local d="${1:-0}"; [ $# -gt 0 ] && shift
-  render "$p" 120 AGENTLINE_USAGE_API=1 AGENTLINE_USAGE_TTL=300 AGENTLINE_USAGE_URL="$UURL?delay=$d" ${1+"$@"}
+  # The real clock: the cache ages (mtime) and claims here are wall time.
+  render "$p" 120 AGENTLINE_NOW= AGENTLINE_USAGE_API=1 AGENTLINE_USAGE_TTL=300 AGENTLINE_USAGE_URL="$UURL?delay=$d" ${1+"$@"}
 }
 
 # Expired cache, no claim: the previous figure is shown while a detached
@@ -1912,7 +1934,7 @@ ucheck "usage:fresh result rendered" grep -q 'F:63%' "$T/out"
 # and a refused one leaves the real endpoint, which arrives as a CONNECT.
 prepare minimal "$p"; rm -f "$UCLAIM" "$T/fetches" "$T/fetches.connect"
 printf 37 > "$UCACHE"; age_file "$UCACHE" 310
-render "$p" 120 AGENTLINE_USAGE_API=1 AGENTLINE_USAGE_URL="http://usage.example/usage" \
+render "$p" 120 AGENTLINE_NOW= AGENTLINE_USAGE_API=1 AGENTLINE_USAGE_URL="http://usage.example/usage" \
   http_proxy="${UURL%/usage}" https_proxy="${UURL%/usage}"
 ucheck "usage:non-loopback override refused" wait_for 8 grep -qs '^api.anthropic.com:443$' "$T/fetches.connect"
 ucheck "usage:token not sent to a non-loopback override" [ ! -e "$T/fetches" ]
@@ -2030,7 +2052,8 @@ check "registry remove" sh -c "! grep -q 'external run' '$SIDE/claude_agents.txt
 hook_env CLAUDE_AGENTS_FILE="$T/custom-agents.txt" "$TEST_BASH" "$AGENT" add "relocated"
 check "CLAUDE_AGENTS_FILE beats AGENTLINE_TMP" grep -q relocated "$T/custom-agents.txt"
 prepare minimal "$PAY/minimal.json"
-render "$PAY/minimal.json" 120 CLAUDE_AGENTS_FILE="$T/custom-agents.txt"
+# The real clock: the hook stamped the row with the wall time.
+render "$PAY/minimal.json" 120 AGENTLINE_NOW= CLAUDE_AGENTS_FILE="$T/custom-agents.txt"
 check "reader honours CLAUDE_AGENTS_FILE" grep -q 'relocated' "$T/out"
 
 # --- Subagent lifecycle (hook_event_name dispatch) ---------------------------
@@ -2109,7 +2132,7 @@ check "registry: a done row past a minute is pruned" sh -c "! grep -q 'long gone
 # "+N"; done rows only while younger than 10 s. (prepare wipes the side
 # files, so the registry is written after it.)
 agents_rows() {
-  now=$(date +%s)
+  now=$TNOW
   for i in 1 2 3 4 5 6; do printf '%s run%s\n' "$now" "$i"; done > "$AF"
   printf '%s\n' "$now ✓fresh" "$(( now - 30 )) ✓stale" "$(( now - 400 )) old" >> "$AF"
 }
