@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- No more yellow `⚠️ 20% >200k` on the 1M-context models. The context
+  segment forced a warning from Claude Code's `exceeds_200k_tokens` flag,
+  on the premise that pricing and quality change past 200k tokens. That
+  came from the Sonnet 4/4.5 1M beta. Opus 4.7 and later, Opus 5 and 5.5,
+  Fable 5 and 5.1 and Sonnet 5 bill every token at the standard rate with
+  no long-context premium, and are documented to stay strong across the
+  whole window. So an alarm at 20% was wrong, and it came with no
+  explanation. The percentage now keeps its normal 60/80 thresholds
+  whatever the flag says. A small dim `>200k` tag after it is still
+  available, opt-in with `AGENTLINE_TAG_200K=1`, and never on a 200k
+  window. A bigger context still costs more per turn, simply because every
+  request carries more tokens.
 - Security: a repository's own `.git/config` could run commands on every
   render. The ahead/behind and dirty counts come from `git status`, and
   status starts `core.fsmonitor`, runs the clean filter of any file whose
@@ -394,9 +406,14 @@
   shape has flipped between Claude Code versions and crashed other status
   lines. Before, a string model dropped the name without notice. Numeric fields that
   are not numbers are dropped instead of reaching awk and `printf` (stray
-  stderr and a false `0%`). On a window larger than 200k, the payload's
-  `exceeds_200k_tokens` now forces a yellow `⚠️ … >200k` even at a low
-  percentage. A 1M model at 25 % is already past the long-context mark. A
+  stderr and a false `0%`). The payload's `exceeds_200k_tokens` (Claude
+  Code's fixed-threshold flag: the last response's input + output past
+  200k, whatever the window) is read, and on a window larger than 200k it
+  can add a small dim `>200k` after the percentage, opt-in with
+  `AGENTLINE_TAG_200K=1`. It never changes the percentage's colour or icon:
+  current 1M-context models bill every token at the standard rate, with no
+  long-context premium, and a big context costs more per turn only because
+  each request carries more tokens, which the percentage already shows. A
   compact-relative percentage was considered and left out, because the
   payload exposes no auto-compact threshold.
 - A test suite and CI. `bash tests/run.sh` (bash + python3, no bats) runs

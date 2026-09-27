@@ -622,18 +622,30 @@ render "$PAY/full.json" "$(( vs_w - 1 ))" AGENTLINE_LAYOUT="mcp,resume,services,
 normalize "$T/out" "$T/got"
 check "vs16: wraps one cell narrower" [ "$(wc -l < "$T/got" | tr -d ' ')" = 2 ]
 
-# Colour is stripped from the goldens, so the context warning's colour is
-# asserted on the raw render: exceeds_200k_tokens on a 1M window forces the
-# yellow ⚠️ at 25%; on a 200k window the same flag is ignored (green 📊).
-ctx_raw() {  # ctx_raw <fixture> -> raw render in $T/out
-  fill "$FIX/payloads/$1.json" "$PAY/$1.json"
-  prepare "$1" "$PAY/$1.json"
-  render "$PAY/$1.json" 120
+# Colour is stripped from the goldens, so the context colour is asserted on
+# the raw render. exceeds_200k_tokens forces nothing (H2): current 1M-window
+# models have no long-context premium, so 25% stays a green 📊 with no ⚠️;
+# AGENTLINE_TAG_200K=1 adds a dim ">200k" and changes nothing else. On a
+# 200k window the flag is ignored even then.
+ctx_raw() {  # ctx_raw <fixture> [VAR=val...] -> raw render in $T/out
+  local f="$1"; shift
+  fill "$FIX/payloads/$f.json" "$PAY/$f.json"
+  prepare "$f" "$PAY/$f.json"
+  render "$PAY/$f.json" 120 ${1+"$@"}
 }
 ctx_raw one-million-over-200k
-check "1M window over 200k: yellow warning" grep -q "${ESC}\[1;33m⚠️ 25%" "$T/out"
-ctx_raw standard-window
+check "1M window over 200k: normal green percentage" grep -q "${ESC}\[1;32m📊 25%" "$T/out"
+if grep -qF -e '⚠️' -e '>200k' "$T/out"; then fail "1M window over 200k: no warning, no tag by default"; else pass; fi
+ctx_raw one-million-over-200k AGENTLINE_TAG_200K=1
+check "AGENTLINE_TAG_200K=1: green percentage, then a dim >200k" grep -q "${ESC}\[1;32m📊 25%${ESC}\[0m ${ESC}\[2m>200k" "$T/out"
+if grep -qF '⚠️' "$T/out"; then fail "AGENTLINE_TAG_200K=1: still no ⚠️"; else pass; fi
+ctx_raw standard-window AGENTLINE_TAG_200K=1
 check "200k window: exceeds flag ignored, green" grep -q "${ESC}\[1;32m📊 30%" "$T/out"
+if grep -qF '>200k' "$T/out"; then fail "200k window: no tag even when opted in"; else pass; fi
+# The tag is part of the render-cache key: opting in shows at once.
+render "$PAY/one-million-over-200k.json" 120
+render "$PAY/one-million-over-200k.json" 120 AGENTLINE_TAG_200K=1
+check "AGENTLINE_TAG_200K=1 is not served a cached render without it" grep -qF '>200k' "$T/out"
 # Garbage in numeric fields hides those segments instead of printing "0%"
 # (stderr staying empty is already checked by the golden loop).
 ctx_raw bad-numbers
@@ -646,12 +658,13 @@ fi
 # Numbers python accepted but bash cannot use: Unicode digits ("٣٠"), an int
 # past a double (OverflowError lost the whole parse), JSON 1e999 (inf) and a
 # window size past 64 bits (`[ -gt ]` failed). Bad fields hide their segment;
-# the huge window still gets the forced 200k warning, decided in python.
-ctx_raw huge-numbers
+# the huge window still counts as over 200k for the opt-in tag, decided in
+# python.
+ctx_raw huge-numbers AGENTLINE_TAG_200K=1
 check "huge numbers: exit 0 (got $rc)" [ "$rc" = 0 ]
 check "huge numbers: stderr empty" [ ! -s "$T/err" ]
 check "huge numbers: model still parsed" grep -q 'Opus 5' "$T/out"
-check "huge numbers: huge window forces the yellow warning" grep -q "${ESC}\[1;33m⚠️ 25%" "$T/out"
+check "huge numbers: huge window gets the opt-in >200k tag" grep -q "${ESC}\[1;32m📊 25%${ESC}\[0m ${ESC}\[2m>200k" "$T/out"
 if grep -qE 'S:|W:|💰|⏱️|📥' "$T/out"; then fail "huge numbers: a bad or absurd field leaked a segment"; else pass; fi
 check "huge numbers: a sane field next to them still shows" grep -q '📤 5.0k' "$T/out"
 # An integer literal past 4300 digits made json.loads itself raise on Python
@@ -1535,11 +1548,12 @@ check "layout: COLUMNS=30 keeps a cold cache" has "$T/got" '🗄️ cold'
 # A busy session at COLUMNS=122: once the default drop list ran out, line 1
 # still overflowed by a few cells and wrapped the host readings onto a row
 # of their own. cpu, mem and disk now close the list (host info, the least
-# a line about the session needs), so line 1 fits one row.
+# a line about the session needs), so line 1 fits one row. The opt-in
+# >200k tag is on, as the width was worked out with it.
 printf '{"session_id":"cols-0001","cwd":"%s","model":{"id":"claude-fable-5-1"},"effort":{"level":"xhigh"},"thinking":{"enabled":true},"fast_mode":true,"exceeds_200k_tokens":true,"context_window":{"used_percentage":25,"context_window_size":1000000,"total_input_tokens":250000},"rate_limits":{"five_hour":{"used_percentage":71,"resets_at":%s},"seven_day":{"used_percentage":58,"resets_at":1790208000},"seven_day_overage_included":{"used_percentage":30}},"cost":{"total_cost_usd":123.468,"total_duration_ms":600000}}\n' \
   "$WORK" "$(( TNOW + 7230 ))" > "$T/cols.json"
 prepare minimal "$T/cols.json"; seed_probes cols-0001 busy
-render "$T/cols.json" - COLUMNS=122; normalize "$T/out" "$T/got"
+render "$T/cols.json" - COLUMNS=122 AGENTLINE_TAG_200K=1; normalize "$T/out" "$T/got"
 check "layout: busy session at COLUMNS=122 keeps line 1 on one row" sh -c "sed -n 2p '$T/got' | grep -q '~/work'"
 check "layout: COLUMNS=122 line 1 keeps model, context, limits and cost" \
   sh -c "head -n 1 '$T/got' | grep -q 'Fable 5.1.*xhigh.*25% >200k.*S:71%.*W:58% F:30%.*123.47'"
@@ -1547,7 +1561,7 @@ if grep -q '🔥' "$T/got"; then fail "layout: COLUMNS=122 kept cpu, first of th
 if msg=$(rows_fit "$T/got" 120 2>&1); then pass; else fail "layout: busy COLUMNS=122: $msg"; fi
 # With room to spare the host readings stay: they are dropped last, not always.
 prepare minimal "$T/cols.json"; seed_probes cols-0001 busy
-render "$T/cols.json" - COLUMNS=202; normalize "$T/out" "$T/got"
+render "$T/cols.json" - COLUMNS=202 AGENTLINE_TAG_200K=1; normalize "$T/out" "$T/got"
 check "layout: COLUMNS=202 keeps the host readings" sh -c "head -n 1 '$T/got' | grep -q '🔥 37% │ 💾 6.2G │ 💽 41%'"
 # AGENTLINE_WIDTH is an explicit override and wins over COLUMNS.
 prepare full "$p"; render "$p" 200 COLUMNS=62; normalize "$T/out" "$T/got"

@@ -42,6 +42,7 @@ Set variables in the `env` block of `~/.claude/settings.json`:
 | `AGENTLINE_LAYOUT` | the four default lines | Segment order and grouping: `/` starts a line, `,` separates names, an omitted name is hidden (names listed in the README's "Layout and narrow terminals"). Use this rather than editing `agentline.sh`, which an upgrade replaces |
 | `AGENTLINE_DROP` | `tok_in,tok_out,words,compact,dur,date,version,email,lines,cpu,mem,disk,cache` | Segments dropped first, in order, from a line too wide for the terminal; `model`, `ctx`, `5h`, `week` never drop, nor a segment in warning state (disk ≥ 80 %, cold/expiring cache, failed service). Empty = wrap only |
 | `AGENTLINE_PACE` | `1` | `0` hides the `⇡`/`⇣` pace arrows after `S:`/`W:` |
+| `AGENTLINE_TAG_200K` | `0` | `1` adds a dim informational `>200k` after the context % when `exceeds_200k_tokens` is set on a >200k window (no colour or icon change) |
 | `AGENTLINE_THEME` | `dark` | `light` darkens the fixed colours (Fable gradient, gold/orange, `max` rainbow) for a light background; `mono` = no colour (also any non-empty `NO_COLOR`). Ask the user which background they use rather than guessing; `bash install.sh --theme light` writes it |
 | `AGENTLINE_GLYPHS` | `emoji` | `ascii` = nothing above U+007F, for fonts without emoji; `bash install.sh --glyphs ascii` writes it |
 | `AGENTLINE_COLOR_GOLD` / `_ORANGE` / `_FABLE_FROM` / `_FABLE_TO` | unset | `r,g,b` overrides for those fixed colours |

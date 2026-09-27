@@ -303,12 +303,13 @@ _tick_now
 # terminal resize — and it is not in the payload, so without it a resize kept
 # serving the old width's render until the TTL ran out. `+set:` tells an
 # empty AGENTLINE_DROP (drop nothing) from an unset one (the default list).
-# The theme, glyph set and colour overrides change the render too, and so
+# The theme, glyph set, colour overrides and the opt-in >200k tag change the
+# render too, and so
 # does a multiplexer: under tmux, screen or zellij the OSC-8 links are left
 # out (see "Hyperlinks"), and without their presence in the key a render
 # made outside one was replayed, links and all, inside one for up to
 # $AGENTLINE_CACHE_TTL. Only presence counts, as it does there.
-_cache_key="${input}${_US}${COLUMNS-}|${AGENTLINE_WIDTH-}|${AGENTLINE_LAYOUT-}|${AGENTLINE_DROP+set:}${AGENTLINE_DROP-}|${AGENTLINE_LINKS-}|${_AL_THEME}|${AGENTLINE_GLYPHS-}|${AGENTLINE_COLOR_FABLE_FROM-}|${AGENTLINE_COLOR_FABLE_TO-}|${AGENTLINE_COLOR_GOLD-}|${AGENTLINE_COLOR_ORANGE-}|${TMUX:+t}${STY:+s}${ZELLIJ:+z}"
+_cache_key="${input}${_US}${COLUMNS-}|${AGENTLINE_WIDTH-}|${AGENTLINE_LAYOUT-}|${AGENTLINE_DROP+set:}${AGENTLINE_DROP-}|${AGENTLINE_LINKS-}|${_AL_THEME}|${AGENTLINE_GLYPHS-}|${AGENTLINE_COLOR_FABLE_FROM-}|${AGENTLINE_COLOR_FABLE_TO-}|${AGENTLINE_COLOR_GOLD-}|${AGENTLINE_COLOR_ORANGE-}|${TMUX:+t}${STY:+s}${ZELLIJ:+z}|${AGENTLINE_TAG_200K-}"
 # The cache files are read with the `read` builtin, not `$(<file)`: bash 5
 # serves `$(<file)` in-process, but bash 3.2 (macOS) forks a subshell for
 # each, which cost this path two forks a second.
@@ -478,13 +479,14 @@ if m:
 else:
     model = disp or mid
 
-# Whether to force the context warning, decided here rather than by comparing
-# the window size in bash: `[ -gt ]` fails with "integer expression expected"
-# on a size past 64 bits ("9999999999999999999999999"), and python compares
-# any size. exceeds_200k_tokens is Claude Code's own fixed-threshold flag
-# (input + output of the last response > 200k, whatever the window); only a
-# strict JSON true counts, and only on a window larger than 200k — on a 200k
-# window it just means "about 100%" again.
+# Whether the opt-in ">200k" tag may show (AGENTLINE_TAG_200K=1, see the
+# context segment), decided here rather than by comparing the window size in
+# bash: `[ -gt ]` fails with "integer expression expected" on a size past 64
+# bits ("9999999999999999999999999"), and python compares any size.
+# exceeds_200k_tokens is Claude Code's own fixed-threshold flag (input +
+# output of the last response > 200k, whatever the window); only a strict
+# JSON true counts, and only on a window larger than 200k — on a 200k window
+# it just means "about 100%" again.
 #
 # The size is compared here without the 1e15 cap of num(): an absurd window is
 # still larger than 200k.
@@ -1939,17 +1941,21 @@ if [ -n "$used_pct" ]; then
   ctx_tag=""
   if awk -v p="$used_pct" 'BEGIN {exit !(p >= 80)}'; then
     ctx_icon="$G_WARN"
-  elif [ -n "$warn_200k" ]; then
-    # On a 1M-window model 25% is already past 200k tokens — where long-context
-    # pricing and quality change — yet the percentage alone reads as harmless.
-    # Claude Code's exceeds_200k_tokens flag says so directly, so it forces
-    # the warning, in yellow (this branch is below the 80% red), with a tag
-    # saying why. The parser has already ignored it on a 200k window, where
-    # it is just "about 100%" again.
-    ctx_icon="$G_WARN"
-    c="$YELLOW"
-    ctx_tag=" ${DIM}>200k${RESET}"
   fi
+  # Past 200k tokens on a larger window the percentage keeps its own 60/80
+  # colours. exceeds_200k_tokens is only Claude Code's fixed-threshold flag,
+  # and this segment used to turn it into a yellow ⚠️ at 20-25% on the 1M
+  # models, on the premise that pricing and quality change at 200k. That
+  # held for the Sonnet 4/4.5 1M beta; Opus 4.7 and later and the other
+  # current 1M-context models bill every token at the standard rate, with
+  # no long-context premium, and are documented to stay strong across the
+  # window, so the alarm said nothing true. A big context still costs more
+  # per turn, but only because each request carries more tokens, and the
+  # percentage already shows that. What is left is a small dim ">200k"
+  # after it, opt-in with AGENTLINE_TAG_200K=1, for anyone who wants to see
+  # the flag. The parser has already ignored it on a 200k window, where it
+  # is just "about 100%" again.
+  [ -n "$warn_200k" ] && [ "${AGENTLINE_TAG_200K:-0}" = 1 ] && ctx_tag=" ${DIM}>200k${RESET}"
   _seg ctx "${c}${ctx_icon}$(printf '%.0f' "$used_pct")%${RESET}${ctx_tag}"
 elif [ "$compact_n" -gt 0 ] && [ -n "$compact_post" ] && [ "$compact_fresh" = 1 ]; then
   # Just compacted, and the payload has no figure until the next API call:
