@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+- Security: a repository's own `.git/config` could run commands on every
+  render. The ahead/behind and dirty counts come from `git status`, and
+  status starts `core.fsmonitor`, runs the clean filter of any file whose
+  stat changed, and recurses into submodules under their own configs. So an
+  unpacked tarball with `core.fsmonitor=<cmd>`, or `filter.x.clean=<cmd>`
+  and a matching `.gitattributes`, ran both every 15 s once Claude Code
+  worked in it: the "git prompt" hole shell prompts had in 2022. The
+  release before the counts never asked git anything that could. The call
+  now pins `core.fsmonitor=false` and `core.hooksPath=/dev/null` on the
+  command line, which outranks every config file, passes
+  `--ignore-submodules=dirty` (a submodule at a new commit still counts,
+  edits inside one no longer do) and sets `GIT_NO_LAZY_FETCH=1`. Filters
+  cannot be pinned off, so before the call the repo-local config (and a
+  linked worktree's common config) is read with the `read` builtin, and the
+  counts are skipped, the branch kept, when it defines a filter, an
+  include, a transport or credential command, or fsmonitor or hooksPath.
+  They are skipped as well when the git dir or its HEAD belongs to another
+  user. `git branch --show-current` and `git remote get-url` read config
+  and refs only and run nothing. Your global config is yours and is not
+  second-guessed.
 - Themes, an ASCII glyph set and colour overrides, all set by environment
   variable (in `settings.json`'s env block, which upgrades never touch).
   Before, the only answer to "change a colour" was editing the script,

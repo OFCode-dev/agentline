@@ -1058,6 +1058,59 @@ else
   render "$T/gst.json" 300
   normalize "$T/out" "$T/gn"
   check "git status: replayed from the probe cache" grep -qF '@main ↑1↓1 ±1 ?2 ✖1' "$T/gn"
+
+  # A repository's own .git/config must not get to run code (H0): an
+  # unpacked tarball with core.fsmonitor or a clean filter ran both on every
+  # probe. Each hostile repo is first proven hostile — a plain `git status`
+  # in it does touch the marker — and then rendered: the marker must stay
+  # absent and the branch still show.
+  GM="$T/gm"; GMARK="$T/git-pwned"
+  printf '#!/bin/sh\necho "fsmonitor $*" >> %s\nexit 1\n' "$GMARK" > "$T/fsmon.sh"; chmod +x "$T/fsmon.sh"
+  hostile() {  # hostile <name> <label> — render repo $GM/<name>, which must be hostile
+    rm -f "$GMARK"; touch "$GM/$1/f"
+    git -C "$GM/$1" status --porcelain >/dev/null 2>&1
+    if [ -e "$GMARK" ]; then pass; else fail "git hostile $2: control, plain git status ran nothing"; fi
+    rm -f "$GMARK"; touch "$GM/$1/f"
+    gst "$GM/$1"
+    if [ -e "$GMARK" ]; then fail "git hostile $2: render ran $(tr '\n' ' ' < "$GMARK")"; rm -f "$GMARK"; else pass; fi
+    check "git hostile $2: branch still shown" grep -qE '@main( │|$)' "$T/g2"
+  }
+  mkrepo() {  # mkrepo <name> — a clone one commit ahead of origin
+    gq clone "$GB" "$GM/$1"; printf 'f\n' > "$GM/$1/f"
+    gq -C "$GM/$1" add f; gq -C "$GM/$1" commit -m f
+  }
+  mkdir -p "$GM"
+  mkrepo fsmon; git -C "$GM/fsmon" config core.fsmonitor "$T/fsmon.sh"
+  hostile fsmon "core.fsmonitor"
+  mkrepo filter
+  printf 'f filter=pwn\n' > "$GM/filter/.git/info/attributes"
+  printf '[Filter "pwn"]\n\tclean = "echo clean >> %s; cat"\n' "$GMARK" >> "$GM/filter/.git/config"
+  hostile filter "clean filter"
+  mkrepo include
+  printf '[core]\n\tfsmonitor = %s\n' "$T/fsmon.sh" > "$GM/include/.git/evil.cfg"
+  printf '[Include]\n\tpath = evil.cfg\n' >> "$GM/include/.git/config"
+  hostile include "include.path"
+  # A linked worktree reads the main repository's config through commondir.
+  gq -C "$GM/filter" worktree add "$GM/filter-wt" -b wt
+  rm -f "$GMARK"; touch "$GM/filter-wt/f"; gst "$GM/filter-wt"
+  if [ -e "$GMARK" ]; then fail "git hostile worktree: render ran the common config's filter"; rm -f "$GMARK"; else pass; fi
+  check "git hostile worktree: branch still shown" grep -qF '@wt' "$T/g2"
+  # A submodule's own config is never read: no child git is started in it.
+  # The superproject is benign, so its counts still show.
+  mkrepo super
+  gq -c protocol.file.allow=always -C "$GM/super" submodule add "$GB" sm
+  gq -C "$GM/super" commit -m sm
+  printf 'f filter=pwn\n' > "$GM/super/sm/.gitattributes"
+  printf 'x\n' > "$GM/super/sm/f"
+  git -C "$GM/super/sm" config filter.pwn.clean "echo sub >> $GMARK; cat"
+  rm -f "$GMARK"; : > "$GM/super/new"; gst "$GM/super"
+  if [ -e "$GMARK" ]; then fail "git hostile submodule: render ran the submodule's filter"; rm -f "$GMARK"; else pass; fi
+  check "git submodule: the superproject's counts still show" grep -qF '@main ↑2 ?1' "$T/g2"
+  # A benign config with unrelated keys keeps its counts, whatever the case.
+  mkrepo benign
+  printf '[Core]\n\tFileMode = true\n[remote "x"]\n\tpartialclonefilter = blob:none\n' >> "$GM/benign/.git/config"
+  : > "$GM/benign/new"; gst "$GM/benign"
+  check "git benign config: counts shown" grep -qF '@main ↑1 ?1' "$T/g2"
 fi
 
 # Breadcrumb (C14): project_dir differing from cwd leads the path, dim.

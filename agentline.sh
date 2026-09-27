@@ -840,6 +840,39 @@ fi
 # the cap cuts short, goes to git, which applies safe.directory; a HEAD that
 # is not a file at all (FIFO, device, directory) is no repository, and
 # nothing is asked.
+#
+# _git_cfg_ok <file>: may `git status` run with this repo-local config file?
+# (See the status call below for why.) An absent file is fine. Anything but
+# a regular file of ours is not, nor one past 64 KB or with a line past 4 KB
+# (the read is capped per line, and a word split across two chunks would be
+# missed), nor one naming a key that can run a command which the command
+# line cannot pin off: a filter section, an include (the file it names is
+# not followed here), or a transport or credential command a lazy fetch in
+# a partial clone would use. fsmonitor and hooksPath are pinned anyway and
+# refused all the same. Section and key names are case-insensitive to git
+# and whitespace inside a line is dropped before matching ("[ Filter
+# "x" ]", "[include]path=..", "fsMonitor = ..."). A word in a comment or a
+# value errs on the safe side: the counts are skipped, the branch stays.
+# Builtins only: `read` and `case`, with nocasematch (bash 3.1+).
+_git_cfg_ok() {
+  local f="$1" l total=0 rc=0 nc=0
+  [ -e "$f" ] || [ -L "$f" ] || return 0
+  [ -f "$f" ] && [ -O "$f" ] && [ -r "$f" ] || return 1
+  shopt -q nocasematch && nc=1
+  shopt -s nocasematch
+  while IFS= read -r -n 4096 l || [ -n "$l" ]; do
+    [ ${#l} -ge 4096 ] && { rc=1; break; }
+    total=$(( total + ${#l} + 1 ))
+    [ "$total" -gt 65536 ] && { rc=1; break; }
+    l="${l//[[:space:]]/}"
+    case "$l" in
+      \[filter*|\[include*|\[credential*|*fsmonitor*|*hookspath*|*sshcommand*|*askpass*|*gitproxy*|*uploadpack*|*receivepack*)
+        rc=1; break ;;
+    esac
+  done 2>/dev/null < "$f"
+  [ "$nc" = 1 ] || shopt -u nocasematch
+  return "$rc"
+}
 git_branch=""
 git_repo=""
 git_url=""
@@ -961,9 +994,56 @@ if [ -n "$cwd" ] && [ -d "$cwd" ]; then
   # AGENTLINE_GIT_UNTRACKED=0 skips the untracked scan (-uno), and
   # AGENTLINE_GIT_STATUS=0 turns the call off. Detached HEAD shows no branch
   # segment, so it is not asked either.
-  if [ -n "$git_branch" ] && [ -n "$_TIMEOUT" ] && [ "${AGENTLINE_GIT_STATUS:-1}" != 0 ]; then
+  #
+  # `git status` is also the one call here that can run commands the
+  # repository itself names. `branch --show-current` and `remote get-url`
+  # only read config and refs, but status refreshes the index: it starts
+  # core.fsmonitor, runs the clean filter (filter.<x>.clean / .process,
+  # chosen per file by .gitattributes) of every file whose stat changed,
+  # recurses into submodules with their own configs, and in a partial clone
+  # may fetch a missing blob through whatever transport the config names. A
+  # repository unpacked from someone else's tarball carries its own
+  # .git/config, and every render in it ran that code, once per probe — the
+  # "git prompt" hole shell prompts had in 2022. The user's global config is
+  # theirs and trusted (git-lfs is a clean filter); only the repo's is not.
+  # So, before the call, _git_cfg_ok reads the repo-local config files with
+  # the `read` builtin (no fork) and the call is skipped — branch alone, as
+  # without a timeout binary — when one mentions a command-bearing key that
+  # cannot be pinned off (a filter, an include it cannot follow, a transport
+  # command), and when the git dir or its HEAD is not the user's (the rule
+  # the HEAD reader applies). The rest is pinned on the command line, which
+  # outranks every config file: core.fsmonitor=false, core.hooksPath=
+  # /dev/null (a post-index-change hook, should the index ever be written),
+  # --ignore-submodules=dirty (no child git under a submodule's own config;
+  # a submodule moved to another commit still counts, edits inside one no
+  # longer do) and GIT_NO_LAZY_FETCH=1 (git 2.44+; older git ignores it, and
+  # the scan refuses the transport keys instead).
+  _git_st_ok=0
+  if [ -n "$git_branch" ] && [ -n "$_TIMEOUT" ] && [ "${AGENTLINE_GIT_STATUS:-1}" != 0 ] \
+     && [ -n "$_gd" ] && [ -d "$_gd" ] && [ -O "$_gd" ] && [ -f "$_gd/HEAD" ] && [ -O "$_gd/HEAD" ] \
+     && _git_cfg_ok "$_gd/config" && _git_cfg_ok "$_gd/config.worktree"; then
+    _git_st_ok=1
+    # A linked worktree's git dir holds its HEAD and config.worktree; the
+    # shared config sits in the common dir its `commondir` file names.
+    if [ -e "$_gd/commondir" ]; then
+      _l=""
+      [ -f "$_gd/commondir" ] && [ -O "$_gd/commondir" ] && IFS= read -r -n 1024 _l 2>/dev/null < "$_gd/commondir"
+      [ ${#_l} -ge 1024 ] && _l=""
+      case "$_l" in
+        '') _git_st_ok=0 ;;
+        /*) ;;
+        *)  _l="$_gd/$_l" ;;
+      esac
+      if [ "$_git_st_ok" = 1 ]; then
+        { [ -d "$_l" ] && [ -O "$_l" ] && _git_cfg_ok "$_l/config" && _git_cfg_ok "$_l/config.worktree"; } || _git_st_ok=0
+      fi
+    fi
+  fi
+  if [ "$_git_st_ok" = 1 ]; then
     _uflag="-unormal"; [ "${AGENTLINE_GIT_UNTRACKED:-1}" = 0 ] && _uflag="-uno"
-    if _st=$("$_TIMEOUT" 1 git --no-optional-locks -C "$cwd" status --porcelain=v2 --branch "$_uflag" 2>/dev/null); then
+    if _st=$(GIT_NO_LAZY_FETCH=1 "$_TIMEOUT" 1 git --no-optional-locks -c core.fsmonitor=false \
+               -c core.hooksPath=/dev/null -C "$cwd" status --porcelain=v2 --branch \
+               --ignore-submodules=dirty "$_uflag" 2>/dev/null); then
       _ahead=0; _behind=0; _chg=0; _unt=0; _cfl=0
       while IFS= read -r _l; do
         case "$_l" in
