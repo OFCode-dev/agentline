@@ -44,6 +44,13 @@
   one short for the rest of the session. Only whole lines are consumed now.
   An unterminated tail is read again by the next render and counted once,
   complete.
+- The dim `📊 ~N%` post-compaction estimate only shows while the compaction
+  is the latest event in the transcript. A resumed session whose payload
+  carried a null `used_percentage` showed the `postTokens` of a compaction
+  hours old as its context. An assistant turn after the last boundary now
+  ends the estimate. The summary line Claude Code writes right after the
+  boundary does not. The compaction cache gains a fifth field for this, and
+  an old four-field cache is rebuilt.
 - The test suite no longer fails on a slow machine. Reset times were
   stamped as "now + 2 h" when a fixture was filled, and some renders came
   a minute later, which floored `↻2h0m` to `↻1h59m` and `⇡12%` to `⇡11%`.

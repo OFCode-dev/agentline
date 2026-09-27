@@ -1070,6 +1070,34 @@ printf '%s\n' "postTokens${half#*postTokens}" | LC_ALL=C sed 's/40000/50000/' >>
 cmp_render
 check "compact: ... and counted once when complete (🔄 5, ~25%)" grep -qF '📊 ~25% │ 🔄 5' "$T/l1"
 rm -f "$TR"
+# The estimate only stands while the compaction is the latest event (H0g):
+# an assistant turn after the boundary ends it (a resumed session with a
+# null used% showed an hours-old postTokens), the summary line Claude Code
+# writes after the boundary does not. Across renders too, from the cache.
+SUMMARY='{"type":"user","isCompactSummary":true,"message":{"role":"user","content":"summary"}}'
+{ bnd 20000; filler 1; } > "$TR"; rm -f "$CCACHE"
+cmp_render
+check "compact: resumed (an assistant turn after the boundary) keeps 🔄 1" grep -qF '🔄 1' "$T/l1"
+if grep -q '📊' "$T/l1"; then fail "compact: resumed session shows no stale estimate"; else pass; fi
+{ bnd 20000; printf '%s\n' "$SUMMARY"; } > "$TR"; rm -f "$CCACHE"
+cmp_render
+check "compact: the summary line after the boundary keeps the estimate" grep -qF '📊 ~10% │ 🔄 1' "$T/l1"
+cmp_render
+check "compact: the estimate is replayed from the cache" grep -qF '📊 ~10% │ 🔄 1' "$T/l1"
+filler 2 >> "$TR"
+cmp_render
+if grep -q '📊' "$T/l1"; then fail "compact: an appended assistant turn ends the estimate"; else pass; fi
+printf '%s\n' "$SUMMARY" >> "$TR"
+cmp_render
+if grep -q '📊' "$T/l1"; then fail "compact: a later user line does not revive the estimate"; else pass; fi
+bnd 30000 >> "$TR"
+cmp_render
+check "compact: a new boundary brings it back (~15%, 🔄 2)" grep -qF '📊 ~15% │ 🔄 2' "$T/l1"
+# A cache from before (four fields, no fresh flag) is rebuilt, not misread.
+printf '%s\n' "1 1 7 30000" > "$CCACHE"
+cmp_render
+check "compact: an old four-field cache is rebuilt" grep -qF '📊 ~15% │ 🔄 2' "$T/l1"
+rm -f "$TR"
 
 # Git ahead/behind and dirty counts (C14), against a real repository: the
 # probe runs because the payload cwd is not the seeded one. main is one

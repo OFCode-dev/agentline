@@ -1696,7 +1696,14 @@ pace_arrow() {  # pace_arrow <used%> <resets_epoch> <window_secs> <min_elapsed%>
 # the payload's used_percentage is null until the next API call, and the
 # context segment hides; with a count > 0 and a known window size it shows
 # a dim "📊 ~6%" (postTokens / window) instead, until the real figure is
-# back. The last postTokens rides the same pass that counts.
+# back. The last postTokens rides the same pass that counts. The estimate
+# needs the compaction to be the latest thing that happened: no assistant
+# turn in the transcript after the last boundary. A resumed session whose
+# payload carries a null used_percentage, compacted hours before and busy
+# since, used to show that old postTokens as its context. Only an assistant
+# line ends it, not just any line: Claude Code follows the boundary with
+# the summary itself (a user line) and /compact's own command output, and a
+# prompt typed before the next response does not move the figure much.
 # -L: a transcript_path that is a symlink is measured by its target. Without
 # it stat read the link itself, whose size never changes, and the counter
 # stayed at 0 however many compactions the target recorded.
@@ -1711,7 +1718,11 @@ _compact_chunk() {  # _compact_chunk <from> <to>
   else tail -c "+$(( $1 + 1 ))" "$payload_transcript" 2>/dev/null | head -c "$(( $2 - $1 ))"
   fi
 }
-# One pass over the chunk: "<boundaries> <bytes consumed> <last postTokens>".
+# One pass over the chunk: "<boundaries> <bytes consumed> <fresh> <last
+# postTokens>". <fresh> is 1 when the chunk's last boundary has no assistant
+# turn after it, 0 when an assistant turn is the later of the two, "-" when
+# the chunk holds neither (no news: the stored state stands); see the
+# estimate under "Compaction".
 # It used to be two (grep -c, then grep|grep|tail for the postTokens), so the
 # first scan of a big transcript read it twice. awk under C: length() counts
 # bytes, and no awk aborts on an invalid one.
@@ -1729,18 +1740,19 @@ _compact_chunk() {  # _compact_chunk <from> <to>
 # never be got past.
 _compact_scan() {  # _compact_scan <from> <to>
   _compact_chunk "$1" "$2" | LC_ALL=C awk -v len="$(( $2 - $1 ))" -v cap="$_CMP_CAP" '
+    BEGIN { st = "-" }
     {
-      ln = length($0) + 1; b += ln; pp = p; m = 0
+      ln = length($0) + 1; b += ln; pp = p; pst = st; m = 0
       if (index($0, "\"subtype\":\"compact_boundary\"")) {
-        m = 1; n++
+        m = 1; n++; st = 1
         if (match($0, /"postTokens":[0-9]+/)) p = substr($0, RSTART + 13, RLENGTH - 13)
-      }
+      } else if (index($0, "\"type\":\"assistant\"")) st = 0
     }
     END {
-      if (b == len + 1) { b -= ln; if (m) { n--; p = pp } }
+      if (b == len + 1) { b -= ln; st = pst; if (m) { n--; p = pp } }
       else if (b != len) b = len
       if (b == 0 && len >= cap) b = len
-      print n + 0, b + 0, p
+      print n + 0, b + 0, st, p
     }'
 }
 # At most this many bytes are read per render. The first scan used to take
@@ -1750,7 +1762,7 @@ _compact_scan() {  # _compact_scan <from> <to>
 # render reads the next 8 MB and records how far it got; a big transcript is
 # caught up over a few renders, its count rising as it goes.
 _CMP_CAP=8388608
-compact_n=0; compact_post=""
+compact_n=0; compact_post=""; compact_fresh=0
 if [ -n "$CACHE_BASE" ] && [ -n "$payload_transcript" ] && [ -f "$payload_transcript" ]; then
   _cst=$(_stat_is "$payload_transcript")
   _ino="${_cst%% *}"; _size="${_cst#* }"
@@ -1758,21 +1770,26 @@ if [ -n "$CACHE_BASE" ] && [ -n "$payload_transcript" ] && [ -f "$payload_transc
     ''|*[!0-9]*) ;;
     *)
       _cfile="${CACHE_DIR}/compact.${_sid}"
-      _c_ino=""; _c_size=""; _c_n=""; _c_post=""
-      [ -f "$_cfile" ] && read -r _c_ino _c_size _c_n _c_post < "$_cfile"
+      _c_ino=""; _c_size=""; _c_n=""; _c_fresh=""; _c_post=""
+      [ -f "$_cfile" ] && read -r _c_ino _c_size _c_n _c_fresh _c_post < "$_cfile"
       case "$_c_ino$_c_size$_c_n" in ''|*[!0-9]*) _c_ino="" ;; esac
+      # The fresh flag is the fifth field since H0g; a four-field cache from
+      # before (its fourth field a postTokens, or nothing) is rebuilt.
+      case "$_c_fresh" in 0|1) ;; *) _c_ino="" ;; esac
       case "$_c_post" in *[!0-9]*) _c_post="" ;; esac
       if [ -n "$_c_ino" ] && [ "$_c_ino" = "$_ino" ] && [ "$_c_size" = "$_size" ]; then
-        compact_n="$_c_n"; compact_post="$_c_post"
+        compact_n="$_c_n"; compact_post="$_c_post"; compact_fresh="$_c_fresh"
       else
         if [ -n "$_c_ino" ] && [ "$_c_ino" = "$_ino" ] && [ "$_size" -gt "$_c_size" ]; then
-          _from="$_c_size"; compact_n="$_c_n"; compact_post="$_c_post"  # only what was appended
+          # only what was appended
+          _from="$_c_size"; compact_n="$_c_n"; compact_post="$_c_post"; compact_fresh="$_c_fresh"
         else
-          _from=0; compact_n=0; compact_post=""  # new or rewritten file: all of it
+          _from=0; compact_n=0; compact_post=""; compact_fresh=0  # new or rewritten file: all of it
         fi
         _to=$(( _from + _CMP_CAP )); [ "$_to" -gt "$_size" ] && _to="$_size"
-        _new=0; _adv=""; _p=""
-        read -r _new _adv _p <<< "$(_compact_scan "$_from" "$_to")"
+        _new=0; _adv=""; _fr=""; _p=""
+        read -r _new _adv _fr _p <<< "$(_compact_scan "$_from" "$_to")"
+        case "$_fr" in 0|1) compact_fresh="$_fr" ;; esac
         case "$_new" in ''|*[!0-9]*) _new=0 ;; esac
         case "$_p" in *[!0-9]*) _p="" ;; esac
         # No answer at all (awk missing, killed) consumes nothing and counts
@@ -1783,7 +1800,7 @@ if [ -n "$CACHE_BASE" ] && [ -n "$payload_transcript" ] && [ -f "$payload_transc
         [ "$_new" -gt 0 ] && [ -n "$_p" ] && compact_post="$_p"
         # The "size" field is how far the scan got, not the file's size:
         # short of it, the next render carries on from there.
-        printf '%s %s %s %s\n' "$_ino" "$(( _from + _adv ))" "$compact_n" "$compact_post" > "${_cfile}.$$" 2>/dev/null \
+        printf '%s %s %s %s %s\n' "$_ino" "$(( _from + _adv ))" "$compact_n" "$compact_fresh" "$compact_post" > "${_cfile}.$$" 2>/dev/null \
           && mv -f "${_cfile}.$$" "$_cfile" 2>/dev/null
       fi
       ;;
@@ -1915,7 +1932,7 @@ if [ -n "$used_pct" ]; then
     ctx_tag=" ${DIM}>200k${RESET}"
   fi
   _seg ctx "${c}${ctx_icon}$(printf '%.0f' "$used_pct")%${RESET}${ctx_tag}"
-elif [ "$compact_n" -gt 0 ] && [ -n "$compact_post" ]; then
+elif [ "$compact_n" -gt 0 ] && [ -n "$compact_post" ] && [ "$compact_fresh" = 1 ]; then
   # Just compacted, and the payload has no figure until the next API call:
   # an approximate one from the compaction's own postTokens (see
   # "Compaction"). Dim and marked "~" — it is an estimate. Plain integers
