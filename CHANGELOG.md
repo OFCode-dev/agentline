@@ -29,6 +29,9 @@
   in milliseconds. And a status that times out is remembered: that
   directory skips the call for four probe intervals (a minute at least)
   instead of paying the full second on each, the branch still shown.
+- The compaction counter works when `transcript_path` is a symlink. The
+  size check read the link itself, which never grows, so the counter stayed
+  at 0 whatever the transcript held. It now follows the link (`stat -L`).
 - The test suite no longer fails on a slow machine. Reset times were
   stamped as "now + 2 h" when a fixture was filled, and some renders came
   a minute later, which floored `↻2h0m` to `↻1h59m` and `⇡12%` to `⇡11%`.

@@ -1019,6 +1019,16 @@ check "compact: cache contents never run" [ ! -e "$T/cmp-pwned" ]
 bnd 999999 > "$TR.new"; mv "$TR.new" "$TR"
 cmp_render
 if grep -q '📊' "$T/l1"; then fail "compact: estimate over 100% is dropped"; else pass; fi
+# A symlinked transcript_path is measured by its target (H0c): stat without
+# -L read the link's own size, and the counter never left 0.
+{ bnd 20000; filler 6; bnd 30000; } > "$T/transcript-target.jsonl"
+rm -f "$TR"; ln -s "$T/transcript-target.jsonl" "$TR"; rm -f "$CCACHE"
+cmp_render
+check "compact: a symlinked transcript counts its target (🔄 2)" grep -qF '🔄 2' "$T/l1"
+bnd 40000 >> "$T/transcript-target.jsonl"
+cmp_render
+check "compact: growth behind a symlink is counted (🔄 3)" grep -qF '🔄 3' "$T/l1"
+rm -f "$TR"
 
 # Git ahead/behind and dirty counts (C14), against a real repository: the
 # probe runs because the payload cwd is not the seeded one. main is one

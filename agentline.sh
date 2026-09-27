@@ -1698,8 +1698,11 @@ pace_arrow() {  # pace_arrow <used%> <resets_epoch> <window_secs> <min_elapsed%>
 # context segment hides; with a count > 0 and a known window size it shows
 # a dim "📊 ~6%" (postTokens / window) instead, until the real figure is
 # back. The last postTokens is only looked for when the count changes.
-if [ "$OS" = Darwin ]; then _stat_is() { stat -f '%i %z' -- "$1" 2>/dev/null; }
-else _stat_is() { stat -c '%i %s' -- "$1" 2>/dev/null; }
+# -L: a transcript_path that is a symlink is measured by its target. Without
+# it stat read the link itself, whose size never changes, and the counter
+# stayed at 0 however many compactions the target recorded.
+if [ "$OS" = Darwin ]; then _stat_is() { stat -L -f '%i %z' -- "$1" 2>/dev/null; }
+else _stat_is() { stat -L -c '%i %s' -- "$1" 2>/dev/null; }
 fi
 # Bytes [from, to) of the transcript, never past the size stat saw: a file
 # still growing between the stat and the read would otherwise hand the next
