@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- `install.sh --with-hooks` no longer half-applies. A hook entry whose
+  `command` was not a string, or a group whose `hooks` was not a list,
+  crashed it with a traceback after statusLine had already been written.
+  A `hooks.<event>` that was not a list was skipped, and the run still
+  printed "✓ Hooks wired" and exited 0. The hooks section is now checked
+  in the first pass, before the script is copied or anything written:
+  an unusable shape is refused with exit 1. Malformed entries of other
+  tools are left exactly as they are. Hooks that could only be wired in
+  part are reported with exit 1, never as wired. `--theme`/`--glyphs`
+  replace a different value already in `env` (as they always did; a
+  comment said otherwise). The README now says that SubagentStart and
+  SubagentStop only fire on a Claude Code release that has them.
+
 - `mono` (and `NO_COLOR`) now strips colours your `local.sh` writes as
   `\e[…m`, `\E[…m`, `\x1b[…m` or `\0033[…m`. printf turns each of them into
   an escape, but only the `\033[` spelling was removed. `--doctor` under

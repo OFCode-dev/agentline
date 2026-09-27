@@ -13,9 +13,11 @@
 #                                 also set AGENTLINE_GLYPHS (emoji|ascii)
 #
 # Exit status: 0 installed and active, 1 settings.json unusable or unwritable
-# (a file that does not parse, or cannot take --with-hooks, is refused before
-# anything is copied or written; a write that fails later leaves the file
-# whole, with the run's backup beside it), 2 bad option, 3 installed but NOT
+# (a file that does not parse, or cannot take --with-hooks — a "hooks" that is
+# not an object, an event or a group's "hooks" that is not a list — is refused
+# before anything is copied or written; a write that fails later leaves the
+# file whole, with the run's backup beside it; hooks that could be wired only
+# in part are reported as such, never as wired), 2 bad option, 3 installed but NOT
 # active — settings.json runs another status line, which was left alone
 # (re-run with --force, or merge the printed snippet), and --with-hooks was
 # not wired for it.
@@ -119,6 +121,8 @@ AGENTLINE_MARKERS = (
     b'statusline-services.conf',
 )
 MARKER_SCAN = 1 << 16  # the header is line 2; the conf name sits near the top
+# The events --with-hooks registers (see mode 'hooks'), validated up front.
+HOOK_EVENTS = ('PostToolUse', 'Stop', 'PreToolUse', 'SubagentStart', 'SubagentStop')
 
 # Dotfile managers often make settings.json a symlink into a repo. Writing to
 # the resolved target keeps that link intact; os.replace on the link itself
@@ -309,8 +313,21 @@ if mode == 'resolve':
     # This first pass is also the validation pass, so a settings.json that
     # --with-hooks could not use either is refused here, before the script is
     # copied or statusLine is written, rather than half-way through the run.
-    if args[1:2] == ['1'] and not isinstance(d.get('hooks', {}), dict):
-        fail(f"{settings_path}: \"hooks\" is not a JSON object")
+    if args[1:2] == ['1']:
+        hooks = d.get('hooks', {})
+        if not isinstance(hooks, dict):
+            fail(f"{settings_path}: \"hooks\" is not a JSON object")
+        # Every shape the hooks pass will walk or append to. It used to find
+        # these only after statusLine had been written: a non-list event was
+        # skipped yet reported as wired, and a group whose "hooks" was not a
+        # list crashed with a traceback, leaving the run half-applied.
+        for ev in HOOK_EVENTS:
+            groups = hooks.get(ev, [])
+            if not isinstance(groups, list):
+                fail(f"{settings_path}: \"hooks.{ev}\" is not a list")
+            for g in groups:
+                if isinstance(g, dict) and not isinstance(g.get('hooks') or [], list):
+                    fail(f"{settings_path}: a \"hooks.{ev}\" entry has a \"hooks\" that is not a list")
     if args[2:3] == ['1'] and not isinstance(d.get('env', {}), dict):
         fail(f"{settings_path}: \"env\" is not a JSON object")
     print(own_script(existing, args[0])[0] or args[0])
@@ -368,7 +385,9 @@ elif mode == 'statusline':
 elif mode == 'env':
     # KEY=VALUE pairs into settings.json's env block (--theme, --glyphs).
     # Claude Code hands that block to the status line's environment, and an
-    # upgrade never touches it. A value already set is left alone.
+    # upgrade never touches it. The flag is an explicit request, so a
+    # different value already there is replaced, and the old one printed;
+    # an equal one is left as it is.
     env = d.setdefault('env', {})
     if not isinstance(env, dict):
         fail(f"{settings_path}: \"env\" is not a JSON object")
@@ -389,7 +408,7 @@ elif mode == 'hooks':
     hooks = d.setdefault('hooks', {})
     if not isinstance(hooks, dict):
         fail(f"{settings_path}: \"hooks\" is not a JSON object")
-    changed = False
+    changed = partial = False
 
     def ensure(event, matcher, command):
         """Idempotently add a command hook. A hook running a script of the
@@ -397,15 +416,23 @@ elif mode == 'hooks':
         install only when it is plainly a leftover — still in a pre-rename
         'statusline' directory, or dangling — so a copy the user keeps
         elsewhere on purpose is never rewritten."""
-        global changed
+        global changed, partial
         base = os.path.basename(command)
         groups = hooks.setdefault(event, [])
         if not isinstance(groups, list):
+            # The resolve pass refuses this before anything is written; kept
+            # for a file edited in between, and then reported as partial.
             print(f"⚠ hooks.{event} is not a list; skipped")
+            partial = True
             return
         for g in groups:
             for h in (g.get('hooks') or []) if isinstance(g, dict) else []:
-                path = script_path(h.get('command') or '')
+                # Someone else's malformed entry (no dict, a command that is
+                # not a string) is not ours, and is left exactly as it is.
+                cmd = h.get('command') if isinstance(h, dict) else None
+                if not isinstance(cmd, str):
+                    continue
+                path = script_path(cmd)
                 if os.path.basename(path) != base:
                     continue
                 if path != command and (
@@ -417,7 +444,9 @@ elif mode == 'hooks':
         changed = True
         for g in groups:
             if isinstance(g, dict) and g.get('matcher', '') == matcher:
-                g.setdefault('hooks', []).append({'type': 'command', 'command': command})
+                if not isinstance(g.get('hooks'), list):
+                    g['hooks'] = []  # absent or null: validated as nothing else
+                g['hooks'].append({'type': 'command', 'command': command})
                 return
         groups.append({'matcher': matcher, 'hooks': [{'type': 'command', 'command': command}]})
 
@@ -438,6 +467,12 @@ elif mode == 'hooks':
     ensure('Stop', '', at)
     if changed:
         save(d)
+    if partial:
+        # Not "wired": an event the tracker needs is missing, and exit 0
+        # would tell a script driving the installer that all is well.
+        sys.stderr.write("⚠ Hooks only partly wired: fix the events above and re-run install.sh --with-hooks\n")
+        sys.exit(1)
+    if changed:
         print("✓ Hooks wired: word counter (🔤) + agent tracker (🤖)")
     else:
         print("• Hooks already wired: word counter (🔤) + agent tracker (🤖)")

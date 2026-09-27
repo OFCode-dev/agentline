@@ -30,7 +30,7 @@ Two segments need small hooks (word counter `🔤`, live agent tracker `🤖`):
 bash install.sh --with-hooks
 ```
 
-This wires hook entries into `settings.json` idempotently — existing hooks are never duplicated or removed. The agent tracker is registered for PreToolUse (`Agent|Task`), SubagentStart, SubagentStop and Stop. Re-running it on an older install adds the two subagent events. Skip it unless the user wants those two segments. `AGENTLINE_AGENT_SHOW` (default 4) caps how many running agents `🤖` lists before it counts the rest as `+N`.
+This wires hook entries into `settings.json` idempotently — existing hooks are never duplicated or removed. The agent tracker is registered for PreToolUse (`Agent|Task`), SubagentStart, SubagentStop and Stop. Re-running it on an older install adds the two subagent events, which only fire on a Claude Code release that has SubagentStart/SubagentStop. A `hooks` section it cannot use (an event, or a group's `hooks`, that is not a list) is refused with exit 1 before anything is written; entries of other tools with a non-string `command` are left alone. Skip it unless the user wants those two segments. `AGENTLINE_AGENT_SHOW` (default 4) caps how many running agents `🤖` lists before it counts the rest as `+N`.
 
 ## Configure
 

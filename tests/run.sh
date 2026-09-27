@@ -2836,6 +2836,31 @@ check "theme: env not an object is refused" [ "$irc" = 1 ]
 check "theme: refused before any write" cmp -s "$S" "$T/orig.json"
 check "theme: refused before the copy" [ ! -e "$H/.claude/agentline/agentline.sh" ]
 
+# A hooks section --with-hooks cannot use is refused before the first write,
+# never half-applied: statusLine unwritten, script not copied.
+for bad in '{"hooks": {"Stop": "not a list"}}' \
+           '{"hooks": {"PreToolUse": [{"matcher": "", "hooks": "x"}]}}'; do
+  inst_home hooksbad
+  printf '%s\n' "$bad" > "$S"; cp "$S" "$T/orig.json"
+  install_run --with-hooks
+  check "hooks bad shape: exit 1 (got $irc): $bad" [ "$irc" = 1 ]
+  check "hooks bad shape: refused before any write" cmp -s "$S" "$T/orig.json"
+  check "hooks bad shape: refused before the copy" [ ! -e "$H/.claude/agentline/agentline.sh" ]
+  check "hooks bad shape: never says wired" sh -c "! grep -q 'Hooks wired' '$T/iout'"
+  check "hooks bad shape: no traceback" sh -c "! grep -q Traceback '$T/iout'"
+done
+# Someone else's malformed entries (a command that is not a string, a hook
+# that is not an object, a null hooks list) are passed over, not crashed on.
+inst_home hooksodd
+printf '%s\n' '{"hooks": {"Stop": [{"matcher": "", "hooks": [{"type": "command", "command": 42}, "junk"]}],' \
+  '"PostToolUse": [{"matcher": "", "hooks": null}]}}' > "$S"
+install_run --with-hooks
+check "hooks odd entries: exit 0 (got $irc)" [ "$irc" = 0 ]
+check "hooks odd entries: no traceback" sh -c "! grep -q Traceback '$T/iout'"
+jcheck "hooks odd entries: kept as they were" "$S" "d['hooks']['Stop'][0]['hooks'][:2]" '[{"type":"command","command":42},"junk"]'
+jcheck "hooks odd entries: tracker wired on Stop" "$S" "d['hooks']['Stop'][0]['hooks'][-1]['command'].endswith('/agent-tracker-hook.sh')" true
+jcheck "hooks odd entries: null list filled" "$S" "[h['command'].rsplit('/', 1)[1] for h in d['hooks']['PostToolUse'][0]['hooks']]" '["wordcount-hook.sh"]'
+
 # A settings.json that does not parse is refused and left byte for byte.
 inst_home malformed
 printf '{\n  "permissions": {"allow": ["Bash(ls)"],},\n}\n' > "$S"
