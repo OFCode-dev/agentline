@@ -10,34 +10,47 @@
 #
 #   PreToolUse (Agent|Task)  a dispatch: the row appears at once under the
 #                            tool call's description (or subagent_type), and
-#                            that label is queued for the SubagentStart that
-#                            follows. SubagentStart has no description of its
-#                            own, and a type alone reads "general-purpose" for
-#                            most dispatches.
+#                            is queued, with its subagent_type and the time,
+#                            for the SubagentStart that follows. SubagentStart
+#                            has no description of its own, and a type alone
+#                            reads "general-purpose" for most dispatches.
 #   SubagentStart            the agent is running: its row is re-labelled
-#                            "<label> #<first 6 of agent_id>", taking the oldest
-#                            queued label (agent_type when none is queued). An
-#                            empty agent_type is an internal agent (prompt
-#                            suggestions, /btw) and is ignored.
+#                            "<label> #<first 6 of agent_id>", taking the
+#                            oldest queued entry of the same agent_type. A
+#                            start that matches no queued dispatch is not one
+#                            this session asked for — an internal agent
+#                            (prompt suggestions, /btw: an empty agent_type;
+#                            under `claude --agent` a named one) — and is
+#                            ignored; so is an empty agent_type.
 #   SubagentStop             the agent finished: its row goes, and a "✓<label>"
 #                            row takes its place, which agentline shows for a
 #                            few seconds. An agent_id this hook never started
 #                            (an internal agent, a stop repeated because a stop
 #                            hook blocked) is ignored, so a repeat is harmless.
-#   Stop                     end of the turn: every row this session still
-#                            owns is cleared — the safety net for an agent
-#                            whose SubagentStop never came, and the only
-#                            clearing a Claude Code without SubagentStart has.
+#   Stop                     end of the turn: the dispatches still queued are
+#                            cleared. Started agents keep their rows: one run
+#                            with run_in_background is still working after the
+#                            turn ends, and its SubagentStop (and ✓) comes
+#                            later. An agent whose SubagentStop never comes
+#                            ages out of the registry's 300 s window.
 #
-# The queued labels are matched to starts oldest first. A parallel dispatch
-# starts its agents in the order it made them, as far as the payloads show;
-# if two starts ever cross, two labels trade places, and nothing is lost.
+# A dispatch that never starts — permission denied, blocked by another hook,
+# invalid input, the user interrupting — used to leave its label queued, so
+# every later agent of the turn took its predecessor's label and a ghost row
+# stayed; an interrupt fires no Stop, so the queue even carried into the next
+# turn. Matching by type bounds the damage to agents of the same type, and a
+# queued entry, and its row, live QUEUE_TTL (120 s) at most — the row is
+# written with that short life (see agentline_agent_edit), so it goes on time
+# even if no hook ever runs again. Agents of one type started in parallel
+# still take their labels in the order their hooks win the lock: the
+# payloads carry nothing that ties a start to its tool call.
 #
-# Registration goes through agentline-agent.sh — the same locked helper any
-# external process uses — so a parallel dispatch cannot lose entries. What a
-# session owns (its rows, its queue, its agent ids) is kept in per-session
-# sidecars next to the registry, so an external agent that registered its own
-# run keeps its row and stays visible past the end of the assistant's turn.
+# All of a session's state (the queue and the agent_id map) is one JSON file
+# beside the registry, edited under one flock with a 5 s deadline. The rows
+# themselves go through agentline_agent_edit — the same locked helper any
+# external process uses, one call per event however many rows change — so a
+# parallel dispatch cannot lose entries, and an external agent that
+# registered its own run keeps its row past the end of the assistant's turn.
 
 HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)"
 # shellcheck source=./agentline-agent.sh
@@ -45,41 +58,84 @@ HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)"
 
 input=$(cat)
 
-# The parse also keeps the session's queue and id map, under a flock of their
-# own: a parallel dispatch fires its hooks concurrently, and two starts must
-# not pop the same queued label. It prints one instruction for the shell
-# below, its fields separated by \x1f (a tab is IFS whitespace, and `read`
-# would merge the empty field a start with nothing queued has). (Program read
-# first, run with -c: see the note at the payload parser in agentline.sh.)
+# The parse prints the registry edit for the shell below: a ttl, then one
+# "+label" or "-label" per row, separated by \x1f (no label can hold one:
+# control characters are blanked), or SKIP. (Program read first, run with -c:
+# see the note at the payload parser in agentline.sh.)
 IFS= read -r -d '' _AL_HOOK_PY <<'PYEOF'
-import fcntl, json, os, re, sys
+import errno, fcntl, json, os, re, sys, time
 
 base = sys.argv[1]
 US = '\x1f'
+QUEUE_TTL = 120   # a dispatch whose SubagentStart never came
+IDS_TTL = 3600    # a started agent whose SubagentStop never came
+CAP = 64          # entries of each kind kept, a bound on the file
+now = int(time.time())
 
 def one_line(s, n):
-    return re.sub(r'[\x00-\x1f\x7f]+', ' ', str(s)).strip()[:n]
+    s = re.sub(r'[\x00-\x1f\x7f]+', ' ', str(s)).strip()
+    # A leading check mark is what the reader takes for a finished row
+    # (agentline-agent.sh writes "✓<label>" on SubagentStop), so a
+    # description starting with one would show as done while running.
+    return re.sub(r'^[\s✓]+', '', s)[:n]
 
-def locked(path, edit):
-    # edit(lines) -> (new lines, result), under flock on <path>.lock.
+def session(path, edit):
+    # edit(queue, ids) -> the registry edit; the state is saved when changed.
+    # The lock is a separate file, never unlinked: removing a flock file that
+    # a hook still holds or waits on lets the next one lock a fresh inode and
+    # walk straight past it. O_NOFOLLOW everywhere, and the new state goes to
+    # an O_EXCL temp with a random name: a symlink planted in a shared /tmp
+    # (the session id is visible in the file names) is refused, never
+    # followed into a file of the user's.
     try:
         fd = os.open(path + '.lock', os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
-        fcntl.flock(fd, fcntl.LOCK_EX)
     except OSError:
         return None
     try:
+        # A blocking flock() has no timeout; the registry helper gives up
+        # after 5 s, and so does this.
+        deadline = time.monotonic() + 5
+        while True:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except OSError as e:
+                if e.errno not in (errno.EAGAIN, errno.EACCES, errno.EWOULDBLOCK):
+                    return None
+            if time.monotonic() >= deadline:
+                return None
+            time.sleep(0.02)
         try:
-            with open(path, encoding='utf-8', errors='surrogateescape') as f:
-                lines = [l for l in f.read().split('\n') if l]
-        except OSError:
-            lines = []
-        new, result = edit(lines)
-        if new != lines:
-            if new:
-                tmp = '%s.%d' % (path, os.getpid())
-                with open(tmp, 'w', encoding='utf-8', errors='surrogateescape') as f:
-                    f.write(''.join(l + '\n' for l in new))
-                os.replace(tmp, path)
+            rfd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+            with os.fdopen(rfd, 'rb') as f:
+                st = json.loads(f.read(1 << 20).decode('utf-8', 'replace'))
+        except (OSError, ValueError):
+            st = {}
+        st = st if isinstance(st, dict) else {}
+        def fresh(xs, width, ttl):
+            return [x for x in (xs if isinstance(xs, list) else [])
+                    if isinstance(x, list) and len(x) == width
+                    and all(isinstance(v, str) for v in x[:-1])
+                    and type(x[-1]) is int and 0 <= now - x[-1] < ttl][-CAP:]
+        queue = fresh(st.get('queue'), 3, QUEUE_TTL)  # [type, label, epoch]
+        ids = fresh(st.get('ids'), 4, IDS_TTL)        # [agent_id, row, label, epoch]
+        old = json.dumps(st, sort_keys=True)
+        result = edit(queue, ids)
+        new = {'queue': queue[-CAP:], 'ids': ids[-CAP:]}
+        if json.dumps(new, sort_keys=True) != old:
+            if queue or ids:
+                tmp = None
+                try:
+                    name = '%s.%d.%s' % (path, os.getpid(), os.urandom(4).hex())
+                    tfd = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+                    tmp = name
+                    with os.fdopen(tfd, 'w') as f:
+                        json.dump(new, f)
+                    os.replace(tmp, path)
+                    tmp = None
+                finally:
+                    if tmp:
+                        os.unlink(tmp)
             else:
                 try:
                     os.unlink(path)
@@ -102,45 +158,71 @@ try:
     # field: keep the old reading of it, a tool call or else the Stop.
     if not event:
         event = 'PreToolUse' if tool else 'Stop'
-    pending = '%s.pending.%s' % (base, sid)
-    ids = '%s.ids.%s' % (base, sid)
+    state = '%s.session.%s' % (base, sid)
     aid = re.sub(r'[^A-Za-z0-9_-]', '', str(d.get('agent_id') or ''))[:64]
-    out = ['SKIP']
+    edit = None
 
     if event == 'PreToolUse':
         # The subagent tool is 'Agent' in current Claude Code releases and
-        # 'Task' in earlier ones.
+        # 'Task' in earlier ones. No subagent_type means the general-purpose
+        # agent, which is the agent_type its SubagentStart then reports.
         inp = d.get('tool_input') if isinstance(d.get('tool_input'), dict) else {}
         label = one_line(inp.get('description') or inp.get('subagent_type') or '', 28)
+        atype = one_line(inp.get('subagent_type') or '', 64) or 'general-purpose'
         if tool in ('Agent', 'Task') and label:
-            locked(pending, lambda ls: (ls + [label], None))
-            out = ['ADD', sid, label]
+            def edit(queue, ids):
+                queue.append([atype, label, now])
+                return [str(QUEUE_TTL), '+' + label]
     elif event == 'SubagentStart':
-        atype = one_line(d.get('agent_type') or '', 28)
+        atype = one_line(d.get('agent_type') or '', 64)
         if atype and aid:
-            queued = locked(pending, lambda ls: (ls[1:], ls[0] if ls else '')) or ''
-            label = queued or atype
-            row = '%s #%s' % (label, aid[:6])
-            locked(ids, lambda ls: ([l for l in ls if not l.startswith(aid + US)]
-                                    + [US.join((aid, row, label))], None))
-            out = ['START', sid, queued, row]
+            def edit(queue, ids):
+                # The oldest dispatch of this type; a case-only difference in
+                # the type's spelling still pairs, a different type never.
+                hit = next((q for q in queue if q[0] == atype), None) or \
+                      next((q for q in queue if q[0].lower() == atype.lower()), None)
+                if hit is None:
+                    return None
+                queue.remove(hit)
+                label = hit[1]
+                row = '%s #%s' % (label, aid[:6])
+                ids[:] = [e for e in ids if e[0] != aid] + [[aid, row, label, now]]
+                ops = ['0', '+' + row]
+                # Two dispatches with one description share one row: it
+                # stays until the last of them has started.
+                if not any(q[1] == label for q in queue):
+                    ops.append('-' + label)
+                return ops
     elif event == 'SubagentStop':
-        def take(ls):
-            hit = [l for l in ls if l.startswith(aid + US)]
-            return [l for l in ls if not l.startswith(aid + US)], hit[-1] if hit else ''
-        entry = locked(ids, take) if aid else ''
-        if entry:
-            _, row, label = (entry.split(US) + ['', ''])[:3]
-            out = ['DONE', sid, row, label]
+        if aid:
+            def edit(queue, ids):
+                hit = [e for e in ids if e[0] == aid]
+                if not hit:
+                    return None
+                ids[:] = [e for e in ids if e[0] != aid]
+                # The ✓ row is not the session's: a Stop right after the last
+                # agent finished must not wipe the flash. It ages out on its
+                # own (see agentline-agent.sh).
+                return ['0', '+✓' + hit[-1][2], '-' + hit[-1][1]]
     elif event == 'Stop':
-        for p in (pending, ids):
-            for q in (p, p + '.lock'):
+        def edit(queue, ids):
+            labels = []
+            for q in queue:
+                if q[1] not in labels:
+                    labels.append(q[1])
+            del queue[:]
+            return ['0'] + ['-' + l for l in labels] if labels else None
+        # The per-session sidecars of earlier releases (.pending/.ids/.owned
+        # and their locks): no hook of this release opens those names, so
+        # they can go, and their rows age out of the registry on their own.
+        for kind in ('pending', 'ids', 'owned'):
+            for q in ('%s.%s.%s' % (base, kind, sid), '%s.%s.%s.lock' % (base, kind, sid)):
                 try:
                     os.unlink(q)
                 except OSError:
                     pass
-        out = ['CLEAR', sid]
-    print(US.join(out))
+    ops = session(state, edit) if edit else None
+    print(US.join(ops) if ops else 'SKIP')
 except Exception:
     print('SKIP')
 PYEOF
@@ -148,40 +230,7 @@ PYEOF
 # would import a json.py or re.py sitting there instead of the standard one.
 parsed=$(printf '%s' "$input" | python3 -I -c "$_AL_HOOK_PY" "$AGENTLINE_AGENT_FILE" 2>/dev/null)
 
-IFS=$'\x1f' read -r event session a b <<< "$parsed"
-owned="${AGENTLINE_AGENT_FILE}.owned.${session}"
-
-# Remember what this session owns so Stop can clear only its own rows.
-# LC_ALL=C: an exact byte comparison, whatever the label's bytes are.
-_own() { LC_ALL=C grep -qxF "$1" "$owned" 2>/dev/null || printf '%s\n' "$1" >>"$owned"; }
-
-case "$event" in
-  ADD)
-    agentline_agent add "$a"
-    _own "$a"
-    ;;
-  START)
-    # $a: the dispatch row to re-label (empty when none was queued), $b: the
-    # row with the agent id. Added first, so the agent never vanishes from a
-    # render in between.
-    agentline_agent add "$b"
-    _own "$b"
-    [ -n "$a" ] && agentline_agent remove "$a"
-    ;;
-  DONE)
-    # $a: the running row, $b: its label. The ✓ row is not owned: a Stop
-    # right after the last agent finished would wipe the flash at once. It
-    # ages out on its own (see agentline-agent.sh).
-    agentline_agent add "✓$b"
-    agentline_agent remove "$a"
-    ;;
-  CLEAR)
-    if [ -f "$owned" ]; then
-      while IFS= read -r label; do
-        [ -n "$label" ] && agentline_agent remove "$label"
-      done <"$owned"
-      rm -f "$owned"
-    fi
-    ;;
-esac
+IFS=$'\x1f' read -r -a ops <<< "$parsed"
+case "${ops[0]}" in ''|*[!0-9]*) exit 0 ;; esac
+[ "${#ops[@]}" -gt 1 ] && agentline_agent_edit "${ops[@]}"
 exit 0

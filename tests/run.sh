@@ -2257,11 +2257,21 @@ check "lifecycle: start re-labels the oldest dispatch" row_is "explore repo #abc
 check "lifecycle: bare dispatch row replaced" sh -c "! sed 's/^[0-9]* //' '$AF' | grep -qx 'explore repo'"
 hook '{"hook_event_name":"SubagentStart","session_id":"s2","agent_id":"zzz999x","agent_type":"general-purpose"}'
 check "lifecycle: second start takes the second label" row_is "review diff #zzz999"
-hook '{"hook_event_name":"SubagentStart","session_id":"s2","agent_id":"nolabel1","agent_type":"fork"}'
-check "lifecycle: start with nothing queued uses agent_type" row_is "fork #nolabe"
 cp "$AF" "$T/af.before"
+# A start no dispatch of this session asked for (an internal agent: under
+# `claude --agent` those carry a type) takes no label and gets no row.
+hook '{"hook_event_name":"SubagentStart","session_id":"s2","agent_id":"nolabel1","agent_type":"fork"}'
+check "lifecycle: start matching no dispatch ignored" cmp -s "$AF" "$T/af.before"
 hook '{"hook_event_name":"SubagentStart","session_id":"s2","agent_id":"internal1","agent_type":""}'
 check "lifecycle: internal agent (empty type) ignored" cmp -s "$AF" "$T/af.before"
+# A dispatch that never starts (denied, blocked, interrupted) stays queued
+# until Stop, but only for its own type.
+hook '{"hook_event_name":"PreToolUse","tool_name":"Agent","session_id":"s2","tool_input":{"description":"denied plan","subagent_type":"Plan"}}'
+hook '{"hook_event_name":"PreToolUse","tool_name":"Agent","session_id":"s2","tool_input":{"description":"✓ fix the build"}}'
+check "lifecycle: a leading ✓ is stripped from the label" row_is "fix the build"
+hook '{"hook_event_name":"SubagentStart","session_id":"s2","agent_id":"bgagent9","agent_type":"general-purpose"}'
+check "lifecycle: start skips a stuck dispatch of another type" row_is "fix the build #bgagen"
+check "lifecycle: the stuck dispatch keeps its own row" row_is "denied plan"
 hook '{"hook_event_name":"SubagentStop","session_id":"s2","agent_id":"abcdef123","agent_type":"Explore","last_assistant_message":"done"}'
 check "lifecycle: stop removes that agent" sh -c "! grep -q 'explore repo #abcdef' '$AF'"
 check "lifecycle: stop leaves a done row" row_is "✓explore repo"
@@ -2272,12 +2282,24 @@ hook '{"hook_event_name":"SubagentStop","session_id":"s2","agent_id":"abcdef123"
 check "lifecycle: repeated stop is a no-op" cmp -s "$AF" "$T/af.before"
 hook '{"hook_event_name":"SubagentStop","session_id":"s2","agent_id":"stranger","agent_type":""}'
 check "lifecycle: unknown agent_id ignored" cmp -s "$AF" "$T/af.before"
+# Sidecars an earlier release left: Stop removes them.
+: > "$AF.pending.s2"; : > "$AF.owned.s2"; : > "$AF.ids.s2.lock"
 hook '{"hook_event_name":"Stop","session_id":"s2","stop_hook_active":false}'
-check "lifecycle: Stop clears the running ones" sh -c "! grep -q -e 'review diff' -e 'fork #' '$AF'"
+check "lifecycle: Stop clears a dispatch that never started" sh -c "! grep -q 'denied plan' '$AF'"
+# Started agents may be running in the background (run_in_background): their
+# rows and ids outlive the turn, and their SubagentStop still lands.
+check "lifecycle: Stop keeps a started agent" row_is "review diff #zzz999"
+check "lifecycle: Stop keeps another started agent" row_is "fix the build #bgagen"
 check "lifecycle: Stop keeps the done flash" row_is "✓explore repo"
 check "lifecycle: Stop keeps the external agent" row_is "external run"
-check "lifecycle: Stop drops the session sidecars" sh -c "! ls '$AF'.pending.s2* '$AF'.ids.s2* '$AF'.owned.s2 >/dev/null 2>&1"
+check "lifecycle: Stop drops the old sidecars" sh -c "! ls '$AF'.pending.s2* '$AF'.ids.s2* '$AF'.owned.s2 >/dev/null 2>&1"
+check "lifecycle: Stop leaves the session lock" [ -f "$AF.session.s2.lock" ]
 check "lifecycle: no temp file left" sh -c "! ls '$AF'.[0-9]* '$AF'.*.s2.[0-9]* >/dev/null 2>&1"
+hook '{"hook_event_name":"SubagentStop","session_id":"s2","agent_id":"bgagent9","agent_type":"general-purpose"}'
+check "lifecycle: a background agent's stop after Stop" row_is "✓fix the build"
+check "lifecycle: ... removes its row" sh -c "! grep -q 'fix the build #' '$AF'"
+hook '{"hook_event_name":"SubagentStop","session_id":"s2","agent_id":"zzz999x","agent_type":"general-purpose"}'
+check "lifecycle: last stop leaves no session state" sh -c "! ls '$AF.session.s2' >/dev/null 2>&1"
 # Garbage and other events do nothing.
 cp "$AF" "$T/af.before"
 hook 'not json'
@@ -2299,6 +2321,93 @@ wait
 check "lifecycle: parallel starts bind 6 distinct labels" \
   [ "$(rows | grep -E '^job [1-6] #agent' | sed 's/ #.*//' | sort -u | wc -l | tr -d ' ')" = 6 ]
 check "lifecycle: parallel starts leave no bare dispatch row" sh -c "! sed 's/^[0-9]* //' '$AF' | grep -qx 'job [1-6]'"
+
+# Typed queue: a start takes the oldest dispatch of its own type, whatever
+# was queued before it.
+rm -f "$SIDE"/claude_*
+hook '{"hook_event_name":"PreToolUse","tool_name":"Agent","session_id":"ty","tool_input":{"description":"scan","subagent_type":"Explore"}}'
+hook '{"hook_event_name":"PreToolUse","tool_name":"Agent","session_id":"ty","tool_input":{"description":"write"}}'
+hook '{"hook_event_name":"SubagentStart","session_id":"ty","agent_id":"gp00001","agent_type":"general-purpose"}'
+check "queue: a start takes its own type's label" row_is "write #gp0000"
+hook '{"hook_event_name":"SubagentStart","session_id":"ty","agent_id":"ex00001","agent_type":"explore"}'
+check "queue: the type matches across case" row_is "scan #ex0000"
+# Two dispatches with one description share a row until both have started.
+hook '{"hook_event_name":"PreToolUse","tool_name":"Agent","session_id":"ty","tool_input":{"description":"twin"}}'
+hook '{"hook_event_name":"PreToolUse","tool_name":"Agent","session_id":"ty","tool_input":{"description":"twin"}}'
+hook '{"hook_event_name":"SubagentStart","session_id":"ty","agent_id":"twin001","agent_type":"general-purpose"}'
+check "queue: a shared dispatch row stays for the twin" row_is "twin"
+hook '{"hook_event_name":"SubagentStart","session_id":"ty","agent_id":"twin002","agent_type":"general-purpose"}'
+check "queue: ... and goes with the last of them" sh -c "! sed 's/^[0-9]* //' '$AF' | grep -qx twin"
+
+# A dispatch that never started expires after 120 s: its queue entry, so a
+# later agent of the type is not given its label, and its row, which the
+# registry wrote back-dated to leave the 300 s window at the same moment.
+rm -f "$SIDE"/claude_*
+hook '{"hook_event_name":"PreToolUse","tool_name":"Agent","session_id":"ex","tool_input":{"description":"never ran"}}'
+stamp=$(awk '/never ran/ {print $1}' "$AF"); age=$(( $(date +%s) - ${stamp:-0} ))
+check "expiry: the dispatch row is stamped 180 s back (${age}s)" [ "$age" -ge 179 -a "$age" -le 182 ]
+python3 - "$AF.session.ex" <<'PYEOF'
+import json, sys
+d = json.load(open(sys.argv[1]))
+for q in d['queue']:
+    q[-1] -= 130
+json.dump(d, open(sys.argv[1], 'w'))
+PYEOF
+hook '{"hook_event_name":"PreToolUse","tool_name":"Agent","session_id":"ex","tool_input":{"description":"real one"}}'
+hook '{"hook_event_name":"SubagentStart","session_id":"ex","agent_id":"real0001","agent_type":"general-purpose"}'
+check "expiry: a stale dispatch's label is not taken" row_is "real one #real00"
+check "expiry: the stale entry left the queue" sh -c "! grep -q 'never ran' '$AF.session.ex'"
+prepare minimal "$PAY/minimal.json"
+# Written 120 s ago, 180 s back: age 300. A row written 119 s ago still shows.
+printf '%s\n' "$(( TNOW - 300 )) never ran" "$(( TNOW - 299 )) running one" > "$AF"
+render "$PAY/minimal.json" 200; normalize "$T/out" "$T/got"
+check "expiry: the reader hides a row back-dated past the window" sh -c "grep -q 'running one' '$T/got' && ! grep -q 'never ran' '$T/got'"
+
+# A symlink planted at the session state or its lock is never followed:
+# the target keeps its content.
+rm -f "$SIDE"/claude_*
+printf 'precious\n' > "$T/victim"
+ln -s "$T/victim" "$AF.session.sy"
+hook '{"hook_event_name":"PreToolUse","tool_name":"Agent","session_id":"sy","tool_input":{"description":"sym"}}'
+check "symlink: the state link's target untouched" [ "$(cat "$T/victim")" = precious ]
+check "symlink: the state is a plain file now" [ -f "$AF.session.sy" -a ! -L "$AF.session.sy" ]
+rm -f "$SIDE"/claude_*
+ln -s "$T/victim" "$AF.session.sl.lock"
+hook '{"hook_event_name":"PreToolUse","tool_name":"Agent","session_id":"sl","tool_input":{"description":"sym"}}'
+check "symlink: a planted lock is refused" [ "$(cat "$T/victim")" = precious ]
+check "symlink: ... and the event skipped" sh -c "! grep -q sym '$AF' 2>/dev/null"
+
+# Stop clears any number of queued rows with one registry write: two
+# python3 runs (the parse, the edit), not one per row.
+rm -f "$SIDE"/claude_*
+for i in 1 2 3 4 5 6 7 8 9 10 11 12; do
+  hook "{\"hook_event_name\":\"PreToolUse\",\"tool_name\":\"Agent\",\"session_id\":\"many\",\"tool_input\":{\"description\":\"q$i\"}}"
+done
+mkdir -p "$T/shim"; _real_py=$(command -v python3)
+printf '#!/bin/sh\necho x >> "%s"\nexec "%s" "$@"\n' "$T/pycount" "$_real_py" > "$T/shim/python3"
+chmod +x "$T/shim/python3"; rm -f "$T/pycount"
+printf '%s' '{"hook_event_name":"Stop","session_id":"many"}' \
+  | hook_env PATH="$T/shim:$PATH_F" "$TEST_BASH" "$ROOT/hooks/agent-tracker-hook.sh"
+check "Stop: 12 rows cleared" sh -c "! grep -q ' q[0-9]' '$AF'"
+check "Stop: in two python3 runs ($(wc -l < "$T/pycount" | tr -d ' '))" [ "$(wc -l < "$T/pycount" | tr -d ' ')" = 2 ]
+
+# The session lock has the registry's 5 s deadline: a hook never hangs on it.
+rm -f "$SIDE"/claude_*
+rm -f "$T/held"
+python3 - "$AF.session.dl.lock" "$T/held" <<'PYEOF' &
+import fcntl, os, sys, time
+fd = os.open(sys.argv[1], os.O_RDWR | os.O_CREAT, 0o600)
+fcntl.flock(fd, fcntl.LOCK_EX)
+open(sys.argv[2], 'w').close()
+time.sleep(9)
+PYEOF
+_dl_holder=$!
+wait_for 5 [ -e "$T/held" ]
+_dl_start=$(date +%s)
+hook '{"hook_event_name":"PreToolUse","tool_name":"Agent","session_id":"dl","tool_input":{"description":"late"}}'
+_dl_secs=$(( $(date +%s) - _dl_start ))
+check "session lock: the hook gives up within the deadline (${_dl_secs}s)" [ "$_dl_secs" -ge 4 -a "$_dl_secs" -le 7 ]
+kill "$_dl_holder" 2>/dev/null; wait "$_dl_holder" 2>/dev/null
 
 # The registry keeps finished rows for a minute and evicts them before any
 # running one when the cap is reached.

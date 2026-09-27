@@ -2,6 +2,37 @@
 
 ## Unreleased
 
+- 🤖 labels no longer shift. A subagent dispatch that never started
+  (permission denied, blocked by another hook, invalid input, an interrupt)
+  left its label queued. Every later agent of the turn then took its
+  predecessor's label, and a ghost "running" row stayed until the end of
+  the turn, or for five minutes. An interrupt fires no Stop, so the stale
+  queue even carried into the next turn. Now each queued dispatch carries
+  its agent type and the time. A start takes the oldest dispatch of its own
+  type, and a dispatch that has not started within two minutes drops out
+  of the queue. Its row is written with that shorter life, so it leaves on
+  time even if no other hook runs. A start that matches no dispatch is not
+  one the session asked for (an internal agent, including the helpers of a
+  `claude --agent` session) and gets no row.
+- A subagent started with `run_in_background` stays in 🤖 after the turn
+  ends. Stop used to clear it while it was still working, and its `✓` was
+  never shown. Stop now clears only the dispatches that never started.
+- The end of a turn no longer slows down with the number of agents. Stop
+  ran one registry write per row it had ever owned (two per agent), which
+  took 1.4 s at every turn end with 24 agents. It is now a single write.
+  A start or a stop is also one write where it used to be two.
+- Security (macOS, or any shared `/tmp` without protected symlinks): the
+  agent tracker wrote its per-session queue through a predictable temp name
+  with a plain `open()`. A symlink planted there, easy to name because the
+  session id shows in `/tmp`, was followed: the target was truncated and
+  subagent descriptions written into it. The owned-rows file was appended
+  the same way. The session's state is now one file, written through a
+  random `O_EXCL | O_NOFOLLOW` temp and renamed into place, and read
+  without following links. Its lock gives up after 5 s like the
+  registry's, and it is never unlinked while a hook might hold it.
+- A subagent description starting with `✓` no longer shows as finished
+  while the agent runs: the leading check mark is dropped from the label.
+
 - No more yellow `⚠️ 20% >200k` on the 1M-context models. The context
   segment forced a warning from Claude Code's `exceeds_200k_tokens` flag,
   on the premise that pricing and quality change past 200k tokens. That

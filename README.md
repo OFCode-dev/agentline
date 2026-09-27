@@ -222,7 +222,7 @@ A malformed `r,g,b` is ignored as a whole. Set these in the `env` block of `sett
 Two segments read files that Claude Code itself does not provide, so they are fed by two small hooks shipped in [`hooks/`](hooks/):
 
 - **`wordcount-hook.sh`** — counts words in the transcript (PostToolUse + Stop) and feeds `🔤 ↑in ↓out` on line 1.
-- **`agent-tracker-hook.sh`** — follows each subagent through its lifecycle and feeds `🤖` on line 3. The row appears on the dispatch (PreToolUse on Agent), under the tool call's description. `SubagentStart` ties it to the agent (`review diff #a1b2c3`, the first six characters of `agent_id`). `SubagentStop` removes that agent alone the moment it finishes and flashes `✓review diff` for about ten seconds. `Stop` clears whatever the session still owns, as a safety net. Internal agents (prompt suggestions, `/btw`) are ignored. The hook dispatches on `hook_event_name`, so one script serves all four events. Claude Code releases without `SubagentStart` keep the old behaviour: the row appears on dispatch and clears at the end of the turn.
+- **`agent-tracker-hook.sh`** — follows each subagent through its lifecycle and feeds `🤖` on line 3. The row appears on the dispatch (PreToolUse on Agent), under the tool call's description. `SubagentStart` ties it to the agent (`review diff #a1b2c3`, the first six characters of `agent_id`), taking the oldest dispatch of the same agent type. `SubagentStop` removes that agent alone the moment it finishes and flashes `✓review diff` for about ten seconds. `Stop` clears the dispatches that never started (denied, blocked by another hook, interrupted). An agent that did start keeps its row past `Stop`, because a `run_in_background` agent is still working then and its `✓` comes later; an agent that never reports its stop ages out after five minutes. A dispatch that never starts disappears after two minutes, even with no further event, and its label is never handed to a later agent. Internal agents (prompt suggestions, `/btw`, the helpers of a `claude --agent` session) match no dispatch and are ignored. The hook dispatches on `hook_event_name`, so one script serves all four events. `SubagentStart` and `SubagentStop` only fire on a Claude Code release that has those hook events. On an older one a dispatch shows for two minutes, or until the end of the turn.
 - **`agentline-agent.sh`** — the locked registry both of the above write through, and the entry point for anything else that wants a row on line 3 (see below).
 
 `bash install.sh --with-hooks` copies them to `~/.claude/agentline/` and adds the hook entries to `settings.json` idempotently — existing hooks are never duplicated or removed. Without them, the two segments simply stay hidden; nothing else changes.
@@ -259,7 +259,7 @@ it a longer run simply ages out of the display. If the process dies without
 running its trap, the row disappears on its own once it goes stale.
 
 Rows are only ever removed by whoever put them there: the agent-tracker hook
-clears its own session's subagents on `SubagentStop` and `Stop` and leaves
+clears its own session's subagents on `SubagentStop` (and queued dispatches on `Stop`) and leaves
 everything else alone, so an external run in progress survives the end of an
 assistant turn.
 
