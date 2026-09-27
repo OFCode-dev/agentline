@@ -560,6 +560,16 @@ check "NO_COLOR selects mono" sh -c "! grep -q '${ESC}\[' '$T/out'"
 prepare full "$PAY/full.json"
 render "$PAY/full.json" 120 NO_COLOR=
 check "an empty NO_COLOR is no request" grep -q "${ESC}\[" "$T/out"
+# Colours local.sh writes in any spelling printf %b turns into ESC.
+printf '%s\n' "DIM='\\e[2m'" "CYAN='\\E[36m'" "MAGENTA='\\x1b[35m'" "RESET='\\0033[0m'" \
+  "cpu_usage='\\x1B[31mhot\\e[0m'" > "$T/local-esc.sh"
+prepare full "$PAY/full.json"
+render "$PAY/full.json" 120 AGENTLINE_LOCAL="$T/local-esc.sh"
+check "local.sh colour spellings take effect" grep -q "${ESC}\[36m" "$T/out"
+prepare full "$PAY/full.json"
+render "$PAY/full.json" 120 NO_COLOR=1 AGENTLINE_LOCAL="$T/local-esc.sh"
+check "mono strips \\e \\E \\x1b \\0033 from local.sh" sh -c "! grep -q '${ESC}\[' '$T/out'"
+check "... and keeps the text" grep -q hot "$T/out"
 prepare agents-overflow "$PAY/agents-overflow.json"
 render "$PAY/agents-overflow.json" 200 AGENTLINE_GLYPHS=ascii
 normalize "$T/out" "$T/got"
@@ -2624,7 +2634,19 @@ doctor "$T/doc2.json"
 check "doctor: statusLine reported" dhas '^  statusLine +/x/agentline\.sh$'
 check "doctor: hook events wired / missing" dhas 'agent-tracker-hook\.sh PreToolUse yes, SubagentStart NO, SubagentStop NO, Stop yes'
 check "doctor: wordcount hook missing" dhas 'wordcount-hook\.sh +PostToolUse NO, Stop NO'
+# An inline NAME=value in the command is masked: a report gets pasted.
+printf '%s\n' '{"statusLine":{"type":"command","command":"GH_TOKEN=abc123 X=\"s p\" bash /x/agentline.sh --key=zz9;Y=q"}}' \
+  > "$HOME_F/.claude/settings.json"
+doctor "$T/doc2.json"
+check "doctor: NAME=value masked in statusLine" dhas '^  statusLine +GH_TOKEN=\*\*\* X=\*\*\* bash /x/agentline\.sh --key=\*\*\*;Y=\*\*\*$'
+check "doctor: no secret value printed" sh -c "! grep -q -e abc123 -e zz9 -e 's p' '$T/dout'"
 rm -f "$HOME_F/.claude/settings.json"
+# NO_COLOR: host-probe lines carry no colour (a probe value with colours
+# inside stands in for the service panel).
+printf '%s\n' "cpu_usage='\\033[31mhot\\033[0m'" > "$T/local-probe.sh"
+doctor "$T/doc2.json" NO_COLOR=1 AGENTLINE_LOCAL="$T/local-probe.sh"
+check "doctor: NO_COLOR probe line has the value" grep -q '^  cpu_usage *hot$' "$T/dout.raw"
+check "doctor: NO_COLOR report has no colour" sh -c "! grep -q '${ESC}\[' '$T/dout.raw'"
 # An untrusted cache dir (a symlink) is reported as such.
 mkdir -p "$T/dtmp/real"; ln -s "$T/dtmp/real" "$T/dtmp/agentline-${EUID:-0}"
 doctor "$T/doc2.json" TMPDIR="$T/dtmp"

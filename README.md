@@ -210,7 +210,7 @@ Most of agentline's colours are the terminal's own ANSI roles (green, yellow, re
 
 | Variable | Values | Effect |
 |---|---|---|
-| `AGENTLINE_THEME` | `dark` (default), `light`, `mono` | `light` darkens the fixed colours to 4–7:1 contrast on white (the dark-theme amber is about 1.4:1 there). `mono` prints no colour at all and shows the `max`/`ultracode` effort words without animation. A non-empty [`NO_COLOR`](https://no-color.org) selects `mono` too |
+| `AGENTLINE_THEME` | `dark` (default), `light`, `mono` | `light` darkens the fixed colours to 4–7:1 contrast on white (the dark-theme amber is about 1.4:1 there). `mono` prints no colour at all, including colours your `local.sh` sets in any spelling (`\033[`, `\e[`, `\x1b[`…), and shows the `max`/`ultracode` effort words without animation. A non-empty [`NO_COLOR`](https://no-color.org) selects `mono` too |
 | `AGENTLINE_GLYPHS` | `emoji` (default), `ascii` | `ascii` prints nothing above U+007F: icons become short words (`cpu:37%`, `git:owner/repo@main`) or disappear where the value speaks for itself (`$12.47`, `ssh:2`), `│` becomes `\|`, `·` becomes `/`, `✓`/`✗` become `ok`/`FAIL`. For fonts without emoji, and for logs |
 | `AGENTLINE_COLOR_GOLD`, `AGENTLINE_COLOR_ORANGE` | `r,g,b` (0–255) | Replace the gold and orange accents (orange: `high` effort, `F:`) |
 | `AGENTLINE_COLOR_FABLE_FROM`, `AGENTLINE_COLOR_FABLE_TO` | `r,g,b` | The endpoints of the Fable/Mythos model-name gradient |
@@ -327,7 +327,7 @@ It reports:
 - the bash, OS, `python3` and `timeout` it found;
 - the effective width, layout and drop list;
 - the cache directory, and whether it passed the owner/symlink check that caching depends on;
-- whether `settings.json` wires the status line, `refreshInterval` and each hook event (a missing `SubagentStart` means re-run `install.sh --with-hooks`);
+- whether `settings.json` wires the status line (its command with every `NAME=value` word masked, so a report is safe to paste), `refreshInterval` and each hook event (a missing `SubagentStart` means re-run `install.sh --with-hooks`);
 - the wall time of each phase of one cold render;
 - every host probe's value;
 - every segment, as `shown` or `hidden` with where its data comes from ("absent: cost.total_cost_usd" means the payload did not carry that field).

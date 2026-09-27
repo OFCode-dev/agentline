@@ -2702,20 +2702,31 @@ fi
 # its own. Only [0-9;]* then m is taken; anything else after an ESC [ is
 # left as it was (no cleaned string can hold one). OSC-8 links are not
 # colour and stay. Slow path only, by parameter expansion.
-if [ "$_AL_THEME" = mono ]; then
-  for _esc in '\033[' $'\033['; do
-    _rest="$out"; out=""
+#
+# local.sh is the user's, and printf %b turns every spelling of ESC into a
+# real one: \e, \E, \x1b, \0033 (and \u001b on bash 4.2+) as well as \033.
+# All of them are taken, or a colour written in one of those survived mono.
+# A function, because --doctor strips its host-probe lines the same way.
+_mono_strip() {  # _mono_strip <text> -> $_mono_out
+  local _esc _rest _par _o="$1"
+  for _esc in '\033[' '\0033[' '\e[' '\E[' '\x1b[' '\x1B[' '\u001b[' '\u001B[' $'\033['; do
+    case "$_o" in *"$_esc"*) ;; *) continue ;; esac
+    _rest="$_o"; _o=""
     while :; do
       case "$_rest" in *"$_esc"*) ;; *) break ;; esac
-      out="${out}${_rest%%"$_esc"*}"; _rest="${_rest#*"$_esc"}"
+      _o="${_o}${_rest%%"$_esc"*}"; _rest="${_rest#*"$_esc"}"
       _par="${_rest%%m*}"
       case "$_rest" in
-        *m*) case "$_par" in *[!0123456789\;]*) out="${out}${_esc}" ;; *) _rest="${_rest#*m}" ;; esac ;;
-        *) out="${out}${_esc}" ;;
+        *m*) case "$_par" in *[!0123456789\;]*) _o="${_o}${_esc}" ;; *) _rest="${_rest#*m}" ;; esac ;;
+        *) _o="${_o}${_esc}" ;;
       esac
     done
-    out="${out}${_rest}"
+    _o="${_o}${_rest}"
   done
+  _mono_out="$_o"
+}
+if [ "$_AL_THEME" = mono ]; then
+  _mono_strip "$out"; out="$_mono_out"
 fi
 
 # Prune the cache directory. Every session leaves render_<sid>.* files behind
@@ -2788,8 +2799,14 @@ esac
 # statusline docs give one (prompt_cache); for every other field the report
 # says "absent in the payload" rather than guess at a version.
 IFS= read -r -d '' _AL_DOCTOR_PY <<'PYEOF'
-import json, sys
+import json, re, sys
 path = sys.argv[1]
+def masked(cmd):
+    # A report is made to be pasted into an issue, and an inline
+    # `TOKEN=... bash agentline.sh` (or a --key=value) would carry a secret
+    # into it: every NAME=value word keeps its name, not its value.
+    return re.sub(r'''(^|[\s;&|(])(-{0,2}[A-Za-z_][A-Za-z0-9_-]*)=(?:"[^"]*"|'[^']*'|[^\s;&|)])*''',
+                  r'\1\2=***', str(cmd))
 try:
     d = json.load(open(path))
 except FileNotFoundError:
@@ -2800,7 +2817,7 @@ except Exception as e:
     sys.exit()
 d = d if isinstance(d, dict) else {}
 sl = d.get('statusLine') if isinstance(d.get('statusLine'), dict) else {}
-print('  statusLine       %s' % (sl.get('command') or '(none)'))
+print('  statusLine       %s' % (masked(sl.get('command')) if sl.get('command') else '(none)'))
 print('  refreshInterval  %s' % (sl.get('refreshInterval') if sl.get('refreshInterval') is not None
                                  else 'unset: the clock only ticks on conversation events'))
 hooks = d.get('hooks') if isinstance(d.get('hooks'), dict) else {}
@@ -2930,8 +2947,12 @@ if [ -n "$_AL_DOCTOR" ]; then
   [ "${BASH_VERSINFO[0]:-0}" -ge 5 ] || echo "  (bash < 5: each mark starts a python3, ~20 ms, counted in the phase it ends)"
   echo
   echo "host probes (empty: the probe returned nothing)"
+  # The service panel is built with its colours inside; mono (NO_COLOR)
+  # strips them here as it does from the render.
   for _v in $PROBE_VARS active_agents agents_done; do
-    printf '  %-16s %b\n' "$_v" "${!_v}"
+    _mono_out="${!_v}"
+    [ "$_AL_THEME" = mono ] && _mono_strip "$_mono_out"
+    printf '  %-16s %b\n' "$_v" "$_mono_out"
   done
   echo
   echo "segments (shown = emitted; at a narrow width the layout may still drop it, see AGENTLINE_DROP)"

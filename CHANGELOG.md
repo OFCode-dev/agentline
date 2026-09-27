@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- `mono` (and `NO_COLOR`) now strips colours your `local.sh` writes as
+  `\e[…m`, `\E[…m`, `\x1b[…m` or `\0033[…m`. printf turns each of them into
+  an escape, but only the `\033[` spelling was removed. `--doctor` under
+  `NO_COLOR` no longer prints the service panel's colour codes on its
+  host-probe lines.
+- `--doctor` masks every `NAME=value` word of the statusLine command it
+  prints. An inline `TOKEN=… bash agentline.sh` went into the report,
+  which is made to be pasted into an issue.
+
 - 🤖 labels no longer shift. A subagent dispatch that never started
   (permission denied, blocked by another hook, invalid input, an interrupt)
   left its label queued. Every later agent of the turn then took its
