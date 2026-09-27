@@ -67,6 +67,12 @@
   ends the estimate. The summary line Claude Code writes right after the
   boundary does not. The compaction cache gains a fifth field for this, and
   an old four-field cache is rebuilt.
+- The test suite ignores the caller's environment. Renders already ran
+  under `env -i`, but the harness itself inherited everything. A
+  developer's exported `AGENTLINE_*` settings, `COLUMNS`, locale, proxies
+  or `GIT_DIR` could change what its fixtures and helpers did. It now
+  unsets them at startup, keeping only its own two knobs, and re-runs
+  itself under a polluted environment to prove the golden still matches.
 - The test suite no longer fails on a slow machine. Reset times were
   stamped as "now + 2 h" when a fixture was filled, and some renders came
   a minute later, which floored `↻2h0m` to `↻1h59m` and `⇡12%` to `⇡11%`.

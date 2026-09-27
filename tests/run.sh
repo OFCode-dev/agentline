@@ -25,6 +25,27 @@
 
 set -u
 
+# Hermetic from the first line: nothing the caller's shell exports may
+# change a result. Renders already run under `env -i`, but the harness
+# itself — its git fixtures, python helpers, sed and date, and any render
+# path that forwards a variable — ran in the caller's environment, and a
+# user's AGENTLINE_* settings (this very machine exports AGENTLINE_TZ, and
+# an exported AGENTLINE_USAGE_API=1 was reported to break three layout
+# goldens) are exactly what a status-line developer has set. So every
+# AGENTLINE_* variable except the two harness knobs goes, with every other
+# variable that changes a render or a helper: width, config and registry
+# overrides, colour and hyperlink switches, multiplexers, the locale (the
+# harness sets LC_ALL itself where it matters), proxies, the python and git
+# environment. Each test then sets exactly what it needs. compgen is a
+# builtin (bash 3.2 too).
+for _v in $(compgen -A variable AGENTLINE_) $(compgen -A variable LC_) $(compgen -A variable GIT_) \
+          $(compgen -A variable PYTHON); do
+  case "$_v" in AGENTLINE_TEST_BASH|AGENTLINE_TEST_LC) ;; *) unset "$_v" ;; esac
+done
+unset COLUMNS LINES LANG CLAUDE_CONFIG_DIR CLAUDE_AGENTS_FILE NO_COLOR FORCE_HYPERLINK \
+      TMUX STY ZELLIJ TERM_PROGRAM COLORFGBG http_proxy https_proxy HTTP_PROXY HTTPS_PROXY \
+      no_proxy NO_PROXY all_proxy ALL_PROXY 2>/dev/null
+
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 TESTS="$ROOT/tests"
 FIX="$TESTS/fixtures"
@@ -32,9 +53,13 @@ GOLD="$TESTS/golden"
 WIDTHS="120 80 40"
 
 UPDATE=0
+ENV_SELFTEST=0
 case "${1:-}" in
   '') ;;
   --update) UPDATE=1 ;;
+  # Internal: the suite re-runs itself this way under a polluted caller
+  # environment (see "Environment hygiene" at the end of section 2).
+  --env-selftest) ENV_SELFTEST=1 ;;
   -h|--help) sed -n '2,6p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
   *) echo "usage: bash tests/run.sh [--update]" >&2; exit 2 ;;
 esac
@@ -246,6 +271,19 @@ for r in n_rows:
         sys.exit('row over %d cells holds more than one segment: %r' % (width, r))
 PYEOF
 }
+
+# --env-selftest: the caller's pollution must be gone, and the golden
+# no-width render must match all the same. Exit status only; the main run
+# asserts it (see "Environment hygiene").
+if [ "$ENV_SELFTEST" = 1 ]; then
+  for _v in AGENTLINE_USAGE_API AGENTLINE_PACE AGENTLINE_GLYPHS COLUMNS TMUX NO_COLOR LANG GIT_DIR; do
+    eval "[ -z \"\${$_v+x}\" ]" || { echo "$_v survived the hygiene step"; exit 1; }
+  done
+  p="$PAY/full.json"; fill "$FIX/payloads/full.json" "$p"; prepare full "$p"
+  render "$p" -; normalize "$T/out" "$T/got"
+  cmp -s "$T/got" "$GOLD/full.w120.txt" || { echo "full.w120 differs:"; diff "$GOLD/full.w120.txt" "$T/got" | head -n 6; exit 1; }
+  exit 0
+fi
 
 # ===========================================================================
 # 1. Syntax
@@ -1258,6 +1296,18 @@ check "breadcrumb: a shared prefix is not a parent (↖ wor)" grep -qF '↖ wor 
 printf '{"session_id":"crumb-0001","cwd":"%s","workspace":{"project_dir":"/src/ççççççççççççççççççççççççççççççç"}}\n' "$WORK" > "$T/crumb.json"
 render "$T/crumb.json" 300; normalize "$T/out" "$T/cr"
 check "breadcrumb: a long name is capped (21 + ...)" grep -qF '↖ ççççççççççççççççççççç... ~/work' "$T/cr"
+
+# Environment hygiene (H1): the whole harness re-run in its --env-selftest
+# mode under a caller environment full of settings that change a render —
+# the /usage fetch, no pace arrows, a narrow COLUMNS, tmux, ASCII glyphs,
+# NO_COLOR, a foreign locale, a GIT_DIR — must still produce the golden.
+if msg=$(env AGENTLINE_USAGE_API=1 AGENTLINE_PACE=0 AGENTLINE_GLYPHS=ascii COLUMNS=50 TMUX=x \
+           NO_COLOR=1 LANG=tr_TR.UTF-8 GIT_DIR=/nonexistent AGENTLINE_TEST_BASH="$TEST_BASH" \
+           "$BASH" "$TESTS/run.sh" --env-selftest 2>&1); then
+  pass
+else
+  fail "hermetic: a polluted caller environment changed the golden: $msg"
+fi
 
 # ===========================================================================
 # 3. Render-cache fast path
