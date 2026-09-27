@@ -32,6 +32,12 @@
 - The compaction counter works when `transcript_path` is a symlink. The
   size check read the link itself, which never grows, so the counter stayed
   at 0 whatever the transcript held. It now follows the link (`stat -L`).
+- A huge transcript can no longer stall renders. The first count read the
+  whole file in one render, twice (once to count, once for the last
+  `postTokens`): a 4 GB sparse file took 5.3 s. A render Claude Code gave up
+  on never saved its progress, so the next one started over. Now one pass
+  does both, and a render reads at most 8 MB and records how far it got. A
+  big transcript is caught up over a few renders.
 - The test suite no longer fails on a slow machine. Reset times were
   stamped as "now + 2 h" when a fixture was filled, and some renders came
   a minute later, which floored `↻2h0m` to `↻1h59m` and `⇡12%` to `⇡11%`.

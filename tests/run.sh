@@ -1029,6 +1029,26 @@ bnd 40000 >> "$T/transcript-target.jsonl"
 cmp_render
 check "compact: growth behind a symlink is counted (🔄 3)" grep -qF '🔄 3' "$T/l1"
 rm -f "$TR"
+# A render reads at most 8 MB of transcript (H0d): the first scan of a 4 GB
+# sparse file took 5.3 s, and a killed render never saved its progress. A
+# 20 MB sparse file with two boundaries at its end is caught up over three
+# renders, each recording how far it got.
+python3 -c '
+import sys
+with open(sys.argv[1], "wb") as f:
+    f.seek(20 * 1024 * 1024)
+    f.write(b"\n" + sys.argv[2].encode() + b"\n" + sys.argv[3].encode() + b"\n")
+' "$TR" "$(bnd 20000)" "$(bnd 30000)"
+rm -f "$CCACHE"
+cmp_render
+check "compact: first render stops at 8 MB" [ "$(cut -d' ' -f2 "$CCACHE")" = 8388608 ]
+if grep -q '🔄' "$T/l1"; then fail "compact: nothing counted before the scan gets there"; else pass; fi
+cmp_render
+check "compact: second render carries on to 16 MB" [ "$(cut -d' ' -f2 "$CCACHE")" = 16777216 ]
+cmp_render
+check "compact: third render reaches the end (🔄 2)" grep -qF '🔄 2' "$T/l1"
+check "compact: third render reaches the end, ~15% from the last postTokens" grep -qF '📊 ~15%' "$T/l1"
+rm -f "$TR"
 
 # Git ahead/behind and dirty counts (C14), against a real repository: the
 # probe runs because the payload cwd is not the seeded one. main is one

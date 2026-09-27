@@ -1681,10 +1681,10 @@ pace_arrow() {  # pace_arrow <used%> <resets_epoch> <window_secs> <min_elapsed%>
 #
 # A transcript runs to tens of MB; grepping it whole on every full render
 # cost ~0.15 s. So the count is kept in ${CACHE_DIR}/compact.<sid> as
-# "inode size count postTokens" and only the bytes appended since are read:
-# the same size costs one stat and no read, growth costs one tail|grep over
-# the new bytes, and a new inode or a smaller file (rewritten, rotated)
-# costs one full scan. The cache is written through a temp file and mv, so
+# "inode offset count postTokens" and only the bytes past the offset are
+# read: the same size costs one stat and no read, growth costs one tail|awk
+# over the new bytes (8 MB at most, see _CMP_CAP), and a new inode or a
+# smaller file (rewritten, rotated) starts again from 0. The cache is written through a temp file and mv, so
 # two renders racing never leave half a line. A compact_boundary line split
 # across two reads (caught mid-write) can be missed; Claude Code appends
 # each line in one write, so that window is a few bytes wide. The payload's
@@ -1697,7 +1697,7 @@ pace_arrow() {  # pace_arrow <used%> <resets_epoch> <window_secs> <min_elapsed%>
 # the payload's used_percentage is null until the next API call, and the
 # context segment hides; with a count > 0 and a known window size it shows
 # a dim "📊 ~6%" (postTokens / window) instead, until the real figure is
-# back. The last postTokens is only looked for when the count changes.
+# back. The last postTokens rides the same pass that counts.
 # -L: a transcript_path that is a symlink is measured by its target. Without
 # it stat read the link itself, whose size never changes, and the counter
 # stayed at 0 however many compactions the target recorded.
@@ -1712,10 +1712,25 @@ _compact_chunk() {  # _compact_chunk <from> <to>
   else tail -c "+$(( $1 + 1 ))" "$payload_transcript" 2>/dev/null | head -c "$(( $2 - $1 ))"
   fi
 }
-_compact_last_post() {  # _compact_last_post <from> <to> -> last postTokens of a boundary line
-  _compact_chunk "$1" "$2" | LC_ALL=C grep -F '"subtype":"compact_boundary"' \
-    | LC_ALL=C grep -o '"postTokens":[0-9]*' | tail -n 1 | LC_ALL=C tr -cd '0-9'
+# One pass over the chunk: "<boundaries> <last postTokens>". It used to be two
+# (grep -c, then grep|grep|tail for the postTokens), so the first scan of a
+# big transcript read it twice. awk under C: bytes, and no awk aborts on an
+# invalid one.
+_compact_scan() {  # _compact_scan <from> <to>
+  _compact_chunk "$1" "$2" | LC_ALL=C awk '
+    index($0, "\"subtype\":\"compact_boundary\"") {
+      n++
+      if (match($0, /"postTokens":[0-9]+/)) p = substr($0, RSTART + 13, RLENGTH - 13)
+    }
+    END { print n + 0, p }'
 }
+# At most this many bytes are read per render. The first scan used to take
+# the whole file at once: a 4 GB sparse transcript held a render for 5.3 s,
+# and a render killed that long (Claude Code cancels slow ones) never wrote
+# the cache, so every render after it started the same scan again. Now each
+# render reads the next 8 MB and records how far it got; a big transcript is
+# caught up over a few renders, its count rising as it goes.
+_CMP_CAP=8388608
 compact_n=0; compact_post=""
 if [ -n "$CACHE_BASE" ] && [ -n "$payload_transcript" ] && [ -f "$payload_transcript" ]; then
   _cst=$(_stat_is "$payload_transcript")
@@ -1736,14 +1751,16 @@ if [ -n "$CACHE_BASE" ] && [ -n "$payload_transcript" ] && [ -f "$payload_transc
         else
           _from=0; compact_n=0; compact_post=""  # new or rewritten file: all of it
         fi
-        _new=$(_compact_chunk "$_from" "$_size" | LC_ALL=C grep -c -F '"subtype":"compact_boundary"')
+        _to=$(( _from + _CMP_CAP )); [ "$_to" -gt "$_size" ] && _to="$_size"
+        _new=0; _p=""
+        read -r _new _p <<< "$(_compact_scan "$_from" "$_to")"
         case "$_new" in ''|*[!0-9]*) _new=0 ;; esac
+        case "$_p" in *[!0-9]*) _p="" ;; esac
         compact_n=$(( 10#$compact_n + _new ))
-        if [ "$_new" -gt 0 ]; then
-          _p=$(_compact_last_post "$_from" "$_size")
-          [ -n "$_p" ] && compact_post="$_p"
-        fi
-        printf '%s %s %s %s\n' "$_ino" "$_size" "$compact_n" "$compact_post" > "${_cfile}.$$" 2>/dev/null \
+        [ "$_new" -gt 0 ] && [ -n "$_p" ] && compact_post="$_p"
+        # The "size" field is how far the scan got, not the file's size:
+        # short of it, the next render carries on from there.
+        printf '%s %s %s %s\n' "$_ino" "$_to" "$compact_n" "$compact_post" > "${_cfile}.$$" 2>/dev/null \
           && mv -f "${_cfile}.$$" "$_cfile" 2>/dev/null
       fi
       ;;
