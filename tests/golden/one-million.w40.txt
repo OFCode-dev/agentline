@@ -1,7 +1,7 @@
-Opus 5 │ 🟡med │ ⚠️  83% │ S:95% │ W:12% │ 📥 812.3k │ 📤 999 │ 🔥 37% │ 💾 6.2G │ 💽 41%
+Opus 5 │ 🟡med │ ⚠️ 83% │ S:95% │ W:12% │ 📥 812.3k │ 📤 999 │ 🔥 37% │ 💾 6.2G │ 💽 41%
 ~/work │ 🌿 OFCode-dev/agentline@main │ DD/MM/YYYY Day │ HH:MM:SS
-⚙️  context7 · playwright
-♻️  claude --resume onem-0001
+⚙️ context7 · playwright
+♻️ claude --resume onem-0001
 🛡️ Web ✓ · DB ✗ · Cache ✓ │ 🔐 ssh:2
 ⏰ cron:5
 🌐 node(3000) vite(5173) python3(8000) postgres(5432) redis-server(6379)

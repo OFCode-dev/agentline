@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+- Themes, an ASCII glyph set and colour overrides, all set by environment
+  variable (in `settings.json`'s env block, which upgrades never touch).
+  Before, the only answer to "change a colour" was editing the script,
+  which the next install overwrote. `AGENTLINE_THEME=light` darkens the
+  colours that are fixed values to 4-7:1 on white: the Fable gradient
+  (1.4:1 there before), gold/orange, and the `max` rainbow. The ANSI-16
+  roles are left to the terminal's own theme, which already maps them for
+  its background. `AGENTLINE_THEME=mono`, or any non-empty `NO_COLOR`,
+  prints no colour at all and shows the animated effort words plain.
+  `AGENTLINE_GLYPHS=ascii` prints nothing above U+007F: icons become short
+  words or nothing, `│` becomes `|`. `AGENTLINE_COLOR_GOLD`, `_ORANGE`,
+  `_FABLE_FROM` and `_FABLE_TO` take `r,g,b`. `install.sh --theme` and
+  `--glyphs` write the variables for you. The installer does not detect the
+  background (an OSC 11 query cannot be answered from where the installer
+  usually runs); it only mentions `--theme light` when `COLORFGBG` reports
+  a light background. Every icon now comes from one glyph table with a
+  single trailing space. The extra space after the emoji with a variation
+  selector (`⚙️`, `♻️`, `🏷️`, `⏱️`, `⚠️`) is gone. The layout pass
+  measures such an emoji as two cells by rule, where before it got there by
+  counting U+FE0F as a cell of its own, and other zero-width marks now take
+  none.
 - `agentline.sh --doctor` prints a diagnostic report instead of the status
   line. It lists every segment as shown or hidden, with where its data comes
   from ("absent: cost.total_cost_usd" when the payload lacked the field), and

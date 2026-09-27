@@ -1,5 +1,5 @@
-'; touch pwned4 # │ ⚙️  turbo │ 💰 $0.00 │ 🔥 37% │ 💾 6.2G │ 💽 41%
-v$(touch pwned3) │ ~/work │ 🌿 OFCode-dev/agentline@main │ 🏷️  a"b" $(touch pwned) `touch ... │ DD/MM/YYYY Day │ HH:MM:SS
-⚙️  context7 · playwright │ ♻️  claude --resume ../../etc/x
+'; touch pwned4 # │ ⚙️ turbo │ 💰 $0.00 │ 🔥 37% │ 💾 6.2G │ 💽 41%
+v$(touch pwned3) │ ~/work │ 🌿 OFCode-dev/agentline@main │ 🏷️ a"b" $(touch pwned) `touch ... │ DD/MM/YYYY Day │ HH:MM:SS
+⚙️ context7 · playwright │ ♻️ claude --resume ../../etc/x
 🛡️ Web ✓ · DB ✗ · Cache ✓ │ 🔐 ssh:2 │ ⏰ cron:5
 🌐 node(3000) vite(5173) python3(8000) postgres(5432) redis-server(6379)

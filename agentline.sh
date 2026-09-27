@@ -204,6 +204,47 @@ _VIOLET_WHEEL=(
   "100 50 177" "95 47 169" "90 43 162" "85 40 154" "80 36 147" "76 33 140"
   "71 29 132" "67 26 125"
 )
+# === Theme ===
+# AGENTLINE_THEME=dark (default) | light | mono. Most colours here are ANSI-16
+# roles (green, yellow, red, dim, ...) that the terminal's own theme already
+# maps to something readable on its background, so a theme leaves them
+# alone. Re-picking them as fixed truecolour would override a well-tuned
+# terminal palette and make contrast worse, not better. What a theme does
+# swap is the handful of colours that are fixed values: the Fable gradient
+# endpoints, GOLD/ORANGE (256-colour 220/208) and the max rainbow wheel.
+# Against a white background those read at about 1.4-3:1.
+#   light  the same hues darkened to about 4-7:1 on white (see "Colors" and
+#          _RAINBOW_WHEEL below). The ultracode pill is left as it is: it is
+#          white text on a violet ground, readable on either background.
+#   mono   no colour at all: every SGR sequence is stripped from the finished
+#          render, and the animated effort words are printed plain, because an
+#          animation is nothing but colour. NO_COLOR (https://no-color.org),
+#          when set and not empty, selects it too.
+# Resolved here, ahead of the fast path, because a cached tick animates the
+# wheels. There is no runtime background detection: that needs an OSC 11
+# round trip on /dev/tty, which can hang and which a status line has no
+# terminal for. `install.sh --theme light` writes the choice into
+# settings.json instead.
+case "${AGENTLINE_THEME-}" in
+  light|mono) _AL_THEME="$AGENTLINE_THEME" ;;
+  *)          _AL_THEME=dark ;;
+esac
+[ -n "${NO_COLOR-}" ] && _AL_THEME=mono
+# The same 37 hues as the dark wheel, at OkLCh lightness 0.50 instead of 0.70
+# with the most chroma each hue holds there: 5.6-7.1:1 on white, where the
+# dark wheel manages 2.5-3.1:1.
+if [ "$_AL_THEME" = light ]; then
+  _RAINBOW_WHEEL=(
+    "181 0 95" "184 0 74" "186 0 48" "188 0 1" "170 54 0" "158 69 0"
+    "148 79 0" "139 85 0" "132 90 0" "124 94 0" "116 99 0" "107 103 0"
+    "96 107 0" "80 111 0" "54 117 0" "0 121 35" "0 119 68" "0 118 85"
+    "0 116 97" "0 115 105" "0 114 114" "0 113 122" "0 112 130" "0 110 138"
+    "0 108 149" "0 105 163" "0 99 183" "0 78 234" "63 48 255" "93 16 255"
+    "114 0 240" "131 0 220" "144 0 199" "155 0 178" "164 0 157" "171 0 136"
+    "176 0 115"
+  )
+fi
+
 # -> $_anim_out. $1 is the word to color, $2 the wheel array's name (bash 3.2
 # has no namerefs, so the wheel is selected once here rather than passed in).
 _anim_frame() {
@@ -255,7 +296,8 @@ _tick_now
 # terminal resize — and it is not in the payload, so without it a resize kept
 # serving the old width's render until the TTL ran out. `+set:` tells an
 # empty AGENTLINE_DROP (drop nothing) from an unset one (the default list).
-_cache_key="${input}${_US}${COLUMNS-}|${AGENTLINE_WIDTH-}|${AGENTLINE_LAYOUT-}|${AGENTLINE_DROP+set:}${AGENTLINE_DROP-}|${AGENTLINE_LINKS-}"
+# The theme, glyph set and colour overrides change the render too.
+_cache_key="${input}${_US}${COLUMNS-}|${AGENTLINE_WIDTH-}|${AGENTLINE_LAYOUT-}|${AGENTLINE_DROP+set:}${AGENTLINE_DROP-}|${AGENTLINE_LINKS-}|${_AL_THEME}|${AGENTLINE_GLYPHS-}|${AGENTLINE_COLOR_FABLE_FROM-}|${AGENTLINE_COLOR_FABLE_TO-}|${AGENTLINE_COLOR_GOLD-}|${AGENTLINE_COLOR_ORANGE-}"
 # The cache files are read with the `read` builtin, not `$(<file)`: bash 5
 # serves `$(<file)` in-process, but bash 3.2 (macOS) forks a subshell for
 # each, which cost this path two forks a second.
@@ -1256,6 +1298,87 @@ RED="\033[1;31m"
 MAGENTA="\033[1;35m"
 GOLD="\033[1;38;5;220m"
 ORANGE="\033[1;38;5;208m"
+# The Fable/Mythos gradient's endpoints, "r,g,b", painted by the layout pass.
+FABLE_FROM="255,215,90"
+FABLE_TO="255,125,25"
+if [ "$_AL_THEME" = light ]; then
+  # Darker amber to burnt orange, about 4-5:1 on white against 1.4-2.6:1.
+  FABLE_FROM="180,110,0"
+  FABLE_TO="190,70,0"
+  GOLD="\033[1;38;5;136m"
+  ORANGE="\033[1;38;5;166m"
+fi
+# Per-colour overrides, "r,g,b" each 0-255, only for the fixed colours above.
+# They live in settings.json's env block, which survives an upgrade (install.sh
+# replaces this script). A value that is not three numbers up to 255 is
+# ignored rather than half-applied.
+_rgb_val() {  # _rgb_val <r,g,b> -> $_rgb "r;g;b", status 1 when malformed
+  local v="$1" r g b c
+  _rgb=""
+  case "$v" in *[!0-9,]*|*,*,*,*) return 1 ;; ?*,?*,?*) ;; *) return 1 ;; esac
+  r="${v%%,*}"; b="${v##*,}"; g="${v#*,}"; g="${g%,*}"
+  for c in "$r" "$g" "$b"; do
+    case "$c" in ''|????*) return 1 ;; esac
+    [ $(( 10#$c )) -le 255 ] || return 1
+  done
+  _rgb="$(( 10#$r ));$(( 10#$g ));$(( 10#$b ))"
+}
+_rgb_val "${AGENTLINE_COLOR_GOLD-}"       && GOLD="\033[1;38;2;${_rgb}m"
+_rgb_val "${AGENTLINE_COLOR_ORANGE-}"     && ORANGE="\033[1;38;2;${_rgb}m"
+_rgb_val "${AGENTLINE_COLOR_FABLE_FROM-}" && FABLE_FROM="${_rgb//;/,}"
+_rgb_val "${AGENTLINE_COLOR_FABLE_TO-}"   && FABLE_TO="${_rgb//;/,}"
+
+# === Glyphs ===
+# AGENTLINE_GLYPHS=emoji (default) | ascii. Every icon comes from this one
+# table, and each carries its own trailing space, so an icon that is empty in
+# a set leaves no double space behind. That also retires the hand-tuned
+# double spaces ("⚙️  ", "🏷️  ") the emoji with a variation selector used to
+# get: the layout pass now measures an emoji + U+FE0F as the two cells it is
+# drawn in (see vis() there), so one space is right everywhere. ascii prints
+# nothing above U+007F, for terminals and fonts with no emoji or box
+# drawing, and for logs; its icons become short words ("cpu:", "git:") or
+# nothing where the value already says what it is ("$12.47", "ssh:2").
+case "${AGENTLINE_GLYPHS-}" in ascii) _AL_GLYPHS=ascii ;; *) _AL_GLYPHS=emoji ;; esac
+if [ "$_AL_GLYPHS" = ascii ]; then
+  G_SEP="|";      G_DOT="/";       G_ALERT="! ";   G_WARN="!"
+  G_LOW="";       G_MED="";        G_HIGH="";      G_XHIGH="";     G_EFFORT=""
+  G_THINK="think"; G_FAST="";      G_FABLE="* "
+  G_CTX="ctx:";   G_COMPACT="compact:"; G_RESET="~"; G_UP="+";     G_DOWN="-"
+  G_CACHE="cache:"; G_COST="";     G_DUR="dur:";   G_IN="in:";     G_OUT="out:"
+  G_WORDS="words:"; G_ARR_UP="^";  G_ARR_DN="v";   G_LINES=""
+  G_CPU="cpu:";   G_MEM="mem:";    G_DISK="disk:"
+  G_BACK="< ";    G_GIT="git:";    G_PR="pr:";     G_TREE="wt:";   G_SESSION="name:"
+  G_PR_DRAFT="draft "; G_PR_PENDING="review "; G_PR_CHANGES="changes "; G_PR_OK="approved "
+  G_EMAIL="";     G_MCP="mcp:";    G_AGENTS="agents:"; G_DONE="ok:"; G_RESUME=""
+  G_SVC="svc:";   G_SSH="";        G_CRON="";      G_PORTS="ports:"
+else
+  G_SEP="│";      G_DOT="·";       G_ALERT="⚠ ";   G_WARN="⚠️ "
+  G_LOW="🟢";     G_MED="🟡";      G_HIGH="🟠";    G_XHIGH="🔴";   G_EFFORT="⚙️ "
+  G_THINK="🧠";   G_FAST="⚡";     G_FABLE="✦ "
+  G_CTX="📊 ";    G_COMPACT="🔄 "; G_RESET="↻";    G_UP="⇡";       G_DOWN="⇣"
+  G_CACHE="🗄️ ";  G_COST="💰 ";    G_DUR="⏱️ ";    G_IN="📥 ";     G_OUT="📤 "
+  G_WORDS="🔤 ";  G_ARR_UP="↑";    G_ARR_DN="↓";   G_LINES="📝 "
+  G_CPU="🔥 ";    G_MEM="💾 ";     G_DISK="💽 "
+  G_BACK="↖ ";    G_GIT="🌿 ";     G_PR="🔀 ";     G_TREE="🌳 ";   G_SESSION="🏷️ "
+  G_PR_DRAFT="📝 "; G_PR_PENDING="👀 "; G_PR_CHANGES="🔴 "; G_PR_OK="✅ "
+  G_EMAIL="🤖 ";  G_MCP="⚙️ ";     G_AGENTS="🤖 "; G_DONE="✓";     G_RESUME="♻️ "
+  G_SVC="🛡️ ";    G_SSH="🔐 ";     G_CRON="⏰ ";   G_PORTS="🌐 "
+fi
+# Glyphs inside values the probes built — cached for AGENTLINE_PROBE_TTL, in
+# the emoji spelling whatever the set — and inside the agent list are
+# swapped here, at display time, so a change of set never replays the other
+# set's glyphs from the probe cache. A failed service is noted first: the
+# warning state reads the ✗.
+_svc_bad=""
+case "$svc_panel" in *✗*) _svc_bad=1 ;; esac
+if [ "$_AL_GLYPHS" = ascii ]; then
+  git_ab="${git_ab//↑/^}"; git_ab="${git_ab//↓/v}"
+  git_dirty="${git_dirty//±/~}"; git_dirty="${git_dirty//✖/!}"
+  svc_panel="${svc_panel//✓/ok}"; svc_panel="${svc_panel//✗/FAIL}"; svc_panel="${svc_panel//·//}"
+  active_mcps="${active_mcps//·//}"
+  active_agents="${active_agents//·//}"
+  agents_done="${agents_done//·//}"; agents_done="${agents_done//✓/ok:}"
+fi
 
 color_pct() {
   local p="$1" high="${2:-90}" mid="${3:-70}"
@@ -1282,9 +1405,9 @@ AGENTLINE_LOCAL="${AGENTLINE_LOCAL:-$HOME/.claude/agentline/local.sh}"
 # === Format Helpers ===
 effort=""
 case "$effort_raw" in
-  low)    effort="🟢${DIM}low${RESET}" ;;
-  medium) effort="🟡${CYAN}med${RESET}" ;;
-  high)   effort="🟠${ORANGE}high${RESET}" ;;
+  low)    effort="${G_LOW}${DIM}low${RESET}" ;;
+  medium) effort="${G_MED}${CYAN}med${RESET}" ;;
+  high)   effort="${G_HIGH}${ORANGE}high${RESET}" ;;
   # The /effort scale runs low < medium < high < xhigh < max, with ultracode
   # as a side mode (xhigh + workflows). The payload reports ultracode as plain
   # "xhigh"; the only place the distinction survives is the session transcript,
@@ -1315,12 +1438,19 @@ case "$effort_raw" in
       # frozen frame. Token substituted at print time, same as $CLOCK_TOKEN.
       effort="$ANIM_ULTRA_TOKEN"
     else
-      effort="🔴${RED}xhigh${RESET}"
+      effort="${G_XHIGH}${RED}xhigh${RESET}"
     fi ;;
   # max mirrors the picker's rainbow-animated look with a live-ticking wheel.
   max)    effort="$ANIM_MAX_TOKEN" ;;
-  *)      [ -n "$effort_raw" ] && effort="⚙️  $effort_raw" ;;
+  *)      [ -n "$effort_raw" ] && effort="${G_EFFORT}$effort_raw" ;;
 esac
+# mono: an animation is only colour, so the word is printed as it is.
+if [ "$_AL_THEME" = mono ]; then
+  case "$effort" in
+    "$ANIM_MAX_TOKEN")   effort=max ;;
+    "$ANIM_ULTRA_TOKEN") effort=ultracode ;;
+  esac
+fi
 
 cost_fmt=""
 [ -n "$cost" ] && cost_fmt=$(printf "%.2f" "$cost")
@@ -1408,9 +1538,9 @@ pace_arrow() {  # pace_arrow <used%> <resets_epoch> <window_secs> <min_elapsed%>
   el=$(( (win - rem) * 100 / win ))
   [ "$el" -ge "$4" ] || return
   d=$(( 10#$u - el ))  # 10#: a "08" is decimal, not bad octal
-  if [ "$d" -ge 15 ]; then _pace_out="${RED}⇡${d}%${RESET}"
-  elif [ "$d" -ge 5 ]; then _pace_out="${YELLOW}⇡${d}%${RESET}"
-  elif [ "$d" -le -5 ]; then _pace_out="${DIM}⇣$(( -d ))%${RESET}"
+  if [ "$d" -ge 15 ]; then _pace_out="${RED}${G_UP}${d}%${RESET}"
+  elif [ "$d" -ge 5 ]; then _pace_out="${YELLOW}${G_UP}${d}%${RESET}"
+  elif [ "$d" -le -5 ]; then _pace_out="${DIM}${G_DOWN}$(( -d ))%${RESET}"
   fi
 }
 
@@ -1495,10 +1625,10 @@ if [ -n "$CACHE_BASE" ] && [ -n "$payload_transcript" ] && [ -f "$payload_transc
 fi
 
 thinking_icon=""
-[ "$thinking" = "True" ] && thinking_icon="🧠"
+[ "$thinking" = "True" ] && thinking_icon="$G_THINK"
 
 fast_icon=""
-[ "$fast" = "True" ] && fast_icon="⚡Fast"
+[ "$fast" = "True" ] && fast_icon="${G_FAST}Fast"
 
 # === Model Color ===
 model_color="$CYAN"
@@ -1514,7 +1644,9 @@ GRAD_OPEN="@@${_AL_TOK}AGENTLINE_GRAD@@"
 GRAD_CLOSE="@@${_AL_TOK}AGENTLINE_GRAD_END@@"
 case "$model_raw" in
   claude-fable*|claude-mythos*)
-    model="${GRAD_OPEN}✦ ${model}${GRAD_CLOSE}"
+    if [ "$_AL_THEME" = mono ]; then model="${G_FABLE}${model}"
+    else model="${GRAD_OPEN}${G_FABLE}${model}${GRAD_CLOSE}"
+    fi
     model_color="" ;;
   claude-opus*)  model_color="$MAGENTA" ;;
   claude-sonnet*) model_color="$CYAN" ;;
@@ -1523,7 +1655,7 @@ esac
 
 lines_fmt=""
 if [ -n "$lines_added" ] || [ -n "$lines_removed" ]; then
-  lines_fmt="\033[1;32m+${lines_added:-0}\033[0m \033[1;31m-${lines_removed:-0}\033[0m"
+  lines_fmt="${GREEN}+${lines_added:-0}${RESET} ${RED}-${lines_removed:-0}${RESET}"
 fi
 
 # LC_ALL=C pins the day abbreviation to English regardless of the host locale.
@@ -1571,7 +1703,7 @@ _link() {  # _link <url> <text> -> $_link_out, the text alone when links are off
 }
 
 # === Build Output ===
-P=" ${DIM}│${RESET} "
+P=" ${DIM}${G_SEP}${RESET} "
 
 # Every segment is emitted as a named record instead of being appended to a
 # fixed line: the layout pass at the end ("Layout") decides which line each
@@ -1593,7 +1725,7 @@ _WARNED=""
 # prepended, not a replacement, because the host and session-independent
 # segments after it are still correct. The layout pass puts it at the front
 # of the first line whatever the layout, and never drops it.
-[ -n "$payload_err" ] && _seg warn "${DIM}⚠ payload${RESET}"
+[ -n "$payload_err" ] && _seg warn "${DIM}${G_ALERT}payload${RESET}"
 if [ -n "$model" ]; then
   _seg model "${model_color}${model}${thinking_icon:+ ${thinking_icon}}${RESET}"
 fi
@@ -1601,10 +1733,10 @@ _seg effort "$effort"
 [ -n "$fast_icon" ] && _seg fast "${YELLOW}${fast_icon}${RESET}"
 if [ -n "$used_pct" ]; then
   c=$(color_pct "$used_pct" 80 60)
-  ctx_icon="📊"
+  ctx_icon="$G_CTX"
   ctx_tag=""
   if awk -v p="$used_pct" 'BEGIN {exit !(p >= 80)}'; then
-    ctx_icon="⚠️ "
+    ctx_icon="$G_WARN"
   elif [ -n "$warn_200k" ]; then
     # On a 1M-window model 25% is already past 200k tokens — where long-context
     # pricing and quality change — yet the percentage alone reads as harmless.
@@ -1612,11 +1744,11 @@ if [ -n "$used_pct" ]; then
     # the warning, in yellow (this branch is below the 80% red), with a tag
     # saying why. The parser has already ignored it on a 200k window, where
     # it is just "about 100%" again.
-    ctx_icon="⚠️ "
+    ctx_icon="$G_WARN"
     c="$YELLOW"
     ctx_tag=" ${DIM}>200k${RESET}"
   fi
-  _seg ctx "${c}${ctx_icon} $(printf '%.0f' "$used_pct")%${RESET}${ctx_tag}"
+  _seg ctx "${c}${ctx_icon}$(printf '%.0f' "$used_pct")%${RESET}${ctx_tag}"
 elif [ "$compact_n" -gt 0 ] && [ -n "$compact_post" ]; then
   # Just compacted, and the payload has no figure until the next API call:
   # an approximate one from the compaction's own postTokens (see
@@ -1627,14 +1759,14 @@ elif [ "$compact_n" -gt 0 ] && [ -n "$compact_post" ]; then
     *)
       if [ ${#ctx_size} -le 12 ] && [ ${#compact_post} -le 12 ] && [ $(( 10#$ctx_size )) -gt 0 ]; then
         ctx_est=$(( (10#$compact_post * 100 + 10#$ctx_size / 2) / 10#$ctx_size ))
-        [ "$ctx_est" -le 100 ] && _seg ctx "${DIM}📊 ~${ctx_est}%${RESET}"
+        [ "$ctx_est" -le 100 ] && _seg ctx "${DIM}${G_CTX}~${ctx_est}%${RESET}"
       fi ;;
   esac
 fi
-[ "$compact_n" -gt 0 ] && _seg compact "${DIM}🔄 ${compact_n}${RESET}"
+[ "$compact_n" -gt 0 ] && _seg compact "${DIM}${G_COMPACT}${compact_n}${RESET}"
 if [ -n "$five_hour" ]; then
   c=$(color_pct "$five_hour" 90 70)
-  reset_part=""; [ -n "$five_hour_reset_fmt" ] && reset_part="${DIM}↻${five_hour_reset_fmt}${RESET}"
+  reset_part=""; [ -n "$five_hour_reset_fmt" ] && reset_part="${DIM}${G_RESET}${five_hour_reset_fmt}${RESET}"
   pace_arrow "$five_hour" "$five_hour_reset" 18000 10
   _seg 5h "${c}S:$(printf '%.0f' $five_hour)%${RESET}${_pace_out:+ }${_pace_out}${reset_part:+ }${reset_part}"
 fi
@@ -1816,7 +1948,7 @@ case "$seven_day_top" in
   *) week_body="${week_body:+${week_body} }${ORANGE}F:$(printf '%.0f' "$seven_day_top")%${RESET}" ;;
 esac
 if [ -n "$week_body" ]; then
-  reset_part=""; [ -n "$seven_day_reset_fmt" ] && reset_part="${DIM}↻${seven_day_reset_fmt}${RESET}"
+  reset_part=""; [ -n "$seven_day_reset_fmt" ] && reset_part="${DIM}${G_RESET}${seven_day_reset_fmt}${RESET}"
   _seg week "${week_body}${reset_part:+ }${reset_part}"
 fi
 
@@ -1853,7 +1985,7 @@ if [ -n "$pc_state" ]; then
   pc_gone=0
   if [ -n "$pc_exp" ] && [ "$pc_exp" -le "$_now_epoch" ]; then pc_gone=1; pc_cause=ttl; fi
   if [ "$pc_state" = cold ] || [ "$pc_gone" = 1 ]; then
-    pc_body="${RED}cold${pc_cause:+·${pc_cause}}${RESET}${pc_recache:+ ${DIM}~${pc_recache}${RESET}}"
+    pc_body="${RED}cold${pc_cause:+${G_DOT}${pc_cause}}${RESET}${pc_recache:+ ${DIM}~${pc_recache}${RESET}}"
     _WARNED="${_WARNED},cache"
   elif [ -n "$pc_exp" ]; then
     pc_warn=60; [ "$pc_ttl" = 1h ] && pc_warn=300
@@ -1863,7 +1995,7 @@ if [ -n "$pc_state" ]; then
     esac
     pc_rem=$(( pc_exp - _now_epoch ))
     if [ "$pc_rem" -gt 0 ] && [ "$pc_rem" -le "$pc_warn" ]; then
-      pc_body="${YELLOW}↻${PCEXP_TOKEN}${pc_exp}@@${RESET}"; _WARNED="${_WARNED},cache"
+      pc_body="${YELLOW}${G_RESET}${PCEXP_TOKEN}${pc_exp}@@${RESET}"; _WARNED="${_WARNED},cache"
       # The layout pass measures the countdown before it is filled in, at
       # the widest it can print within this warn window: "0m00s" was a cell
       # short of the "12m00s" an AGENTLINE_CACHE_WARN of 600+ prints.
@@ -1874,25 +2006,25 @@ if [ -n "$pc_state" ]; then
     if [ "$pc_hit" -lt 25 ]; then c="$RED"; elif [ "$pc_hit" -lt 75 ]; then c="$YELLOW"; else c="$GREEN"; fi
     pc_body="${c}${pc_hit}%${RESET}${pc_body:+ }${pc_body}"
   fi
-  [ -n "$pc_body" ] && _seg cache "🗄️ ${pc_body}"
+  [ -n "$pc_body" ] && _seg cache "${G_CACHE}${pc_body}"
 fi
-[ -n "$cost_fmt" ]       && _seg cost "💰 \$${cost_fmt}"
-[ -n "$duration_fmt" ]   && _seg dur "⏱️  ${duration_fmt}"
-[ -n "$tokens_in_fmt" ]  && _seg tok_in "📥 ${tokens_in_fmt}"
-[ -n "$tokens_out_fmt" ] && _seg tok_out "📤 ${tokens_out_fmt}"
+[ -n "$cost_fmt" ]       && _seg cost "${G_COST}\$${cost_fmt}"
+[ -n "$duration_fmt" ]   && _seg dur "${G_DUR}${duration_fmt}"
+[ -n "$tokens_in_fmt" ]  && _seg tok_in "${G_IN}${tokens_in_fmt}"
+[ -n "$tokens_out_fmt" ] && _seg tok_out "${G_OUT}${tokens_out_fmt}"
 # Word counter (optional hook): ↑ words you typed, ↓ words Claude wrote.
 if [ -n "$words_in_w" ] || [ -n "$words_out_w" ]; then
-  _seg words "🔤 ${DIM}↑${RESET}${words_in_w:-0} ${DIM}↓${RESET}${words_out_w:-0}"
+  _seg words "${G_WORDS}${DIM}${G_ARR_UP}${RESET}${words_in_w:-0} ${DIM}${G_ARR_DN}${RESET}${words_out_w:-0}"
 fi
-[ -n "$lines_fmt" ]      && _seg lines "📝 ${lines_fmt}"
-[ -n "$cpu_usage" ]      && _seg cpu "🔥 ${cpu_usage}"
-[ -n "$mem_used_gb" ]    && _seg mem "💾 ${mem_used_gb}"
+[ -n "$lines_fmt" ]      && _seg lines "${G_LINES}${lines_fmt}"
+[ -n "$cpu_usage" ]      && _seg cpu "${G_CPU}${cpu_usage}"
+[ -n "$mem_used_gb" ]    && _seg mem "${G_MEM}${mem_used_gb}"
 if [ -n "$disk_pct" ]; then
   if [ "$disk_pct" -ge 80 ]; then
-    _seg disk "${RED}⚠️ 💽 ${disk_pct}%${RESET}"; _WARNED="${_WARNED},disk"
+    _seg disk "${RED}${G_WARN}${G_DISK}${disk_pct}%${RESET}"; _WARNED="${_WARNED},disk"
   else
     c=$(color_pct "$disk_pct" 90 80)
-    _seg disk "${c}💽 ${disk_pct}%${RESET}"
+    _seg disk "${c}${G_DISK}${disk_pct}%${RESET}"
   fi
 fi
 
@@ -1904,7 +2036,7 @@ fi
 # shows nothing. The name comes by expansion, no fork.
 _pd="${project_dir%/}"; _cd="${cwd_disp%/}"
 if [ -n "$folder" ] && [ -n "$_pd" ] && [ "$_pd" != "$_cd" ] && [ -n "${_pd##*/}" ]; then
-  _seg dir "${DIM}↖ ${_pd##*/}${RESET} ${BLUE}${folder}${RESET}"
+  _seg dir "${DIM}${G_BACK}${_pd##*/}${RESET} ${BLUE}${folder}${RESET}"
 else
   [ -n "$folder" ] && _seg dir "${BLUE}${folder}${RESET}"
 fi
@@ -1913,29 +2045,29 @@ fi
 # probe, and each simply absent when zero or not measured.
 if [ -n "$git_branch" ]; then
   _link "$git_url" "$git_repo"
-  _seg git "${MAGENTA}🌿 ${RESET}${DIM}${git_repo:+${_link_out}@}${RESET}${MAGENTA}${git_branch}${RESET}${git_ab:+ ${git_ab}}${git_dirty:+ ${DIM}${git_dirty}${RESET}}"
+  _seg git "${MAGENTA}${G_GIT}${RESET}${DIM}${git_repo:+${_link_out}@}${RESET}${MAGENTA}${git_branch}${RESET}${git_ab:+ ${git_ab}}${git_dirty:+ ${DIM}${git_dirty}${RESET}}"
 fi
 # Pull request: "🔀 ✅ #1234" (a GitLab MR is !1234), the review state first.
 # The footer already shows the PR number; what this adds is the review
 # state at a glance and a link. An unknown state shows the number alone.
 if [ -n "$pr_number" ]; then
   case "$pr_state" in
-    draft)             pr_glyph="📝 " ;;
-    pending)           pr_glyph="👀 " ;;
-    changes_requested) pr_glyph="🔴 " ;;
-    approved)          pr_glyph="✅ " ;;
+    draft)             pr_glyph="$G_PR_DRAFT" ;;
+    pending)           pr_glyph="$G_PR_PENDING" ;;
+    changes_requested) pr_glyph="$G_PR_CHANGES" ;;
+    approved)          pr_glyph="$G_PR_OK" ;;
     *)                 pr_glyph="" ;;
   esac
   pr_ref="#${pr_number}"; [ "$pr_kind" = mr ] && pr_ref="!${pr_number}"
   _link "$pr_url" "$pr_ref"
-  _seg pr "🔀 ${pr_glyph}${CYAN}${_link_out}${RESET}"
+  _seg pr "${G_PR}${pr_glyph}${CYAN}${_link_out}${RESET}"
 fi
 # Linked worktree: "🌳 name", only when the session runs in one (the main
 # clone has neither field). The last path component, whether Claude Code
 # hands over a name or a path.
 wt="${git_worktree:-$wt_name}"; wt="${wt%/}"; wt="${wt##*/}"
-[ -n "$wt" ] && _seg worktree "🌳 ${GREEN}${wt}${RESET}"
-[ -n "$session_name_fmt" ] && _seg session "🏷️  ${session_name_fmt}"
+[ -n "$wt" ] && _seg worktree "${G_TREE}${GREEN}${wt}${RESET}"
+[ -n "$session_name_fmt" ] && _seg session "${G_SESSION}${session_name_fmt}"
 
 # Masked email. The payload's account.email is free; only when it is absent is
 # `claude auth status` consulted, and that result is cached for 60 seconds --
@@ -2040,15 +2172,15 @@ _mask_email() {  # _mask_email <address> -> $masked_email
   done
 }
 _mask_email "$account_email"
-[ -n "$masked_email" ] && _seg email "🤖 ${DIM}${masked_email}${RESET}"
+[ -n "$masked_email" ] && _seg email "${G_EMAIL}${DIM}${masked_email}${RESET}"
 _seg date "${DIM}${date_str}${RESET}"
 _seg clock "${CYAN}${time_str}${RESET}"
 
 # Line 3 — Claude layer: MCP servers + active agents + resume command
-[ -n "$active_mcps" ]   && _seg mcp "⚙️  ${DIM}${active_mcps}${RESET}"
+[ -n "$active_mcps" ]   && _seg mcp "${G_MCP}${DIM}${active_mcps}${RESET}"
 # Running agents in yellow, then the ones that just finished in green.
 if [ -n "$active_agents$agents_done" ]; then
-  _seg agents "🤖 ${active_agents:+${YELLOW}${active_agents}${RESET}}${active_agents:+${agents_done:+ ${DIM}·${RESET} }}${agents_done:+${GREEN}${agents_done}${RESET}}"
+  _seg agents "${G_AGENTS}${active_agents:+${YELLOW}${active_agents}${RESET}}${active_agents:+${agents_done:+ ${DIM}${G_DOT}${RESET} }}${agents_done:+${GREEN}${agents_done}${RESET}}"
 fi
 # Recovery command: brings the session back after an unexpected exit.
 # `claude --resume` takes a session ID. A session name is free-form text, so
@@ -2065,19 +2197,19 @@ if [ -n "$session_id" ]; then
 elif [ -n "$session_name" ]; then
   resume_cmd="claude --resume \"${session_name//\"/\\\"}\""
 fi
-[ -n "$resume_cmd" ] && _seg resume "♻️  ${DIM}${resume_cmd}${RESET}"
+[ -n "$resume_cmd" ] && _seg resume "${G_RESUME}${DIM}${resume_cmd}${RESET}"
 
 # Line 4 — System layer: service health + ssh + cron + dev servers
-[ -n "$svc_panel" ] && _seg services "🛡️ ${svc_panel}"
-case "$svc_panel" in *✗*) _WARNED="${_WARNED},services" ;; esac
+[ -n "$svc_panel" ] && _seg services "${G_SVC}${svc_panel}"
+[ -n "$_svc_bad" ] && _WARNED="${_WARNED},services"
 if [ -n "$ssh_count" ] && [ "$ssh_count" -gt 0 ]; then
   ssh_c="$DIM"; [ "$ssh_count" -gt 1 ] && ssh_c="$YELLOW"
-  _seg ssh "🔐 ${ssh_c}ssh:${ssh_count}${RESET}"
+  _seg ssh "${G_SSH}${ssh_c}ssh:${ssh_count}${RESET}"
 fi
 if [ -n "$cron_count" ] && [ "$cron_count" -gt 0 ]; then
-  _seg cron "⏰ ${DIM}cron:${cron_count}${RESET}"
+  _seg cron "${G_CRON}${DIM}cron:${cron_count}${RESET}"
 fi
-[ -n "$dev_ports" ] && _seg ports "🌐 ${DIM}${dev_ports}${RESET}"
+[ -n "$dev_ports" ] && _seg ports "${G_PORTS}${DIM}${dev_ports}${RESET}"
 
 [ -n "$_AL_DOCTOR" ] && _dt_mark segments
 # === Layout ===
@@ -2097,9 +2229,10 @@ fi
 # The width: $AGENTLINE_WIDTH when set (an explicit override wins), else the
 # live terminal width, else 120. Claude Code >= 2.1.153 exports COLUMNS to the
 # status-line command; 2 cells come off it as a margin, because COLUMNS is
-# read when the command starts and can trail a resize, and because the
-# emoji-with-VS16 glyphs (⚠️ ♻️ ⚙️ 🛡️) are counted one cell narrower than
-# some terminals draw them.
+# read when the command starts and can trail a resize, and because terminals
+# disagree on emoji widths: an emoji with a variation selector (⚠️ ♻️ ⚙️ 🛡️)
+# is measured at two cells (see vis()), which a terminal that ignores the
+# selector draws one cell narrower.
 #
 # Fit mode. When the width is known — COLUMNS is there — every line, not just
 # 3 and 4, is fitted to it: segments are dropped from an over-wide line in
@@ -2160,9 +2293,17 @@ drop = [n for n in re.split(r'[\s,]+', drop_spec) if n and n not in KEEP and n n
 
 # The Fable/Mythos model name arrives between GRAD_OPEN/GRAD_CLOSE markers
 # and is painted here, one truecolor step per character, amber to orange.
+# The endpoints come from bash as "r,g,b" (theme and overrides, see "Colors").
+def rgb(v, default):
+    try:
+        t = tuple(int(x) for x in v.split(','))
+        return t if len(t) == 3 and all(0 <= x <= 255 for x in t) else default
+    except ValueError:
+        return default
+FABLE = rgb(sys.argv[15], (255, 215, 90)), rgb(sys.argv[16], (255, 125, 25))
 def gradient(m):
     s = m.group(1)
-    start, end = (255, 215, 90), (255, 125, 25)
+    start, end = FABLE
     n = max(len(s) - 1, 1)
     out = []
     for i, ch in enumerate(s):
@@ -2208,7 +2349,24 @@ def vis(s):
     # text between opener and closer is drawn. The URL holds no backslash
     # (cleaned where it was made), so the backslash-form BEL ends it.
     s = re.sub(r'(?:\\033|\x1b)\]8;;[^\\\x07]*(?:\\a|\x07)', '', s)
-    return sum(2 if unicodedata.east_asian_width(c) in ('W', 'F') else 1 for c in s)
+    # Wide and fullwidth characters take two cells. A variation selector 16
+    # (U+FE0F) asks for the emoji presentation of the character before it,
+    # which terminals draw two cells wide, so it makes that character two
+    # cells whatever its own width (⚠️, ⚙️, 🛡️: the bases are narrow). Other
+    # combining marks and format characters (U+FE0E, ZWJ) take none. These
+    # glyphs used to come out right by accident — U+FE0F was counted as a
+    # cell of its own — and the icons that carry one also got a hand-added
+    # second space; the glyph table now gives every icon exactly one.
+    n = prev = 0
+    for c in s:
+        if c == '\N{VARIATION SELECTOR-16}':
+            n, prev = n + 2 - prev, 2
+        elif unicodedata.category(c) in ('Mn', 'Me', 'Cf'):
+            continue
+        else:
+            prev = 2 if unicodedata.east_asian_width(c) in ('W', 'F') else 1
+            n += prev
+    return n
 
 def wrap(texts):
     rows, cur = [], ''
@@ -2286,7 +2444,8 @@ PYEOF
 # lines vanished. A here-string costs no fork.
 out=$(python3 -I -c "$_AL_PY" "$STATUSLINE_WIDTH" "$P" "${AGENTLINE_LAYOUT:-$AGENTLINE_LAYOUT_DEFAULT}" \
   "$AGENTLINE_LAYOUT_DEFAULT" "$_fit" "${AGENTLINE_DROP-$AGENTLINE_DROP_DEFAULT}" \
-  "$CLOCK_TOKEN" "$ANIM_MAX_TOKEN" "$ANIM_ULTRA_TOKEN" "$GRAD_OPEN" "$GRAD_CLOSE" "$PCEXP_TOKEN" "$_WARNED" "$pc_meas" <<< "$SEGS")
+  "$CLOCK_TOKEN" "$ANIM_MAX_TOKEN" "$ANIM_ULTRA_TOKEN" "$GRAD_OPEN" "$GRAD_CLOSE" "$PCEXP_TOKEN" "$_WARNED" "$pc_meas" \
+  "$FABLE_FROM" "$FABLE_TO" <<< "$SEGS")
 _layout_rc=$?
 [ -n "$_AL_DOCTOR" ] && _dt_mark layout
 
@@ -2319,6 +2478,30 @@ if [ "$_layout_rc" != 0 ] && [ -z "$out" ] && [ -n "$SEGS" ]; then
       esac
     done
     [ -n "$_row" ] && out="${out:+${out}\\n}${_row}"
+  done
+fi
+
+# mono (see "Theme"): every SGR sequence goes, in both spellings the render
+# holds — "\033[...m" still in backslash form for printf %b, and a real ESC
+# from color_pct and the gradient. Done once on the finished render, before
+# it is cached, rather than at each colour site: the service panel is built
+# with its colours inside the probe cache, and local.sh may set colours of
+# its own. Only [0-9;]* then m is taken; anything else after an ESC [ is
+# left as it was (no cleaned string can hold one). OSC-8 links are not
+# colour and stay. Slow path only, by parameter expansion.
+if [ "$_AL_THEME" = mono ]; then
+  for _esc in '\033[' $'\033['; do
+    _rest="$out"; out=""
+    while :; do
+      case "$_rest" in *"$_esc"*) ;; *) break ;; esac
+      out="${out}${_rest%%"$_esc"*}"; _rest="${_rest#*"$_esc"}"
+      _par="${_rest%%m*}"
+      case "$_rest" in
+        *m*) case "$_par" in *[!0123456789\;]*) out="${out}${_esc}" ;; *) _rest="${_rest#*m}" ;; esac ;;
+        *) out="${out}${_esc}" ;;
+      esac
+    done
+    out="${out}${_rest}"
   done
 fi
 
@@ -2494,7 +2677,9 @@ if [ -n "$_AL_DOCTOR" ]; then
     width "$STATUSLINE_WIDTH$([ "$_fit" = 1 ] && echo ', fit mode' || echo ', no fit: lines 1-2 are never trimmed')" \
     layout "${AGENTLINE_LAYOUT:-default}" \
     drop "${AGENTLINE_DROP-default}" \
-    links "$([ "$_links" = 1 ] && echo on || echo 'off (AGENTLINE_LINKS=0 or a multiplexer)')"
+    links "$([ "$_links" = 1 ] && echo on || echo 'off (AGENTLINE_LINKS=0 or a multiplexer)')" \
+    theme "$_AL_THEME$([ -n "${NO_COLOR-}" ] && echo ' (NO_COLOR is set)')" \
+    glyphs "$_AL_GLYPHS"
   _dt_pl="stdin, ${#input} bytes"
   [ -n "$_dt_sample" ] && _dt_pl="built-in sample (stdin is a terminal; pipe a payload in to diagnose it)"
   [ -z "$input" ] && _dt_pl="empty stdin"

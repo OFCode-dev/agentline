@@ -213,7 +213,18 @@ wide = open(sys.argv[2], encoding='utf-8').read()
 width = int(sys.argv[3])
 SEP = ' │ '
 def vis(s):
-    return sum(2 if unicodedata.east_asian_width(c) in ('W', 'F') else 1 for c in s)
+    # As agentline.sh measures: VS16 makes the character before it two
+    # cells, other combining marks and format characters take none.
+    n = prev = 0
+    for c in s:
+        if c == '\N{VARIATION SELECTOR-16}':
+            n, prev = n + 2 - prev, 2
+        elif unicodedata.category(c) in ('Mn', 'Me', 'Cf'):
+            continue
+        else:
+            prev = 2 if unicodedata.east_asian_width(c) in ('W', 'F') else 1
+            n += prev
+    return n
 def segs(rows):
     return [s for r in rows for s in r.split(SEP)]
 n_rows, w_rows = narrow.splitlines()[2:], wide.splitlines()[2:]
@@ -466,6 +477,102 @@ for f in pwned pwned2 pwned3 pwned4; do
 done
 check "claude CLI fallback never ran" [ ! -e "$T/claude-calls" ]
 
+# --- Themes and glyph sets ----------------------------------------------------
+# ascii prints nothing above U+007F, mono no SGR sequence at all, in every
+# fixture. A fixture whose own data (payload, agent labels, probe set) is not
+# ASCII is skipped for ascii: those bytes are the user's, not agentline's.
+all_ascii() { python3 -c 'import sys; sys.exit(any(b > 127 for b in open(sys.argv[1], "rb").read()))' "$1"; }
+n_ascii=0
+for tpl in "$FIX"/payloads/*.json; do
+  name=$(basename "$tpl" .json)
+  p="$PAY/$name.json"; fill "$tpl" "$p"
+  pset=busy; [ -f "$FIX/payloads/$name.probes" ] && pset=$(cat "$FIX/payloads/$name.probes")
+  prepare "$name" "$p"
+  render "$p" 120 AGENTLINE_THEME=mono
+  check "$name mono: exit 0 (got $rc)" [ "$rc" = 0 ]
+  if grep -q "${ESC}\[" "$T/out" || grep -qF '\033[' "$T/out"; then fail "$name mono: an SGR sequence is left"; else pass; fi
+  render "$p" 120 AGENTLINE_THEME=mono  # a cached tick, animation tokens included
+  if grep -q "${ESC}\[" "$T/out"; then fail "$name mono tick: an SGR sequence is left"; else pass; fi
+  if all_ascii "$tpl" && { [ ! -f "$FIX/payloads/$name.agents" ] || LC_ALL=C sed 's/^✓//' "$FIX/payloads/$name.agents" > "$T/lab" && all_ascii "$T/lab"; } \
+     && { [ "$pset" != escapes ]; }; then
+    prepare "$name" "$p"
+    render "$p" 120 AGENTLINE_GLYPHS=ascii
+    check "$name ascii: exit 0 (got $rc)" [ "$rc" = 0 ]
+    check "$name ascii: stderr empty" [ ! -s "$T/err" ]
+    normalize "$T/out" "$T/got"
+    if all_ascii "$T/got"; then pass; else fail "$name ascii: non-ASCII left: $(LC_ALL=C grep -n "$(printf '[\200-\377]')" "$T/got" | head -2)"; fi
+    n_ascii=$((n_ascii + 1))
+  fi
+done
+check "ascii: most fixtures checked ($n_ascii)" [ "$n_ascii" -ge 15 ]
+prepare full "$PAY/full.json"
+render "$PAY/full.json" 120 NO_COLOR=1
+check "NO_COLOR selects mono" sh -c "! grep -q '${ESC}\[' '$T/out'"
+prepare full "$PAY/full.json"
+render "$PAY/full.json" 120 NO_COLOR=
+check "an empty NO_COLOR is no request" grep -q "${ESC}\[" "$T/out"
+prepare agents-overflow "$PAY/agents-overflow.json"
+render "$PAY/agents-overflow.json" 200 AGENTLINE_GLYPHS=ascii
+normalize "$T/out" "$T/got"
+check "ascii: agents joined with /, done as ok:" grep -qF 'agents:explore the repo / review #a1b2c3 / fork / codex round 1 / +2 / ok:code review | claude --resume agents-0001' "$T/got"
+prepare full "$PAY/full.json"
+render "$PAY/full.json" 200 AGENTLINE_GLYPHS=ascii
+normalize "$T/out" "$T/got"
+check "ascii: services, git counts" grep -qE 'svc:Web ok / DB FAIL / Cache ok' "$T/got"
+check "ascii: a failed service still warns (never dropped)" sh -c "grep -q 'DB FAIL' '$T/got'"
+# light swaps only the fixed colours: the Fable gradient, GOLD/ORANGE and
+# the max rainbow; the ANSI-16 roles stay the terminal's.
+fill "$FIX/payloads/fable-max.json" "$PAY/fable-max.json"
+prepare fable-max "$PAY/fable-max.json"
+render "$PAY/fable-max.json" 120
+check "dark: Fable gradient starts amber" grep -q "38;2;255;215;90m" "$T/out"
+prepare fable-max "$PAY/fable-max.json"
+render "$PAY/fable-max.json" 120 AGENTLINE_THEME=light
+check "light: Fable gradient starts dark amber" grep -q "38;2;180;110;0m" "$T/out"
+check "light: no dark-wheel or dark-gradient colour" sh -c "! grep -q '38;2;255;' '$T/out'"
+check "light: ANSI-16 roles untouched" grep -qE "${ESC}\[(1;36|2)m" "$T/out"
+prepare fable-max "$PAY/fable-max.json"
+render "$PAY/fable-max.json" 120 AGENTLINE_THEME=light
+check "light: cached tick keeps the light wheel" sh -c "! grep -q '38;2;255;' '$T/out'"
+prepare full "$PAY/full.json"
+render "$PAY/full.json" 120 AGENTLINE_THEME=light
+check "light: ORANGE is 166" grep -q "38;5;166m" "$T/out"
+prepare fable-max "$PAY/fable-max.json"
+render "$PAY/fable-max.json" 120 AGENTLINE_THEME=bogus
+check "unknown theme is dark" grep -q "38;2;255;215;90m" "$T/out"
+# Overrides: "r,g,b" each 0-255, or ignored whole.
+prepare full "$PAY/full.json"
+render "$PAY/full.json" 120 AGENTLINE_COLOR_ORANGE=1,2,3
+check "override: ORANGE" grep -q "38;2;1;2;3m" "$T/out"
+for bad in 300,0,0 1,2 1,2,3,4 a,b,c ,1,2 1,,2; do
+  prepare full "$PAY/full.json"
+  render "$PAY/full.json" 120 AGENTLINE_COLOR_ORANGE="$bad"
+  check "override: bad ORANGE '$bad' ignored" grep -q "38;5;208m" "$T/out"
+done
+prepare fable-max "$PAY/fable-max.json"
+render "$PAY/fable-max.json" 120 AGENTLINE_COLOR_FABLE_FROM=10,20,30 AGENTLINE_COLOR_FABLE_TO=40,50,60
+check "override: Fable gradient from" grep -q "38;2;10;20;30m" "$T/out"
+check "override: Fable gradient to" grep -q "38;2;40;50;60m" "$T/out"
+# Several emoji with a variation selector on one line are measured at the
+# cells they take: base + U+FE0F = 2. The line fits a width of exactly its
+# measured size and wraps at one less.
+prepare full "$PAY/full.json"
+render "$PAY/full.json" 1000 AGENTLINE_LAYOUT="mcp,resume,services,disk" AGENTLINE_DROP=
+normalize "$T/out" "$T/got"
+vs_w=$(python3 -c '
+import sys, unicodedata as u
+s = open(sys.argv[1], encoding="utf-8").read().splitlines()[0]
+print(sum(2 if u.east_asian_width(c) in "WF" else 1 for c in s if c != "️") + s.count("️"))' "$T/got")
+check "vs16: the line holds three VS16 emoji" [ "$(grep -o "$(printf '\357\270\217')" "$T/got" | wc -l | tr -d ' ')" -ge 3 ]
+prepare full "$PAY/full.json"
+render "$PAY/full.json" "$vs_w" AGENTLINE_LAYOUT="mcp,resume,services,disk" AGENTLINE_DROP=
+normalize "$T/out" "$T/got"
+check "vs16: fits at its measured width ($vs_w)" [ "$(wc -l < "$T/got" | tr -d ' ')" = 1 ]
+prepare full "$PAY/full.json"
+render "$PAY/full.json" "$(( vs_w - 1 ))" AGENTLINE_LAYOUT="mcp,resume,services,disk" AGENTLINE_DROP=
+normalize "$T/out" "$T/got"
+check "vs16: wraps one cell narrower" [ "$(wc -l < "$T/got" | tr -d ' ')" = 2 ]
+
 # Colour is stripped from the goldens, so the context warning's colour is
 # asserted on the raw render: exceeds_200k_tokens on a 1M window forces the
 # yellow ⚠️ at 25%; on a 200k window the same flag is ignored (green 📊).
@@ -475,7 +582,7 @@ ctx_raw() {  # ctx_raw <fixture> -> raw render in $T/out
   render "$PAY/$1.json" 120
 }
 ctx_raw one-million-over-200k
-check "1M window over 200k: yellow warning" grep -q "${ESC}\[1;33m⚠️  25%" "$T/out"
+check "1M window over 200k: yellow warning" grep -q "${ESC}\[1;33m⚠️ 25%" "$T/out"
 ctx_raw standard-window
 check "200k window: exceeds flag ignored, green" grep -q "${ESC}\[1;32m📊 30%" "$T/out"
 # Garbage in numeric fields hides those segments instead of printing "0%"
@@ -495,7 +602,7 @@ ctx_raw huge-numbers
 check "huge numbers: exit 0 (got $rc)" [ "$rc" = 0 ]
 check "huge numbers: stderr empty" [ ! -s "$T/err" ]
 check "huge numbers: model still parsed" grep -q 'Opus 5' "$T/out"
-check "huge numbers: huge window forces the yellow warning" grep -q "${ESC}\[1;33m⚠️  25%" "$T/out"
+check "huge numbers: huge window forces the yellow warning" grep -q "${ESC}\[1;33m⚠️ 25%" "$T/out"
 if grep -qE 'S:|W:|💰|⏱️|📥' "$T/out"; then fail "huge numbers: a bad or absurd field leaked a segment"; else pass; fi
 check "huge numbers: a sane field next to them still shows" grep -q '📤 5.0k' "$T/out"
 # An integer literal past 4300 digits made json.loads itself raise on Python
@@ -1201,6 +1308,11 @@ prepare full "$p"; render "$p" 20 AGENTLINE_DROP="model,ctx,5h,week,cost"; norma
 for want in 'Opus 5' '📊 42%' 'S:71%' 'W:58%'; do
   check "layout: AGENTLINE_DROP cannot drop $want" has "$T/got" "$want"
 done
+# cost goes where bringing it back would cost a row: a layout of just the
+# protected four and cost, so the result does not hang on how the other
+# segments of line 1 happen to pack at this width.
+prepare full "$p"; render "$p" 20 AGENTLINE_DROP="model,ctx,5h,week,cost" AGENTLINE_LAYOUT="model,ctx,5h,week,cost"
+normalize "$T/out" "$T/got"
 if has "$T/got" '💰'; then fail "layout: AGENTLINE_DROP=cost kept cost"; else pass; fi
 # AGENTLINE_DROP="" asks for fit mode without dropping: every segment of the
 # unconstrained render is still there, wrapped to fit.
@@ -1219,7 +1331,7 @@ if msg=$(rows_fit "$T/got" 60 2>&1); then pass; else fail "layout: AGENTLINE_DRO
 prepare full "$p"; render "$p" 120 AGENTLINE_LAYOUT="clock,model / / ctx, resume"; normalize "$T/out" "$T/got"
 check "layout: custom layout has two rows (got $(n_rows "$T/got"))" [ "$(n_rows "$T/got")" = 2 ]
 check "layout: custom order kept" grep -q '^HH:MM:SS │ Opus 5 🧠$' "$T/got"
-check "layout: custom second line" grep -q '^📊 42% │ ♻️  claude --resume full-0001$' "$T/got"
+check "layout: custom second line" grep -q '^📊 42% │ ♻️ claude --resume full-0001$' "$T/got"
 if has "$T/got" 'v3.0.24' || has "$T/got" '💰'; then fail "layout: omitted segment still shown"; else pass; fi
 
 # Placeholders are measured at their printed width, not their token length:
@@ -2273,6 +2385,38 @@ jcheck "hooks upgrade: SubagentStop added" "$S" "($COUNT)('SubagentStop', 'agent
 jcheck "hooks upgrade: PreToolUse not doubled" "$S" "($COUNT)('PreToolUse', 'agent-tracker-hook.sh')" 1
 jcheck "hooks upgrade: Stop not doubled" "$S" "($COUNT)('Stop', 'agent-tracker-hook.sh')" 1
 
+# --theme / --glyphs land in the env block, beside what the user had there.
+install_run --theme light --glyphs=ascii
+check "theme: exit 0" [ "$irc" = 0 ]
+jcheck "theme: env written, user's kept" "$S" "d['env']" '{"AGENTLINE_TZ":"Europe/Istanbul","AGENTLINE_THEME":"light","AGENTLINE_GLYPHS":"ascii"}'
+cp "$S" "$T/themed.json"
+install_run --theme=light --glyphs ascii
+check "theme twice: exit 0" [ "$irc" = 0 ]
+check "theme twice: settings.json byte-identical" cmp -s "$S" "$T/themed.json"
+check "theme twice: says already" grep -q 'AGENTLINE_THEME already light' "$T/iout"
+install_run --theme mono
+jcheck "theme: changed, glyphs kept" "$S" "[d['env']['AGENTLINE_THEME'], d['env']['AGENTLINE_GLYPHS']]" '["mono","ascii"]'
+check "theme: says what it was" grep -q 'was: light' "$T/iout"
+cp "$S" "$T/themed.json"
+for bad in "--theme bogus" "--glyphs nerd" "--theme"; do
+  # shellcheck disable=SC2086
+  install_run $bad
+  check "theme: '$bad' is exit 2 (got $irc)" [ "$irc" = 2 ]
+  check "theme: '$bad' changes nothing" cmp -s "$S" "$T/themed.json"
+done
+# COLORFGBG is only a hint: printed, never written.
+INST_ENV="COLORFGBG=0;15"
+install_run
+INST_ENV=""
+check "theme: COLORFGBG light background hinted" grep -q 'reports a light background' "$T/iout"
+check "theme: the hint writes nothing" cmp -s "$S" "$T/themed.json"
+inst_home envbad
+printf '{"env": ["not", "an", "object"]}\n' > "$S"; cp "$S" "$T/orig.json"
+install_run --theme light
+check "theme: env not an object is refused" [ "$irc" = 1 ]
+check "theme: refused before any write" cmp -s "$S" "$T/orig.json"
+check "theme: refused before the copy" [ ! -e "$H/.claude/agentline/agentline.sh" ]
+
 # A settings.json that does not parse is refused and left byte for byte.
 inst_home malformed
 printf '{\n  "permissions": {"allow": ["Bash(ls)"],},\n}\n' > "$S"
@@ -2630,7 +2774,7 @@ fi
 sn=$(printf '%040d' 0 | sed 's/0/ç/g')
 printf '{"session_id":"lc-0002","cwd":"%s","session_name":"%s","model":{"id":"claude-opus-5"}}\n' "$WORK" "$sn" > "$T/lc.json"
 prepare minimal "$T/lc.json"; render "$T/lc.json" 120
-check "locale: long session name cut at 27 characters" grep -qF "🏷️  $(printf '%027d' 0 | sed 's/0/ç/g')..." "$T/out"
+check "locale: long session name cut at 27 characters" grep -qF "🏷️ $(printf '%027d' 0 | sed 's/0/ç/g')..." "$T/out"
 check "locale: long session name output is valid UTF-8" \
   python3 -c 'import sys; open(sys.argv[1], "rb").read().decode("utf-8")' "$T/out"
 

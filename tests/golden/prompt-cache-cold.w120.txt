@@ -1,5 +1,5 @@
-Sonnet 5 │ 🟠high │ 📊 18% │ 🗄️ cold·tools ~45k │ 💰 $1.25 │ ⏱️  14m │ 📥 36.0k │ 📤 2.1k │ 🔥 37% │ 💾 6.2G │ 💽 41%
+Sonnet 5 │ 🟠high │ 📊 18% │ 🗄️ cold·tools ~45k │ 💰 $1.25 │ ⏱️ 14m │ 📥 36.0k │ 📤 2.1k │ 🔥 37% │ 💾 6.2G │ 💽 41%
 v3.0.24 │ ~/work │ 🌿 OFCode-dev/agentline@main │ DD/MM/YYYY Day │ HH:MM:SS
-⚙️  context7 · playwright │ ♻️  claude --resume pcache-0001
+⚙️ context7 · playwright │ ♻️ claude --resume pcache-0001
 🛡️ Web ✓ · DB ✗ · Cache ✓ │ 🔐 ssh:2 │ ⏰ cron:5
 🌐 node(3000) vite(5173) python3(8000) postgres(5432) redis-server(6379)

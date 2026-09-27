@@ -145,6 +145,9 @@ Everything is optional — agentline works with zero configuration.
 | `AGENTLINE_TZ` | system timezone | Pin the clock, e.g. `Europe/Istanbul` on a UTC server |
 | `AGENTLINE_PACE` | `1` | Set to `0` to hide the `⇡`/`⇣` pace arrows after `S:` and `W:` |
 | `AGENTLINE_AGENT_SHOW` | `4` | How many running agents `🤖` lists before it counts the rest as `+N` |
+| `AGENTLINE_THEME` | `dark` | `light` or `mono` (also selected by `NO_COLOR`) — see [Themes, glyphs and colours](#themes-glyphs-and-colours) |
+| `AGENTLINE_GLYPHS` | `emoji` | `ascii` for a line with nothing above U+007F |
+| `AGENTLINE_COLOR_*` | unset | `GOLD`, `ORANGE`, `FABLE_FROM`, `FABLE_TO` as `r,g,b` |
 | `AGENTLINE_CACHE_WARN` | `60` (5m TTL), `300` (1h TTL) | Seconds before a warm prompt cache expires at which the `🗄️ ↻` countdown appears |
 | `AGENTLINE_CACHE_VERBOSE` | unset | Set to `1` to always show the prompt-cache hit ratio (`🗄️ 91%`) |
 | `AGENTLINE_GIT_STATUS` | `1` | Set to `0` to skip the `git status` call behind the `↑↓` ahead/behind and `±?✖` dirty counts on the git segment |
@@ -199,6 +202,19 @@ A compact two-line bar, for example:
 ```
 
 **Narrow terminals.** Claude Code ≥ 2.1.153 tells the status line the terminal width (`COLUMNS`); agentline takes 2 cells off as a margin, because the value is read when the render starts and can trail a resize. When a line is wider than that, segments are dropped from it in `AGENTLINE_DROP` order until it fits, and whatever still does not fit wraps at `│` boundaries. A line that has to wrap anyway gets its dropped segments back, most important first, wherever they fit without adding a row. The model, context and both rate limits are never dropped. A resize takes effect on the next tick — the width is part of the render cache key. On older Claude Code there is no `COLUMNS`, so the width is a guess (120, or `AGENTLINE_WIDTH`) and lines 1 and 2 are never trimmed on a guess; set `AGENTLINE_DROP` to opt in anyway.
+
+### Themes, glyphs and colours
+
+Most of agentline's colours are the terminal's own ANSI roles (green, yellow, red, dim), which your terminal theme already maps to something readable on its background. A theme only swaps the colours that are fixed values: the Fable gradient, the gold/orange accents, and the animated `max` rainbow.
+
+| Variable | Values | Effect |
+|---|---|---|
+| `AGENTLINE_THEME` | `dark` (default), `light`, `mono` | `light` darkens the fixed colours to 4–7:1 contrast on white (the dark-theme amber is about 1.4:1 there). `mono` prints no colour at all and shows the `max`/`ultracode` effort words without animation. A non-empty [`NO_COLOR`](https://no-color.org) selects `mono` too |
+| `AGENTLINE_GLYPHS` | `emoji` (default), `ascii` | `ascii` prints nothing above U+007F: icons become short words (`cpu:37%`, `git:owner/repo@main`) or disappear where the value speaks for itself (`$12.47`, `ssh:2`), `│` becomes `\|`, `·` becomes `/`, `✓`/`✗` become `ok`/`FAIL`. For fonts without emoji, and for logs |
+| `AGENTLINE_COLOR_GOLD`, `AGENTLINE_COLOR_ORANGE` | `r,g,b` (0–255) | Replace the gold and orange accents (orange: `high` effort, `F:`) |
+| `AGENTLINE_COLOR_FABLE_FROM`, `AGENTLINE_COLOR_FABLE_TO` | `r,g,b` | The endpoints of the Fable/Mythos model-name gradient |
+
+A malformed `r,g,b` is ignored as a whole. Set these in the `env` block of `settings.json`, which upgrades never touch, or let the installer do it: `bash install.sh --theme light`, `bash install.sh --glyphs ascii`. The installer does not detect your background. The terminal it runs in is often not the one the status line is drawn in, and the only way to ask is an escape-sequence round trip that many setups (SSH, tmux, Claude Code's own shell) cannot answer. When your terminal sets `COLORFGBG` to a light background, the installer mentions `--theme light` and writes nothing.
 
 ## Optional hooks: word counter + agent tracker
 
@@ -368,12 +384,13 @@ Those two segments are fed by the optional hooks. Run `bash install.sh --with-ho
 It is always masked (`o****r@g***l.com`) before display, and it never leaves your machine. When it has to be looked up via `claude auth status`, the unmasked address is cached per profile inside agentline's owner-only cache directory (`$TMPDIR/agentline-<uid>/`, mode 700; every file mode 600), never loose in `/tmp`.
 
 **How do I customize segments or colors?**
-To hide, reorder or regroup segments, set `AGENTLINE_LAYOUT` (see [Layout and narrow terminals](#layout-and-narrow-terminals)). For anything else, put your overrides in `~/.claude/agentline/local.sh` (or the path in `AGENTLINE_LOCAL`). agentline sources it on every full render, after the payload parse, host probes and colours and before any line is assembled. `install.sh` never touches it, so it survives upgrades:
+To hide, reorder or regroup segments, set `AGENTLINE_LAYOUT` (see [Layout and narrow terminals](#layout-and-narrow-terminals)). For a light background, a colour-free or an emoji-free line, and the fixed accent colours, use the environment variables in [Themes, glyphs and colours](#themes-glyphs-and-colours). For anything else, put your overrides in `~/.claude/agentline/local.sh` (or the path in `AGENTLINE_LOCAL`). agentline sources it on every full render, after the payload parse, host probes and colours and before any line is assembled. `install.sh` never touches it, so it survives upgrades:
 
 ```bash
 # ~/.claude/agentline/local.sh
 BLUE="\033[1;36m"   # recolour the folder name
 cpu_usage=          # blank a value to drop its segment
+G_CPU="CPU "        # any icon of the glyph table (G_*), with its trailing space
 ```
 
 Editing `agentline.sh` directly still works — sections are marked with `# ===` comments — but an upgrade replaces it. The previous copy is kept as `agentline.sh.bak-<timestamp>`.

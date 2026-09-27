@@ -7,6 +7,10 @@
 #   bash install.sh --force       replace a statusLine that is not agentline
 #                                 (another tool's, or your own script) instead
 #                                 of leaving it and printing the snippet
+#   bash install.sh --theme light also set AGENTLINE_THEME (dark|light|mono) in
+#                                 settings.json's env block
+#   bash install.sh --glyphs ascii
+#                                 also set AGENTLINE_GLYPHS (emoji|ascii)
 #
 # Exit status: 0 installed and active, 1 settings.json unusable or unwritable
 # (a file that does not parse, or cannot take --with-hooks, is refused before
@@ -33,19 +37,37 @@ OLD_SVC_CONFIG="$HOME/.claude/statusline-services.conf"
 KEEP_BACKUPS=5
 
 usage() {
-  echo "usage: bash install.sh [--with-hooks] [--force]"
+  echo "usage: bash install.sh [--with-hooks] [--force] [--theme dark|light|mono] [--glyphs emoji|ascii]"
 }
 
 WITH_HOOKS=0
 FORCE=0
-for arg in "$@"; do
+THEME=""
+GLYPHS=""
+while [ $# -gt 0 ]; do
+  arg="$1"; shift
   case "$arg" in
     --with-hooks) WITH_HOOKS=1 ;;
     --force)      FORCE=1 ;;
+    --theme|--glyphs)
+      if [ $# -eq 0 ]; then echo "✗ $arg needs a value" >&2; usage >&2; exit 2; fi
+      set -- "$arg=$1" "${@:2}"; continue ;;
+    --theme=*)    THEME="${arg#--theme=}" ;;
+    --glyphs=*)   GLYPHS="${arg#--glyphs=}" ;;
     -h|--help)    usage; exit 0 ;;
     *)            echo "✗ unknown option: $arg" >&2; usage >&2; exit 2 ;;
   esac
 done
+# --theme / --glyphs write AGENTLINE_THEME / AGENTLINE_GLYPHS into the env
+# block of settings.json, where they survive every upgrade. Nothing is
+# detected: the background colour could only be asked of the terminal (an
+# OSC 11 query), and this script usually runs where there is none to ask —
+# from Claude Code's Bash tool, over SSH, under tmux — or in a terminal other
+# than the one the status line will be drawn in, and many people switch
+# light/dark with the OS. So the choice is the user's; COLORFGBG, where the
+# terminal sets it, is only printed as a hint (see below).
+case "$THEME" in ''|dark|light|mono) ;; *) echo "✗ --theme must be dark, light or mono (got: $THEME)" >&2; exit 2 ;; esac
+case "$GLYPHS" in ''|emoji|ascii) ;; *) echo "✗ --glyphs must be emoji or ascii (got: $GLYPHS)" >&2; exit 2 ;; esac
 
 # One stamp per run, so the settings.json backup and the script backup of the
 # same upgrade carry the same suffix and a run never backs up twice. UTC, so
@@ -59,6 +81,7 @@ STAMP=$(date -u +%Y%m%d-%H%M%S)
 #   settings_py resolve    <settings> <stamp> <default_dest>
 #   settings_py statusline <settings> <stamp> <dest> <force>
 #   settings_py hooks      <settings> <stamp> <hooks_dest>
+#   settings_py env        <settings> <stamp> KEY=VALUE...
 #
 # A parse error is fatal and never written back. Before the fix, any error
 # turned into `d = {}` and the next save replaced the file with a lone
@@ -288,6 +311,8 @@ if mode == 'resolve':
     # copied or statusLine is written, rather than half-way through the run.
     if args[1:2] == ['1'] and not isinstance(d.get('hooks', {}), dict):
         fail(f"{settings_path}: \"hooks\" is not a JSON object")
+    if args[2:3] == ['1'] and not isinstance(d.get('env', {}), dict):
+        fail(f"{settings_path}: \"env\" is not a JSON object")
     print(own_script(existing, args[0])[0] or args[0])
 
 elif mode == 'statusline':
@@ -338,6 +363,25 @@ elif mode == 'statusline':
         print("  ✓ statusLine.refreshInterval set to 1s (live clock)")
     if sl != d.get('statusLine'):
         d['statusLine'] = sl
+        save(d)
+
+elif mode == 'env':
+    # KEY=VALUE pairs into settings.json's env block (--theme, --glyphs).
+    # Claude Code hands that block to the status line's environment, and an
+    # upgrade never touches it. A value already set is left alone.
+    env = d.setdefault('env', {})
+    if not isinstance(env, dict):
+        fail(f"{settings_path}: \"env\" is not a JSON object")
+    changed = False
+    for pair in args:
+        key, _, value = pair.partition('=')
+        if env.get(key) == value:
+            print(f"• settings.json env {key} already {value}")
+        else:
+            print(f"✓ settings.json env {key}={value}" + (f" (was: {env[key]})" if key in env else ''))
+            env[key] = value
+            changed = True
+    if changed:
         save(d)
 
 elif mode == 'hooks':
@@ -417,7 +461,8 @@ mkdir -p "$(dirname "$SETTINGS")"
 # Resolve the install target from settings.json. This also validates the file
 # before anything is touched: an unparsable settings.json stops the install
 # here, with the script not yet copied either.
-DEST=$(settings_py resolve "$SETTINGS" "$STAMP" "$DEFAULT_DEST" "$WITH_HOOKS")
+WITH_ENV=0; [ -n "$THEME$GLYPHS" ] && WITH_ENV=1
+DEST=$(settings_py resolve "$SETTINGS" "$STAMP" "$DEFAULT_DEST" "$WITH_HOOKS" "$WITH_ENV")
 
 mkdir -p "$(dirname "$DEST")"
 # The README used to say "edit agentline.sh directly", and every upgrade then
@@ -467,6 +512,23 @@ if [ "$SL_RC" = 3 ]; then
   exit 3
 elif [ "$SL_RC" != 0 ]; then
   exit "$SL_RC"
+fi
+
+# --- Theme and glyph set -------------------------------------------------------
+if [ "$WITH_ENV" = 1 ]; then
+  ENV_PAIRS=()
+  [ -n "$THEME" ] && ENV_PAIRS[${#ENV_PAIRS[@]}]="AGENTLINE_THEME=$THEME"
+  [ -n "$GLYPHS" ] && ENV_PAIRS[${#ENV_PAIRS[@]}]="AGENTLINE_GLYPHS=$GLYPHS"
+  settings_py env "$SETTINGS" "$STAMP" "${ENV_PAIRS[@]}"
+fi
+# COLORFGBG ("15;0": foreground;background as ANSI colour numbers) is set by
+# rxvt, iTerm2 and a few others. A background of 7 or 9-15 is a light one.
+# It is only a hint, printed and never written: it describes the terminal
+# this installer runs in, which need not be the one the status line uses.
+if [ -z "$THEME" ] && [ -n "${COLORFGBG-}" ]; then
+  case "${COLORFGBG##*;}" in
+    7|9|1[0-5]) echo "• Your terminal reports a light background (COLORFGBG=$COLORFGBG): consider bash install.sh --theme light" ;;
+  esac
 fi
 
 # --- Optional hooks -----------------------------------------------------------
