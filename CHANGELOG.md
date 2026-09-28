@@ -45,7 +45,9 @@
   the wrapper. A TERM to the process group is a TERM death, not exit 255,
   and a CMD exiting 147-150 no longer stops the wrapper. A closed stdin
   runs CMD on `/dev/null`, and no heartbeat can re-add the row after it
-  was removed. Installed to
+  was removed. Parallel runs with one label each have their own row, so
+  the first to end no longer hides the others. The 🤖 segment shows such
+  labels once, counted (`codex/gpt-6-astra ×2`). Installed to
   `~/.claude/agentline/`; `bash install.sh --link-bin` also links it into
   `~/.local/bin`, never over a different file.
 - `install.sh` always copies `agentline-subagents.sh`, `agentline-run` and

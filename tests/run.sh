@@ -3833,6 +3833,8 @@ mkdir -p "$RSIDE" "$RBIN"
 # A `codex` that shows the registry as it is while it runs.
 printf '#!/bin/sh\ncat "$AGENTLINE_TMP/claude_agents.txt"\nexit 0\n' > "$RBIN/codex"
 chmod +x "$RBIN/codex"
+# A run's registry key is its label, a unit separator and its pid.
+RK="$(printf '\037')[0-9]+"
 AENV=""; AIN=/dev/null
 arun() {  # arun <args...> -> $T/rout $T/rerr $arc
   # shellcheck disable=SC2086
@@ -3851,15 +3853,15 @@ AIN=/dev/null
 check "run: stdin and stdout are the command's" [ "$(cat "$T/rout")" = "got:hello" ]
 check "run: stderr is the command's" [ "$(cat "$T/rerr")" = "err" ]
 arun -- codex exec -m gpt-6-astra "the prompt"
-check "run: row labelled by the classifier while running" grep -qE '^[0-9]+ codex/gpt-6-astra$' "$T/rout"
+check "run: row labelled by the classifier while running" grep -qE "^[0-9]+ codex/gpt-6-astra$RK\$" "$T/rout"
 check "run: the prompt is not in the label" sh -c "! grep -q prompt '$T/rout'"
 check "run: removed on exit" [ -z "$(rrows)" ]
 arun --label "nightly$(printf '\t')eval" -- sh -c 'cat "$AGENTLINE_TMP/claude_agents.txt"'
-check "run: --label, control characters blanked" grep -qE '^[0-9]+ nightly eval$' "$T/rout"
+check "run: --label, control characters blanked" grep -qE "^[0-9]+ nightly eval$RK\$" "$T/rout"
 arun --label outer -- "$TEST_BASH" "$ARUN" --label inner -- sh -c 'cat "$AGENTLINE_TMP/claude_agents.txt"'
-check "run: nested, both rows" sh -c "grep -q ' outer\$' '$T/rout' && grep -q ' inner\$' '$T/rout'"
+check "run: nested, both rows" sh -c "grep -qE ' outer$RK\$' '$T/rout' && grep -qE ' inner$RK\$' '$T/rout'"
 arun --label same -- "$TEST_BASH" "$ARUN" --label same -- sh -c 'cat "$AGENTLINE_TMP/claude_agents.txt"'
-check "run: nested, same label once" [ "$(grep -c ' same$' "$T/rout")" = 1 ]
+check "run: nested, same label once" [ "$(grep -cE " same$RK\$" "$T/rout")" = 1 ]
 check "run: nested, all rows gone" [ -z "$(rrows)" ]
 rm -f "$RF" "$RF.lock"
 AENV="AGENTLINE_AGENT_HELPER=$T/no-such-helper"
@@ -3875,7 +3877,7 @@ check "run: bad --heartbeat is a usage error" [ "$arc" = 2 ]
 # beside the link's target.
 ln -s "$ARUN" "$RBIN/agentline-run"
 ( cd "$WORK" && run_env AGENTLINE_TMP="$RSIDE" PATH="$RBIN:$PATH_F" "$TEST_BASH" "$RBIN/agentline-run" -- codex exec -m gpt-5.2 > "$T/rout" 2>&1 )
-check "run: via a symlink" grep -qE '^[0-9]+ codex/gpt-5\.2$' "$T/rout"
+check "run: via a symlink" grep -qE "^[0-9]+ codex/gpt-5\\.2$RK\$" "$T/rout"
 rm -f "$RBIN/agentline-run"
 # Signals. exec, so $! is agentline-run itself.
 arun_bg() {
@@ -3883,11 +3885,11 @@ arun_bg() {
       "$TEST_BASH" "$ARUN" "$@" < /dev/null > /dev/null 2>&1 ) &
   apid=$!
 }
-row_ts() { sed -n 's/^\([0-9]*\) sleep$/\1/p' "$RF" 2>/dev/null; }
+row_ts() { sed -n "s/^\\([0-9]*\\) sleep$(printf '\037').*/\\1/p" "$RF" 2>/dev/null; }
 ts_after() { local t; t=$(row_ts); [ -n "$t" ] && [ "$t" -gt "$1" ]; }
 for s in TERM HUP; do
   arun_bg --heartbeat 1 -- sleep 30
-  if wait_for 10 sh -c "grep -q ' sleep\$' '$RF'"; then pass; else fail "run $s: row never appeared"; fi
+  if wait_for 10 sh -c "grep -qE ' sleep$RK\$' '$RF'"; then pass; else fail "run $s: row never appeared"; fi
   if [ "$s" = TERM ]; then
     t0=$(row_ts)
     if wait_for 5 ts_after "${t0:-0}"; then pass; else fail "run: heartbeat did not refresh the row"; fi
@@ -3956,13 +3958,29 @@ check "run: missing program, row gone" [ -z "$(rrows)" ]
 # sleep's odd duration is the marker that finds this run's processes only.
 mark=$(( 30000 + $$ % 9000 ))
 arun_bg --heartbeat 1 -- sleep "$mark"
-wait_for 10 sh -c "grep -q ' sleep\$' '$RF'"
+wait_for 10 sh -c "grep -qE ' sleep$RK\$' '$RF'"
 sleep 2  # a heartbeat or two
 kill -TERM "$apid"; { wait "$apid"; } 2>/dev/null
 check "run TERM: no row afterwards" [ -z "$(rrows)" ]
 sleep 1
 check "run TERM: no row after a heartbeat period either" [ -z "$(rrows)" ]
 check "run TERM: no process left" sh -c "! ps -eo args | grep -v grep | grep -q 'sleep $mark'"
+# Two runs with one label have a row each: the first to end leaves the
+# second listed, and the bar shows them once, counted (review of J9, J9b).
+arun_bg --heartbeat 0 --label twin -- sleep 30; tw1=$apid
+arun_bg --heartbeat 0 --label twin -- sleep 30; tw2=$apid
+wait_for 10 sh -c "[ \$(grep -cE ' twin$RK\$' '$RF') = 2 ]"
+check "run: parallel runs, one row each" [ "$(grep -cE " twin$RK\$" "$RF")" = 2 ]
+prepare minimal "$PAY/minimal.json"
+render "$PAY/minimal.json" 200 AGENTLINE_NOW= AGENTLINE_CACHE_TTL=0 CLAUDE_AGENTS_FILE="$RF"
+check "run: parallel runs shown once, counted" grep -qF 'twin ×2' "$T/out"
+check "run: the run id is not shown" sh -c "! grep -qE 'twin[^ ]*[0-9]{2,}' '$T/out'"
+kill -TERM "$tw1"; { wait "$tw1"; } 2>/dev/null
+check "run: the first to end leaves the second's row" [ "$(grep -cE " twin$RK\$" "$RF")" = 1 ]
+render "$PAY/minimal.json" 200 AGENTLINE_NOW= AGENTLINE_CACHE_TTL=0 CLAUDE_AGENTS_FILE="$RF"
+check "run: one run left, no count" sh -c "grep -qF 'twin' '$T/out' && ! grep -qF 'twin ×' '$T/out'"
+kill -TERM "$tw2"; { wait "$tw2"; } 2>/dev/null
+check "run: both gone" [ -z "$(rrows)" ]
 rm -f "$PWNED"
 erun /dev/null AGENTLINE_TMP="$RSIDE" PATH="$RBIN:$PATH_F" "$TEST_BASH" "$ARUN" -- codex
 pwned "isolated: agentline-run"

@@ -1295,14 +1295,19 @@ if [ "${#_ag_files[@]}" -gt 0 ]; then
       age = now - $1
       if ($1 !~ /^[0-9]+$/ || age < 0) next
       label = substr($0, index($0, $2))
+      # A key may carry a run id after a unit separator (agentline-run: one
+      # row per run); it is not shown, and runs of one label count as one.
+      sub(/\037.*/, "", label)
       if (index(label, "✓") == 1) {
         if (age < 10) done[nd++] = "✓" cut(substr(label, length("✓") + 1))
-      } else if (age < 300) {
-        if (n < show) live = live (n ? " · " : "") cut(label)
-        n++
+      } else if (age < 300 && label != "") {
+        if (!(label in cnt)) ord[n++] = label
+        cnt[label]++
       }
     }
     END {
+      for (i = 0; i < n && i < show; i++)
+        live = live (i ? " · " : "") cut(ord[i]) (cnt[ord[i]] > 1 ? " ×" cnt[ord[i]] : "")
       if (n > show) live = live (show ? " · " : "") "+" (n - show)
       out = ""
       for (i = (nd > 2 ? nd - 2 : 0); i < nd; i++) out = out (out == "" ? "" : " · ") done[i]

@@ -115,6 +115,13 @@ esac
 _AGENTLINE_RUN_LABELS="${_AGENTLINE_RUN_LABELS:-$_rs}$label$_rs"
 export _AGENTLINE_RUN_LABELS
 
+# The registry key: the label, a unit separator and this run's pid (the
+# supervisor's too: it is exec'd). The registry keeps one row per key, so
+# two runs with one label used to share a row, and the first to finish took
+# it away from the second for up to a heartbeat. agentline.sh shows the part
+# before the separator only, and identical labels once, as "label ×2".
+key="$label"$'\037'"$$"
+
 # The supervisor: one python3 that becomes this process (exec, so a signal
 # sent to agentline-run reaches it) and does all of the child management.
 # The shell version it replaced — CMD as a background job, `wait` in a loop,
@@ -248,4 +255,4 @@ if os.WIFSIGNALED(status):
 sys.exit(os.WEXITSTATUS(status) if os.WIFEXITED(status) else 1)
 PYEOF
 
-exec python3 -I -c "$_AL_RUN_PY" "$helper" "$label" "$beat" "$@"
+exec python3 -I -c "$_AL_RUN_PY" "$helper" "$key" "$beat" "$@"
