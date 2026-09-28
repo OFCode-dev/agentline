@@ -3183,7 +3183,7 @@ check "isolated: install exit 0 (got $rc)" [ "$rc" = 0 ]
 pwned "isolated: install.sh"
 # And no interpreter start in the shipped scripts goes without -I.
 if grep -nE '(^|[^-A-Za-z_])python3( |$)' "$ROOT/agentline.sh" "$ROOT/install.sh" "$ROOT"/hooks/*.sh \
-     "$ROOT/agentline-subagents.sh" \
+     "$ROOT/agentline-subagents.sh" "$ROOT/agentline-run" \
      | grep -vE ':[0-9]+: *#|command -v python3|python3 -I( |$)|python3 not found' > "$T/nonisolated"; then
   fail "isolated: python3 without -I: $(cat "$T/nonisolated")"
 else
@@ -3224,13 +3224,14 @@ check "locale: long session name output is valid UTF-8" \
   python3 -c 'import sys; open(sys.argv[1], "rb").read().decode("utf-8")' "$T/out"
 
 # ===========================================================================
-# 8. Subagent rows (agentline-subagents.sh)
+# 8. Subagent rows (agentline-subagents.sh) and agentline-run
 # ===========================================================================
 # The fixtures are generated (tests/fixtures/subagents/make.py): transcripts
 # in Claude Code's layout under a fixture project dir, stamped against the
 # fixtures' own pinned clock SNOW, so a spinner frame, a "⏳2m" and a golden
 # row are the same on every run.
 SUBS="$ROOT/agentline-subagents.sh"
+ARUN="$ROOT/agentline-run"
 SNOW=1790000000
 SPROJ="$T/sub/proj"; SPAY="$T/sub/pay"; SSID=sess-0001
 TAB=$(printf '\t')
@@ -3485,6 +3486,114 @@ check "isolated: subagent rows still render" grep -q 'codex/gpt-6-astra' "$T/out
 pwned "isolated: agentline-subagents.sh"
 erun /dev/null "$TEST_BASH" "$SUBS" --classify -- codex exec -m m1
 pwned "isolated: agentline-subagents.sh --classify"
+
+# --- agentline-run ------------------------------------------------------------
+RSIDE="$T/rside"; RF="$RSIDE/claude_agents.txt"; RBIN="$T/rbin"
+mkdir -p "$RSIDE" "$RBIN"
+# A `codex` that shows the registry as it is while it runs.
+printf '#!/bin/sh\ncat "$AGENTLINE_TMP/claude_agents.txt"\nexit 0\n' > "$RBIN/codex"
+chmod +x "$RBIN/codex"
+AENV=""; AIN=/dev/null
+arun() {  # arun <args...> -> $T/rout $T/rerr $arc
+  # shellcheck disable=SC2086
+  ( cd "$WORK" && run_env AGENTLINE_TMP="$RSIDE" PATH="$RBIN:$PATH_F" $AENV "$TEST_BASH" "$ARUN" "$@" \
+      < "$AIN" > "$T/rout" 2> "$T/rerr" )
+  arc=$?
+}
+rrows() { sed 's/^[0-9]* //' "$RF" 2>/dev/null; }
+arun -- sh -c 'exit 7'
+check "run: exit status passed through (got $arc)" [ "$arc" = 7 ]
+check "run: nothing of its own on stdout/stderr" [ ! -s "$T/rout" -a ! -s "$T/rerr" ]
+check "run: row gone afterwards" [ -z "$(rrows)" ]
+printf 'hello\n' > "$T/rin"; AIN="$T/rin"
+arun -- sh -c 'read x; echo "got:$x"; echo err >&2'
+AIN=/dev/null
+check "run: stdin and stdout are the command's" [ "$(cat "$T/rout")" = "got:hello" ]
+check "run: stderr is the command's" [ "$(cat "$T/rerr")" = "err" ]
+arun -- codex exec -m gpt-6-astra "the prompt"
+check "run: row labelled by the classifier while running" grep -qE '^[0-9]+ codex/gpt-6-astra$' "$T/rout"
+check "run: the prompt is not in the label" sh -c "! grep -q prompt '$T/rout'"
+check "run: removed on exit" [ -z "$(rrows)" ]
+arun --label "nightly$(printf '\t')eval" -- sh -c 'cat "$AGENTLINE_TMP/claude_agents.txt"'
+check "run: --label, control characters blanked" grep -qE '^[0-9]+ nightly eval$' "$T/rout"
+arun --label outer -- "$TEST_BASH" "$ARUN" --label inner -- sh -c 'cat "$AGENTLINE_TMP/claude_agents.txt"'
+check "run: nested, both rows" sh -c "grep -q ' outer\$' '$T/rout' && grep -q ' inner\$' '$T/rout'"
+arun --label same -- "$TEST_BASH" "$ARUN" --label same -- sh -c 'cat "$AGENTLINE_TMP/claude_agents.txt"'
+check "run: nested, same label once" [ "$(grep -c ' same$' "$T/rout")" = 1 ]
+check "run: nested, all rows gone" [ -z "$(rrows)" ]
+rm -f "$RF" "$RF.lock"
+AENV="AGENTLINE_AGENT_HELPER=$T/no-such-helper"
+arun -- sh -c 'echo ran; exit 4'
+AENV=""
+check "run: missing helper, command still runs (got $arc)" [ "$arc" = 4 -a "$(cat "$T/rout")" = ran ]
+check "run: missing helper, silent, no registry" [ ! -s "$T/rerr" -a ! -e "$RF" ]
+arun
+check "run: no command is a usage error" [ "$arc" = 2 ]
+arun --heartbeat soon -- true
+check "run: bad --heartbeat is a usage error" [ "$arc" = 2 ]
+# Through a symlink on PATH (install.sh --link-bin): the helpers are found
+# beside the link's target.
+ln -s "$ARUN" "$RBIN/agentline-run"
+( cd "$WORK" && run_env AGENTLINE_TMP="$RSIDE" PATH="$RBIN:$PATH_F" "$TEST_BASH" "$RBIN/agentline-run" -- codex exec -m m2 > "$T/rout" 2>&1 )
+check "run: via a symlink" grep -qE '^[0-9]+ codex/m2$' "$T/rout"
+rm -f "$RBIN/agentline-run"
+# Signals. exec, so $! is agentline-run itself.
+arun_bg() {
+  ( cd "$WORK" && exec env -i PATH="$PATH_F" HOME="$HOME_F" TMPDIR="$TMP_F" AGENTLINE_TMP="$RSIDE" LC_ALL=C \
+      "$TEST_BASH" "$ARUN" "$@" < /dev/null > /dev/null 2>&1 ) &
+  apid=$!
+}
+row_ts() { sed -n 's/^\([0-9]*\) sleep$/\1/p' "$RF" 2>/dev/null; }
+ts_after() { local t; t=$(row_ts); [ -n "$t" ] && [ "$t" -gt "$1" ]; }
+for s in TERM HUP; do
+  arun_bg --heartbeat 1 -- sleep 30
+  if wait_for 10 sh -c "grep -q ' sleep\$' '$RF'"; then pass; else fail "run $s: row never appeared"; fi
+  if [ "$s" = TERM ]; then
+    t0=$(row_ts)
+    if wait_for 5 ts_after "${t0:-0}"; then pass; else fail "run: heartbeat did not refresh the row"; fi
+  fi
+  # The braces take the shell's own "Hangup" job notice off the output.
+  kill -"$s" "$apid"; { wait "$apid"; } 2>/dev/null; arc=$?
+  n=15; [ "$s" = HUP ] && n=1
+  check "run $s: died of it (got $arc)" [ "$arc" = $(( 128 + n )) ]
+  check "run $s: row removed" [ -z "$(rrows)" ]
+done
+# Ctrl-C: SIGINT to the whole process group, as a terminal sends it. The
+# program is a file, not a heredoc inside $(...), for bash 3.2's sake.
+cat > "$T/int.py" <<'PYEOF'
+import os, signal, subprocess, sys, time
+p = subprocess.Popen([sys.argv[1], sys.argv[2], '--', 'sleep', '30'], start_new_session=True,
+                     stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+for _ in range(100):
+    try:
+        if ' sleep' in open(sys.argv[3]).read():
+            break
+    except OSError:
+        pass
+    time.sleep(0.1)
+os.killpg(p.pid, signal.SIGINT)
+try:
+    print(p.wait(timeout=10))
+except subprocess.TimeoutExpired:
+    os.killpg(p.pid, signal.SIGKILL)
+    print('hung')
+PYEOF
+irc=$(cd "$WORK" && env -i PATH="$PATH_F" HOME="$HOME_F" AGENTLINE_TMP="$RSIDE" LC_ALL=C \
+  python3 "$T/int.py" "$TEST_BASH" "$ARUN" "$RF")
+check "run INT (process group): died of SIGINT (got $irc)" [ "$irc" = -2 ]
+check "run INT: row removed" [ -z "$(rrows)" ]
+TO=$(command -v timeout || command -v gtimeout)
+if [ -n "$TO" ]; then
+  ( cd "$WORK" && run_env AGENTLINE_TMP="$RSIDE" "$TO" 1 "$TEST_BASH" "$ARUN" -- sleep 30 > /dev/null 2>&1 )
+  trc=$?
+  check "run under timeout: 124 (got $trc)" [ "$trc" = 124 ]
+  check "run under timeout: row removed" [ -z "$(rrows)" ]
+else
+  skip "run under timeout: no timeout(1)"
+fi
+rm -f "$PWNED"
+erun /dev/null AGENTLINE_TMP="$RSIDE" PATH="$RBIN:$PATH_F" "$TEST_BASH" "$ARUN" -- codex
+pwned "isolated: agentline-run"
 
 # ===========================================================================
 echo "agentline tests (bash $TEST_BASH_MAJOR): $n_pass passed, $n_fail failed, $n_skip skipped"

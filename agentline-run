@@ -1,0 +1,187 @@
+#!/bin/bash
+# agentline-run — show a long-running command on agentline's 🤖 segment for
+# as long as it runs.
+#
+#   agentline-run [--label TEXT] [--heartbeat SECONDS|0] -- CMD [ARGS...]
+#
+#   agentline-run -- codex exec -m gpt-6-astra "review the diff"
+#                                   🤖 codex/gpt-6-astra
+#   agentline-run --label "nightly eval" -- python3 run_jev.py
+#
+# Claude Code's subagent panel lists its own subagents only. Work started
+# from a shell — codex, agy, a `claude -p` over ssh, a curl to a model
+# server, a background job — is invisible there, and this is how it shows up:
+# the command registers a row in agentline's agent registry (the file the 🤖
+# segment on line 3 reads), refreshes it while it runs, and removes it when
+# it ends, whatever way it ends.
+#
+#   --label TEXT       the row's text. Default: the worker the command runs,
+#                      named by the same classifier as the subagent rows
+#                      (codex/gpt-6-astra, bayrak/opus, arb/qwen3.6, ...),
+#                      else the program's name.
+#   --heartbeat SECS   re-register every SECS seconds (default 60; 0: never).
+#                      The registry forgets a row after 300 s, so a heartbeat
+#                      is what keeps a long job listed — and what brings its
+#                      row back should anything have dropped it.
+#
+# CMD runs with this script's stdin, stdout and stderr, and its exit status
+# is this script's; a CMD killed by a signal gets this script killed by the
+# same signal. agentline-run prints nothing of its own except errors, on
+# stderr. When the registry helper is missing or python3 is not there, CMD
+# simply runs.
+#
+# Signals: TERM and HUP are passed on to CMD, then the row is removed. INT is
+# not passed on: Ctrl-C already reaches CMD from the terminal, which signals
+# the whole foreground process group, and a second INT would cut short a
+# CMD's own clean-up (codex, a python script). A `kill -INT` of this
+# process alone therefore stops nothing until CMD ends.
+#
+# Environment:
+#   AGENTLINE_AGENT_HELPER  the registry helper (default: agentline-agent.sh
+#                           next to this script, or in hooks/ of a checkout)
+#   plus the helper's own: AGENTLINE_TMP, CLAUDE_AGENTS_FILE, ...
+
+usage() {
+  echo "usage: ${0##*/} [--label TEXT] [--heartbeat SECONDS|0] -- CMD [ARGS...]" >&2
+  exit 2
+}
+
+label=""
+beat=60
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --) shift; break ;;
+    --label) [ $# -ge 2 ] || usage; label="$2"; shift 2 ;;
+    --label=*) label="${1#--label=}"; shift ;;
+    --heartbeat) [ $# -ge 2 ] || usage; beat="$2"; shift 2 ;;
+    --heartbeat=*) beat="${1#--heartbeat=}"; shift ;;
+    -h|--help) sed -n '2,42p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -*) echo "${0##*/}: unknown option: $1" >&2; usage ;;
+    *) break ;;
+  esac
+done
+[ $# -gt 0 ] || usage
+case "$beat" in ''|*[!0-9]*) echo "${0##*/}: --heartbeat needs a number of seconds" >&2; usage ;; esac
+
+# The directory this script really lives in: ~/.local/bin/agentline-run is a
+# symlink (install.sh --link-bin), and the helpers sit beside the target.
+# readlink one level at a time: BSD readlink has no -f.
+self="${BASH_SOURCE[0]}"
+while [ -L "$self" ]; do
+  link=$(readlink "$self") || break
+  case "$link" in /*) self="$link" ;; *) self="$(dirname "$self")/$link" ;; esac
+done
+here=$(cd "$(dirname "$self")" 2>/dev/null && pwd)
+
+helper="${AGENTLINE_AGENT_HELPER-}"
+if [ -z "$helper" ]; then
+  for helper in "$here/agentline-agent.sh" "$here/hooks/agentline-agent.sh" ""; do
+    [ -f "$helper" ] && break
+  done
+fi
+# Nothing to register with: be the command, and nothing else.
+if [ -z "$helper" ] || [ ! -f "$helper" ] || ! command -v python3 >/dev/null 2>&1; then
+  exec "$@"
+fi
+
+if [ -z "$label" ]; then
+  for cls in "$here/agentline-subagents.sh" ""; do
+    [ -f "$cls" ] && break
+  done
+  [ -n "$cls" ] && label=$(bash "$cls" --classify -- "$@" 2>/dev/null)
+  [ -n "$label" ] || label="${1##*/}"
+fi
+# One registry line per row, so no newline or control character may reach
+# it; agentline.sh cleans what it prints, this keeps the file well-formed.
+label="${label//[[:cntrl:]]/ }"
+
+# Nested under an agentline-run that already shows this very label (a
+# wrapper script that wraps again): the outer row is this work, and a second
+# row with the same label would be taken away by whichever ends first.
+_rs=$(printf '\036')
+case "${_AGENTLINE_RUN_LABELS-}" in
+  *"$_rs$label$_rs"*) exec "$@" ;;
+esac
+_AGENTLINE_RUN_LABELS="${_AGENTLINE_RUN_LABELS:-$_rs}$label$_rs"
+export _AGENTLINE_RUN_LABELS
+
+bash "$helper" add "$label"
+
+hb=""
+if [ "$beat" -gt 0 ]; then
+  # The heartbeat, a subshell that outlives nothing: it checks this shell is
+  # still there before every beat, so a SIGKILL of the parent (no trap runs)
+  # ends it within one period. Its stdio is not the caller's, so a pipe read
+  # from this command closes when CMD and this script are done, not when
+  # the heartbeat next wakes.
+  parent=$$
+  (
+    trap - INT TERM HUP
+    while sleep "$beat"; do
+      kill -0 "$parent" 2>/dev/null || exit 0
+      bash "$helper" add "$label"
+    done
+  ) </dev/null >/dev/null 2>&1 &
+  hb=$!
+fi
+
+cleaned=""
+cleanup() {
+  [ -n "$cleaned" ] && return
+  cleaned=1
+  [ -n "$hb" ] && kill "$hb" 2>/dev/null
+  bash "$helper" remove "$label"
+}
+
+# CMD runs as a background child that this shell waits on, because a trap
+# runs only between commands: with CMD in the foreground, a TERM sent to this
+# process would wait for CMD to finish on its own. `wait` returns as soon as
+# a trapped signal arrives. A background job of a non-interactive shell gets
+# stdin from /dev/null and SIGINT/SIGQUIT ignored, so stdin is handed over
+# explicitly (fd 3) and the two signals are reset in the child: `trap -`
+# does that in bash 5, while bash 3.2 (macOS) keeps them ignored, and there
+# the child resets them in a python3 exec shim before it becomes CMD.
+child=""
+on_sig() {
+  [ "$1" != INT ] && [ -n "$child" ] && kill -"$1" "$child" 2>/dev/null
+  return 0
+}
+trap 'on_sig INT' INT
+trap 'on_sig TERM' TERM
+trap 'on_sig HUP' HUP
+
+exec 3<&0
+if [ "${BASH_VERSINFO[0]:-0}" -ge 5 ]; then
+  ( trap - INT QUIT; exec "$@" ) <&3 3<&- &
+else
+  python3 -I -c '
+import os, signal, sys
+signal.signal(signal.SIGINT, signal.SIG_DFL)
+signal.signal(signal.SIGQUIT, signal.SIG_DFL)
+try:
+    os.execvp(sys.argv[1], sys.argv[1:])
+except OSError as e:
+    sys.stderr.write("agentline-run: %s: %s\n" % (sys.argv[1], e.strerror))
+    sys.exit(127 if e.errno == 2 else 126)
+' "$@" <&3 3<&- &
+fi
+child=$!
+exec 3<&-
+
+# A wait cut short by a trapped signal returns 128+n while CMD still runs:
+# wait again until it is gone. The last wait returns its real status, which
+# bash keeps for a reaped child.
+while kill -0 "$child" 2>/dev/null; do
+  wait "$child"
+done
+wait "$child"
+rc=$?
+cleanup
+
+# CMD died of a signal (128+n): die of the same one, so the caller — a
+# shell loop, `timeout`, make — sees a signal death and not an exit code.
+if [ "$rc" -gt 128 ] && [ "$rc" -lt 160 ]; then
+  trap - INT TERM HUP
+  kill -$(( rc - 128 )) $$ 2>/dev/null
+fi
+exit "$rc"
