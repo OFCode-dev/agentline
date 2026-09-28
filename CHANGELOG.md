@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 2.0.0 — 2026-09-28
 
 - `install.sh --with-hooks` no longer half-applies. A hook entry whose
   `command` was not a string, or a group whose `hooks` was not a list,
