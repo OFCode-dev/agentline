@@ -81,7 +81,9 @@
   render. Names outside `[a-z0-9_-]{1,24}` are ignored. The content keeps
   its colour (removed by `mono`/`NO_COLOR`), and every other control
   character and backslash sequence is stripped, so content read from a
-  file cannot inject an escape. `--doctor` lists them.
+  file cannot inject an escape. Only the first 512 characters count, and
+  they are cleaned in one pass: before, 27 KB of `\033[2J` in a UTF-8
+  locale took 152 s a render. `--doctor` lists them.
 
 ## 2.0.0 — 2026-09-28
 

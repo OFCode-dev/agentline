@@ -1727,32 +1727,43 @@ AGENTLINE_LOCAL="${AGENTLINE_LOCAL:-$HOME/.claude/agentline/local.sh}"
 # backslash goes, as _clean does to host strings. An OSC or a cursor move
 # is left as harmless text at worst. mono strips the kept SGR later, with
 # every other colour.
+#
+# Bounded and one pass. The first version searched the whole remaining text
+# for each of the nine spellings at every escape it found, which grows with
+# the square of the input and worse in a UTF-8 locale, where every pattern
+# match decodes the string again: 4.8 KB of coloured text cost 1.2 s a full
+# render, 27 KB of "\033[2J" 152 s. A segment is a few words, so the text is
+# cut to 512 characters first; then each step jumps to the next backslash or
+# ESC (every spelling starts with one), checks the spellings as prefixes
+# there, and moves on.
 _LSEGS=""; _LNAMES=""
+_LSEG_STOP=$'[\\\\\033]'   # the pattern [\<ESC>]
 _lseg_clean() {  # _lseg_clean <text> -> $_lseg_out
-  local rest="$1" o="" e best pre bpre after par t
+  local rest="${1:0:512}" o="" e hit pre par t
   while :; do
-    best=""; bpre=""
+    pre="${rest%%$_LSEG_STOP*}"
+    t="$pre"; _clean t; o="${o}${t}"
+    [ ${#pre} -eq ${#rest} ] && break
+    rest="${rest:${#pre}}"
+    hit=""
     for e in '\033[' '\0033[' '\e[' '\E[' '\x1b[' '\x1B[' '\u001b[' '\u001B[' $'\033['; do
-      case "$rest" in *"$e"*) ;; *) continue ;; esac
-      pre="${rest%%"$e"*}"
-      if [ -z "$best" ] || [ ${#pre} -lt ${#bpre} ]; then best="$e"; bpre="$pre"; fi
+      case "$rest" in "$e"*) hit="$e"; break ;; esac
     done
-    [ -z "$best" ] && break
-    t="$bpre"; _clean t; o="${o}${t}"
-    after="${rest:$(( ${#bpre} + ${#best} ))}"
+    # A backslash or ESC that starts no spelling is dropped, as _clean drops
+    # it; the text after it is text.
+    if [ -z "$hit" ]; then rest="${rest:1}"; continue; fi
+    rest="${rest:${#hit}}"
     # Kept only when an m ends it and all before the m is digits and ";"
     # (32 at most); otherwise the escape spelling is dropped, the rest kept.
-    par="${after%%m*}"
-    rest="$after"
-    case "$after" in
+    par="${rest%%m*}"
+    case "$rest" in
       *m*) case "$par" in
              *[!0123456789\;]*) ;;
-             *) [ ${#par} -le 32 ] && { o="${o}\\033[${par}m"; rest="${after#*m}"; } ;;
+             *) [ ${#par} -le 32 ] && { o="${o}\\033[${par}m"; rest="${rest#*m}"; } ;;
            esac ;;
     esac
   done
-  t="$rest"; _clean t
-  _lseg_out="${o}${t}"
+  _lseg_out="$o"
 }
 agentline_seg() {  # agentline_seg <name> <content> — for local.sh
   case "${1-}" in

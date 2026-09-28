@@ -1477,6 +1477,28 @@ check "local seg: no \\x1f/\\x1e" nobytes "$T/out" '\037'
 check "local seg: no CSI but SGR" sh -c "! LC_ALL=C grep -qE '${ESC}\\[[0-9;]*[^0-9;m]' '$T/out'"
 check "local seg: the text survives as text ($(cat "$T/nb"))" \
   grep -qF 'Opus 5 │ A]0;ownedB2JCDEF033]8;;http://xa G 2J H n I 5;1H J' "$T/nb"
+# Large content costs next to nothing, in a UTF-8 locale too, where the
+# first version took 1.2 s for 4.8 KB of coloured text and 152 s for 27 KB of
+# \033[2J (review of J10, stage J9b). Only the first 512 characters count.
+ULC=C; locale -a 2>/dev/null | grep -qix 'c.utf-\{0,1\}8' && ULC=C.UTF-8
+[ "$ULC" = C ] && locale -a 2>/dev/null | grep -qix 'en_US.utf-\{0,1\}8' && ULC=en_US.UTF-8
+# The strings are made without a loop of appends or a large ${//}: either
+# is itself seconds of bash 3.2 in a UTF-8 locale.
+cat > "$T/local-big.sh" <<'EOF'
+_b=$(printf '%300s' ''); _r="${RED}şey ${RESET}"
+agentline_seg big "${_b// /$_r}"
+agentline_seg clear "$(printf '\\033[2J%.0s' $(seq 4000))tail"
+agentline_seg cut "$(printf '%0600d' 0)END"
+EOF
+t0=$(python3 -c 'import time; print(int(time.time() * 1000))')
+nb '"model":{"id":"claude-opus-5"}' "model,local:big,local:clear,local:cut" AGENTLINE_LOCAL="$T/local-big.sh" LC_ALL="$ULC"
+t1=$(python3 -c 'import time; print(int(time.time() * 1000))')
+check "local seg: big content, exit 0 (got $rc)" [ "$rc" = 0 ]
+check "local seg: big content renders in $(( t1 - t0 )) ms ($ULC; < 3000)" [ $(( t1 - t0 )) -lt 3000 ]
+check "local seg: coloured text kept" grep -qF "${ESC}[1;31mşey " "$T/out"
+check "local seg: 4000 clear-screens, no CSI but SGR" sh -c "! LC_ALL=C grep -qE '${ESC}\\[[0-9;]*[^0-9;m]' '$T/out'"
+check "local seg: ... and cut before their tail" sh -c "! grep -q 'tail' '$T/nb'"
+check "local seg: cut at 512 characters" sh -c "grep -q '0000' '$T/nb' && ! grep -q 'END' '$T/nb'"
 
 # Breadcrumb (C14): project_dir differing from cwd leads the path, dim.
 printf '{"session_id":"crumb-0001","cwd":"%s","workspace":{"project_dir":"/src/launch/"}}\n' "$WORK" > "$T/crumb.json"
