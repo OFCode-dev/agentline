@@ -1,5 +1,36 @@
 # Changelog
 
+## Unreleased
+
+- Subagent rows. `agentline-subagents.sh` is a `subagentStatusLine`
+  command: Claude Code's subagent panel gets one agentline row per
+  subagent, with a status spinner or ✓/✗, the description, the model as
+  line 1 names and colours it plus its own effort, context used, elapsed
+  time, a token-velocity sparkline, and what the subagent is running right
+  now, read from the tail of its transcript: `→ Read parser.py ⏳3s`, or,
+  for a Bash call that starts an external worker, `→ codex/gpt-6-astra ⏳2m`.
+  Workers recognised: codex, agy, a `claude -p` over ssh on the bayrak node,
+  the local arb and JEV model servers, Hetzner-hosted Qwen and DeepSeek
+  (see the README table). No command text, prompt or URL path is ever
+  shown. Rows fit the width Claude Code gives them and shed their least
+  important fields first. A task it does not understand keeps Claude Code's
+  own row. One python3 run renders every task: 16 subagents with 1 MB
+  transcripts take about 60 ms. `bash install.sh --with-subagents` sets it,
+  with the statusLine rules: a foreign value is left alone (exit 3) unless
+  `--force`.
+- `agentline-run [--label TEXT] [--heartbeat S] -- CMD …` puts external
+  work on the 🤖 segment: it registers a row named after the worker it runs
+  (the same classifier), keeps it alive with a heartbeat and removes it
+  when CMD ends, also on TERM, HUP or Ctrl-C. CMD's stdio and exit status
+  pass through, and it prints nothing of its own. Installed to
+  `~/.claude/agentline/`; `bash install.sh --link-bin` also links it into
+  `~/.local/bin`, never over a different file.
+- `install.sh` always copies `agentline-subagents.sh`, `agentline-run` and
+  the registry helper `agentline-agent.sh` (which used to come only with
+  `--with-hooks`). None of them runs until something asks for it.
+- `--doctor` reports the subagent line and whether `agentline-run` is
+  installed and on PATH.
+
 ## 2.0.0 — 2026-09-28
 
 - `install.sh --with-hooks` no longer half-applies. A hook entry whose

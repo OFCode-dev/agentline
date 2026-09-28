@@ -32,6 +32,15 @@ bash install.sh --with-hooks
 
 This wires hook entries into `settings.json` idempotently — existing hooks are never duplicated or removed. The agent tracker is registered for PreToolUse (`Agent|Task`), SubagentStart, SubagentStop and Stop. Re-running it on an older install adds the two subagent events, which only fire on a Claude Code release that has SubagentStart/SubagentStop. A `hooks` section it cannot use (an event, or a group's `hooks`, that is not a list) is refused with exit 1 before anything is written; entries of other tools with a non-string `command` are left alone. Skip it unless the user wants those two segments. `AGENTLINE_AGENT_SHOW` (default 4) caps how many running agents `🤖` lists before it counts the rest as `+N`.
 
+## Subagent rows and agentline-run
+
+```bash
+bash install.sh --with-subagents   # subagentStatusLine -> ~/.claude/agentline/agentline-subagents.sh
+bash install.sh --link-bin         # ~/.local/bin/agentline-run -> ~/.claude/agentline/agentline-run
+```
+
+`--with-subagents` gives Claude Code's subagent panel one agentline row per subagent (model, effort, context %, elapsed, what it is running now, including external workers like `codex/gpt-6-astra`). It follows the statusLine rules: set when absent, kept when it already runs `agentline-subagents.sh`, and a foreign `subagentStatusLine` left alone with exit `3` unless `--force`. Ask the user before forcing. `agentline-run -- CMD …` shows a shell command (codex, agy, a model-server curl) on the `🤖` segment while it runs. Suggest it when the user drives external agents from scripts. `--link-bin` never replaces a different file at `~/.local/bin/agentline-run`. Both scripts, and the registry helper, are always copied to `~/.claude/agentline/`.
+
 ## Configure
 
 Set variables in the `env` block of `~/.claude/settings.json`:
@@ -76,7 +85,7 @@ bash ~/.claude/agentline/agentline.sh --doctor            # from a terminal: bui
 echo '{}' | bash ~/.claude/agentline/agentline.sh --doctor # or pipe the payload in question
 ```
 
-It lists every segment as shown or hidden, with its data source ("absent: …" = the payload lacked the field; "probe" = the host command returned nothing). It also gives per-phase render times, the cache directory's trust state, and which hook events `settings.json` wires. A hook event reported `NO` is fixed by re-running `bash install.sh --with-hooks`. It writes no cache, so it is safe to run at any time.
+It lists every segment as shown or hidden, with its data source ("absent: …" = the payload lacked the field; "probe" = the host command returned nothing). It also gives per-phase render times, the cache directory's trust state, which hook events `settings.json` wires, the subagent line, and whether `agentline-run` is installed. A hook event reported `NO` is fixed by re-running `bash install.sh --with-hooks`. It writes no cache, so it is safe to run at any time.
 
 ## Update
 
@@ -86,4 +95,4 @@ cd agentline && git pull && bash install.sh
 
 ## Uninstall
 
-Remove the `statusLine` entry from `~/.claude/settings.json` and delete `~/.claude/agentline/` (plus `~/.claude/agentline-services.conf` if unwanted).
+Remove the `statusLine` (and `subagentStatusLine`) entry from `~/.claude/settings.json`, the `~/.local/bin/agentline-run` link if `--link-bin` made one, and delete `~/.claude/agentline/` (plus `~/.claude/agentline-services.conf` if unwanted).

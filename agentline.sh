@@ -2820,6 +2820,10 @@ sl = d.get('statusLine') if isinstance(d.get('statusLine'), dict) else {}
 print('  statusLine       %s' % (masked(sl.get('command')) if sl.get('command') else '(none)'))
 print('  refreshInterval  %s' % (sl.get('refreshInterval') if sl.get('refreshInterval') is not None
                                  else 'unset: the clock only ticks on conversation events'))
+ssl = d.get('subagentStatusLine') if isinstance(d.get('subagentStatusLine'), dict) else {}
+cmd = ssl.get('command') if isinstance(ssl.get('command'), str) else ''
+print('  subagent rows    %s' % (masked(cmd) + ('' if 'agentline-subagents.sh' in cmd else ' (not agentline)')
+                                 if cmd else '(none: install.sh --with-subagents)'))
 hooks = d.get('hooks') if isinstance(d.get('hooks'), dict) else {}
 WANT = (('agent-tracker-hook.sh', ('PreToolUse', 'SubagentStart', 'SubagentStop', 'Stop')),
         ('wordcount-hook.sh', ('PostToolUse', 'Stop')))
@@ -2927,6 +2931,15 @@ if [ -n "$_AL_DOCTOR" ]; then
   echo
   echo "settings (${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json)"
   python3 -I -c "$_AL_DOCTOR_PY" "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json" 2>/dev/null
+  # agentline-run is not a setting: installed beside this script, and on
+  # PATH only after install.sh --link-bin.
+  _dt_run="$HOME/.claude/agentline/agentline-run"
+  if [ -x "$_dt_run" ]; then
+    _dt_on=$(command -v agentline-run 2>/dev/null)
+    printf '  %-16s %s\n' agentline-run "$_dt_run, $([ -n "$_dt_on" ] && echo "on PATH as $_dt_on" || echo 'not on PATH (install.sh --link-bin)')"
+  else
+    printf '  %-16s %s\n' agentline-run "not installed (re-run install.sh)"
+  fi
   echo
   echo "timings (one cold render, ms)"
   _dt_prev=""; _dt_first=""

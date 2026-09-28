@@ -11,6 +11,16 @@
 #                                 settings.json's env block
 #   bash install.sh --glyphs ascii
 #                                 also set AGENTLINE_GLYPHS (emoji|ascii)
+#   bash install.sh --with-subagents
+#                                 also set subagentStatusLine to
+#                                 agentline-subagents.sh: rich rows in Claude
+#                                 Code's subagent panel (see README)
+#   bash install.sh --link-bin    also symlink ~/.local/bin/agentline-run, so
+#                                 a shell finds it on PATH
+#
+# agentline-subagents.sh, agentline-run and the agent registry helper
+# (agentline-agent.sh) are always copied next to agentline.sh: they do
+# nothing until a setting or a command runs them.
 #
 # Exit status: 0 installed and active, 1 settings.json unusable or unwritable
 # (a file that does not parse, or cannot take --with-hooks — a "hooks" that is
@@ -20,7 +30,8 @@
 # in part are reported as such, never as wired), 2 bad option, 3 installed but NOT
 # active — settings.json runs another status line, which was left alone
 # (re-run with --force, or merge the printed snippet), and --with-hooks was
-# not wired for it.
+# not wired for it; or, with --with-subagents, another subagentStatusLine,
+# left alone the same way.
 #
 # settings.json belongs to the user, so every edit to it is guarded: a file
 # that does not parse is refused rather than rewritten, a timestamped backup is
@@ -39,10 +50,12 @@ OLD_SVC_CONFIG="$HOME/.claude/statusline-services.conf"
 KEEP_BACKUPS=5
 
 usage() {
-  echo "usage: bash install.sh [--with-hooks] [--force] [--theme dark|light|mono] [--glyphs emoji|ascii]"
+  echo "usage: bash install.sh [--with-hooks] [--with-subagents] [--link-bin] [--force] [--theme dark|light|mono] [--glyphs emoji|ascii]"
 }
 
 WITH_HOOKS=0
+WITH_SUB=0
+LINK_BIN=0
 FORCE=0
 THEME=""
 GLYPHS=""
@@ -50,6 +63,8 @@ while [ $# -gt 0 ]; do
   arg="$1"; shift
   case "$arg" in
     --with-hooks) WITH_HOOKS=1 ;;
+    --with-subagents) WITH_SUB=1 ;;
+    --link-bin)   LINK_BIN=1 ;;
     --force)      FORCE=1 ;;
     --theme|--glyphs)
       if [ $# -eq 0 ]; then echo "✗ $arg needs a value" >&2; usage >&2; exit 2; fi
@@ -83,6 +98,8 @@ STAMP=$(date -u +%Y%m%d-%H%M%S)
 #   settings_py resolve    <settings> <stamp> <default_dest>
 #   settings_py statusline <settings> <stamp> <dest> <force>
 #   settings_py hooks      <settings> <stamp> <hooks_dest>
+#   settings_py subresolve <settings> <stamp> <default_dest>
+#   settings_py subagents  <settings> <stamp> <dest> <force>
 #   settings_py env        <settings> <stamp> KEY=VALUE...
 #
 # A parse error is fatal and never written back. Before the fix, any error
@@ -111,6 +128,8 @@ EXIT_NOT_ACTIVE = 3  # see the header of install.sh
 # is what Claude Code's own /statusline setup writes. A pre-rename name alone
 # therefore proves nothing; see pre_rename_is_ours().
 AGENTLINE_NAMES = {'agentline.sh'}
+# subagentStatusLine's script (--with-subagents), recognised the same way.
+SUBAGENT_NAMES = {'agentline-subagents.sh'}
 PRE_RENAME_NAMES = {'statusline.sh', 'statusline-command.sh'}
 # Strings only an agentline script itself contains: its header line, and the
 # service-list file the pre-rename script read (statusline-services.conf).
@@ -225,7 +244,7 @@ def script_path(cmd):
             return os.path.expanduser(os.path.expandvars(part))
     return ''
 
-def own_script(cmd, default_dest):
+def own_script(cmd, default_dest, names=AGENTLINE_NAMES):
     """(path, wrapped): the agentline script `cmd` runs, or ('', False) when
     that is not certain. wrapped is True when the script is not the command
     itself but is run from inside it — `bash -c "AGENTLINE_TZ=UTC exec
@@ -240,11 +259,11 @@ def own_script(cmd, default_dest):
     def trusted(path):
         return path == default_dest or (os.path.isabs(path) and os.path.isfile(path))
     path = script_path(cmd)
-    if os.path.basename(path) in AGENTLINE_NAMES and trusted(path):
+    if os.path.basename(path) in names and trusted(path):
         return path, False
     for part in words(cmd):
         for w in words(part):
-            if os.path.basename(w) in AGENTLINE_NAMES:
+            if os.path.basename(w) in names:
                 path = os.path.expanduser(os.path.expandvars(w))
                 if trusted(path):
                     return path, True
@@ -380,6 +399,41 @@ elif mode == 'statusline':
         print("  ✓ statusLine.refreshInterval set to 1s (live clock)")
     if sl != d.get('statusLine'):
         d['statusLine'] = sl
+        save(d)
+
+elif mode in ('subresolve', 'subagents'):
+    # subagentStatusLine under the statusLine rules: set when absent, an
+    # agentline-subagents.sh already there kept verbatim (a custom path is
+    # upgraded in place: subresolve names it as the copy target), someone
+    # else's left alone unless --force, with the snippet to merge and exit 3.
+    # It has no refreshInterval of its own: Claude Code runs it on the main
+    # status line's ticks.
+    ssl = d.get('subagentStatusLine')
+    ssl = dict(ssl) if isinstance(ssl, dict) else {}
+    cur = ssl.get('command') if isinstance(ssl.get('command'), str) else ''
+    dest = args[0]
+    own, wrapped = own_script(cur, dest, SUBAGENT_NAMES)
+    if mode == 'subresolve':
+        print(own or dest)
+        sys.exit(0)
+    force = args[1] == '1'
+    if not cur or (force and not own):
+        ssl.update({'type': 'command', 'command': dest})
+        print(f"✓ settings.json subagentStatusLine set to {dest}")
+        if cur:
+            print(f"  (was: {cur})")
+    elif own:
+        print(f"• settings.json subagentStatusLine left as-is: {cur}")
+    else:
+        snippet = json.dumps({'subagentStatusLine': {'type': 'command', 'command': dest}}, indent=2)
+        print(f"⚠ settings.json subagentStatusLine is not agentline: {cur}")
+        print("  Left untouched. To switch, merge this into settings.json:")
+        for line in snippet.splitlines()[1:-1]:
+            print(f"  {line}")
+        print("  or re-run: bash install.sh --with-subagents --force")
+        sys.exit(EXIT_NOT_ACTIVE)
+    if ssl != d.get('subagentStatusLine'):
+        d['subagentStatusLine'] = ssl
         save(d)
 
 elif mode == 'env':
@@ -522,6 +576,21 @@ else
   echo "✓ Installed to $DEST"
 fi
 
+# The companions, always, beside the default install: the subagent rows'
+# script, agentline-run and the registry helper agentline-run writes
+# through. None of them runs until a setting (--with-subagents) or a
+# command (agentline-run ...) asks for it, so copying them changes nothing
+# on its own. A file that is this checkout's own is not copied onto itself.
+AL_HOME="$HOME/.claude/agentline"
+mkdir -p "$AL_HOME"
+for f in agentline-subagents.sh agentline-run hooks/agentline-agent.sh; do
+  to="$AL_HOME/${f##*/}"
+  [ "$SCRIPT_DIR/$f" -ef "$to" ] && continue
+  cp "$SCRIPT_DIR/$f" "$to"
+  chmod +x "$to"
+done
+echo "✓ Installed agentline-subagents.sh, agentline-run and agentline-agent.sh to $AL_HOME"
+
 # Machine-local service list. Never overwrite an existing one: it holds this
 # host's unit names and is deliberately not tracked in git. A pre-rename
 # statusline conf is migrated so the host keeps its unit list.
@@ -544,6 +613,7 @@ if [ "$SL_RC" = 3 ]; then
   echo "⚠ agentline is installed to $DEST but NOT active."
   echo "  Re-run with --force, or merge the snippet above into $SETTINGS."
   [ "$WITH_HOOKS" = 1 ] && echo "• Hooks not wired: the configured status line is not agentline."
+  [ "$WITH_SUB" = 1 ] && echo "• subagentStatusLine not set: the configured status line is not agentline."
   exit 3
 elif [ "$SL_RC" != 0 ]; then
   exit "$SL_RC"
@@ -575,11 +645,53 @@ if [ "$WITH_HOOKS" = 1 ]; then
   mkdir -p "$HOOKS_DEST"
   cp "$SCRIPT_DIR/hooks/wordcount-hook.sh" "$HOOKS_DEST/"
   cp "$SCRIPT_DIR/hooks/agent-tracker-hook.sh" "$HOOKS_DEST/"
-  # Shared registry used by the hook and by any external process.
-  cp "$SCRIPT_DIR/hooks/agentline-agent.sh" "$HOOKS_DEST/"
-  chmod +x "$HOOKS_DEST/wordcount-hook.sh" "$HOOKS_DEST/agent-tracker-hook.sh" \
-           "$HOOKS_DEST/agentline-agent.sh"
+  # The shared registry both write through, agentline-agent.sh, was copied
+  # with the companions above.
+  chmod +x "$HOOKS_DEST/wordcount-hook.sh" "$HOOKS_DEST/agent-tracker-hook.sh"
   settings_py hooks "$SETTINGS" "$STAMP" "$HOOKS_DEST"
 fi
 
+# --- Subagent status line -----------------------------------------------------
+# Opt-in like the hooks: it replaces the rows of Claude Code's own subagent
+# panel. A custom agentline-subagents.sh path already configured is upgraded
+# in place, as agentline.sh's is.
+SUB_RC=0
+if [ "$WITH_SUB" = 1 ]; then
+  SUB_DEST=$(settings_py subresolve "$SETTINGS" "$STAMP" "$AL_HOME/agentline-subagents.sh")
+  if [ "$SUB_DEST" != "$AL_HOME/agentline-subagents.sh" ] && ! [ "$SCRIPT_DIR/agentline-subagents.sh" -ef "$SUB_DEST" ]; then
+    cp "$SCRIPT_DIR/agentline-subagents.sh" "$SUB_DEST"
+    chmod +x "$SUB_DEST"
+    echo "✓ Upgraded $SUB_DEST in place"
+  fi
+  settings_py subagents "$SETTINGS" "$STAMP" "$SUB_DEST" "$FORCE" || SUB_RC=$?
+  [ "$SUB_RC" = 3 ] || [ "$SUB_RC" = 0 ] || exit "$SUB_RC"
+fi
+
+# --- agentline-run on PATH ----------------------------------------------------
+# A symlink, so an upgrade (which rewrites the copy in $AL_HOME) is picked up
+# without re-linking, and the script still finds its helpers beside the
+# target. Whatever already sits at that name and is not this link — another
+# tool's agentline-run, a copy of ours — is left alone and reported.
+if [ "$LINK_BIN" = 1 ]; then
+  BIN_DIR="$HOME/.local/bin"
+  BIN="$BIN_DIR/agentline-run"
+  if [ -L "$BIN" ] && [ "$(readlink "$BIN")" = "$AL_HOME/agentline-run" ]; then
+    echo "• $BIN already links to $AL_HOME/agentline-run"
+  elif [ -e "$BIN" ] || [ -L "$BIN" ]; then
+    echo "⚠ $BIN exists and is not a link to $AL_HOME/agentline-run — left alone"
+  else
+    mkdir -p "$BIN_DIR"
+    ln -s "$AL_HOME/agentline-run" "$BIN"
+    echo "✓ Linked $BIN -> $AL_HOME/agentline-run"
+  fi
+  case ":${PATH-}:" in
+    *":$BIN_DIR:"*) ;;
+    *) echo "• $BIN_DIR is not on PATH: add it, or run $AL_HOME/agentline-run" ;;
+  esac
+fi
+
+if [ "$SUB_RC" = 3 ]; then
+  echo "⚠ agentline is active, but the subagent rows are NOT: another subagentStatusLine is configured."
+  exit 3
+fi
 echo "Done. Restart Claude Code to see the status bar."

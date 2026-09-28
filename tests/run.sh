@@ -3595,6 +3595,73 @@ rm -f "$PWNED"
 erun /dev/null AGENTLINE_TMP="$RSIDE" PATH="$RBIN:$PATH_F" "$TEST_BASH" "$ARUN" -- codex
 pwned "isolated: agentline-run"
 
+# --- install.sh: companions, --with-subagents, --link-bin ----------------------
+inst_home sub-fresh
+install_run
+AL="$H/.claude/agentline"
+check "install: companions installed" [ -x "$AL/agentline-subagents.sh" -a -x "$AL/agentline-run" -a -x "$AL/agentline-agent.sh" ]
+check "install: companions are this checkout's" cmp -s "$ROOT/agentline-run" "$AL/agentline-run"
+jcheck "install: no subagentStatusLine without the flag" "$S" "'subagentStatusLine' in d" 'false'
+install_run --with-subagents
+check "install --with-subagents: exit 0 (got $irc)" [ "$irc" = 0 ]
+jcheck "install --with-subagents: set" "$S" "d['subagentStatusLine']" "{\"type\":\"command\",\"command\":\"$AL/agentline-subagents.sh\"}"
+cp "$S" "$T/before.json"; before=$(n_backups)
+install_run --with-subagents
+check "install --with-subagents: idempotent" cmp -s "$S" "$T/before.json"
+check "install --with-subagents: no new backup" [ "$(n_backups)" = "$before" ]
+check "install --with-subagents: says left as-is" grep -q 'subagentStatusLine left as-is' "$T/iout"
+# Someone else's subagent line: left alone, exit 3, unless --force.
+inst_home sub-foreign
+printf '%s\n' '{"subagentStatusLine":{"type":"command","command":"/opt/other/rows.sh"}}' > "$S"
+install_run --with-subagents
+check "install foreign subagent line: exit 3 (got $irc)" [ "$irc" = 3 ]
+jcheck "install foreign subagent line: kept" "$S" "d['subagentStatusLine']['command']" '"/opt/other/rows.sh"'
+check "install foreign subagent line: snippet printed" grep -q '"subagentStatusLine"' "$T/iout"
+jcheck "install foreign subagent line: statusLine still set" "$S" "d['statusLine']['command']" "\"$H/.claude/agentline/agentline.sh\""
+install_run --with-subagents --force
+check "install foreign subagent line --force: exit 0 (got $irc)" [ "$irc" = 0 ]
+jcheck "install foreign subagent line --force: replaced" "$S" "d['subagentStatusLine']['command']" "\"$H/.claude/agentline/agentline-subagents.sh\""
+check "install foreign subagent line --force: backed up" [ "$(n_backups)" -ge 1 ]
+# Ours at a custom path: upgraded in place, setting untouched.
+inst_home sub-custom
+mkdir -p "$H/opt"; echo old > "$H/opt/agentline-subagents.sh"
+printf '{"subagentStatusLine":{"type":"command","command":"%s"}}\n' "$H/opt/agentline-subagents.sh" > "$S"
+install_run --with-subagents
+check "install custom subagent path: exit 0 (got $irc)" [ "$irc" = 0 ]
+check "install custom subagent path: upgraded in place" cmp -s "$ROOT/agentline-subagents.sh" "$H/opt/agentline-subagents.sh"
+jcheck "install custom subagent path: kept" "$S" "d['subagentStatusLine']['command']" "\"$H/opt/agentline-subagents.sh\""
+# A foreign statusLine: nothing past it is wired, subagent line included.
+inst_home sub-sl-foreign
+printf '%s\n' '{"statusLine":{"type":"command","command":"npx -y ccstatusline@latest"}}' > "$S"
+install_run --with-subagents
+check "install foreign statusLine + --with-subagents: exit 3" [ "$irc" = 3 ]
+jcheck "install foreign statusLine: subagent line not set" "$S" "'subagentStatusLine' in d" 'false'
+# --link-bin: a symlink into the install, never over something else.
+inst_home sub-bin
+install_run --link-bin
+check "install --link-bin: exit 0 (got $irc)" [ "$irc" = 0 ]
+check "install --link-bin: linked" [ "$(readlink "$H/.local/bin/agentline-run")" = "$H/.claude/agentline/agentline-run" ]
+install_run --link-bin
+check "install --link-bin: re-run keeps the link" grep -q 'already links' "$T/iout"
+rm -f "$H/.local/bin/agentline-run"; echo mine > "$H/.local/bin/agentline-run"
+install_run --link-bin
+check "install --link-bin: another file left alone" [ "$(cat "$H/.local/bin/agentline-run")" = mine ]
+check "install --link-bin: says so" grep -q 'left alone' "$T/iout"
+check "install --link-bin: still exit 0" [ "$irc" = 0 ]
+
+# --- --doctor: the subagent line and agentline-run ------------------------------
+mkdir -p "$HOME_F/.claude"
+printf '%s\n' '{"subagentStatusLine":{"type":"command","command":"/x/agentline-subagents.sh"}}' > "$HOME_F/.claude/settings.json"
+doctor "$T/doc2.json"
+check "doctor: subagent rows reported" dhas '^  subagent rows +/x/agentline-subagents\.sh$'
+check "doctor: agentline-run not installed" dhas '^  agentline-run +not installed'
+mkdir -p "$HOME_F/.claude/agentline"; cp "$ARUN" "$HOME_F/.claude/agentline/agentline-run"
+printf '%s\n' '{}' > "$HOME_F/.claude/settings.json"
+doctor "$T/doc2.json"
+check "doctor: no subagent rows" dhas '^  subagent rows +\(none: install\.sh --with-subagents\)$'
+check "doctor: agentline-run installed, not on PATH" dhas '^  agentline-run +.*/agentline-run, not on PATH'
+rm -rf "$HOME_F/.claude/agentline" "$HOME_F/.claude/settings.json"
+
 # ===========================================================================
 echo "agentline tests (bash $TEST_BASH_MAJOR): $n_pass passed, $n_fail failed, $n_skip skipped"
 [ "$n_fail" = 0 ]

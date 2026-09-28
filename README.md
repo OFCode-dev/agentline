@@ -51,13 +51,21 @@ Add the optional 🔤 word-counter and 🤖 live agent-tracker segments (they ne
 bash install.sh --with-hooks
 ```
 
+Draw Claude Code's subagent panel with agentline's [rich rows](#subagent-status-line) (model, context, what each subagent is running right now), and put [`agentline-run`](#agentline-run) on your PATH:
+
+```bash
+bash install.sh --with-subagents --link-bin
+```
+
 `install.sh` is safe to re-run: it upgrades in place, never overwrites your machine-local service list, and wires hooks idempotently. It treats `~/.claude/settings.json` as yours:
 
 - A `settings.json` that is not valid JSON is refused with the line number. Nothing is rewritten.
 - A timestamped backup (`settings.json.agentline-bak-YYYYmmdd-HHMMSS`, UTC, newest 5 kept) is taken before any edit, and the new file is swapped in atomically. A symlinked `settings.json` stays a symlink; it is edited, and its backups are written, next to the link's **target** (e.g. inside your dotfiles repo). A `settings.json` bind-mounted on its own (devcontainers) cannot be swapped, so it is rewritten in place after the backup.
 - A status line that is not agentline (`npx ccstatusline`, your own `~/.claude/statusline.sh`, …) is left untouched. The installer prints the snippet to paste instead, says agentline is installed but **not active**, skips `--with-hooks`, and exits with status `3`. Pass `--force` to switch anyway. A `statusline.sh` / `statusline-command.sh` is migrated automatically only when it is provably agentline's own pre-rename copy: the file carries agentline's header line or reads `statusline-services.conf`, or the command is a single absolute path to a file that no longer exists. Its name or directory alone never counts, because those are the usual names of other status lines too.
 - agentline run through a wrapper (`bash -c "AGENTLINE_TZ=UTC exec ~/.claude/agentline/agentline.sh"`, or piped through `sed`) counts as active. The copy the wrapper runs is upgraded in place and the wrapper is left as it is.
-- Exit status: `0` installed and active, `1` `settings.json` unusable or unwritable (refused before anything is copied, or the write failed and the file was left whole next to its backup), `2` bad option, `3` installed but not active.
+- With `--with-subagents`, `subagentStatusLine` follows the same rules: it is set when absent, kept when it already runs `agentline-subagents.sh` (a custom copy is upgraded in place), and left alone when it runs something else, unless you pass `--force`. In that last case the snippet is printed and the exit status is `3`.
+- `agentline-subagents.sh`, `agentline-run` and the registry helper `agentline-agent.sh` are always copied into `~/.claude/agentline/`. None of them runs until a setting or a command asks for it.
+- Exit status: `0` installed and active, `1` `settings.json` unusable or unwritable (refused before anything is copied, or the write failed and the file was left whole next to its backup), `2` bad option, `3` installed but not active (the status line, or with `--with-subagents` the subagent line).
 - If the installed `agentline.sh` differs from the new one, it is kept as `agentline.sh.bak-<timestamp>` before being replaced. Put your tweaks in [`local.sh`](#faq) so they survive upgrades.
 
 ## What each line shows
@@ -275,6 +283,76 @@ the same variable, so it must be set for both, e.g. in the `settings.json` `env`
 `AGENTLINE_AGENT_CAP` (default 32) to change how many rows the file keeps.
 Past the cap, finished rows are evicted first, then the oldest running one.
 
+### agentline-run
+
+`agentline-run` does all of the above for you: it registers the row, keeps it
+alive, and takes it away when the command ends, whichever way it ends.
+
+```bash
+agentline-run -- codex exec -m gpt-6-astra "review the diff"      # 🤖 codex/gpt-6-astra
+agentline-run -- agy -p "summarise the logs" --model gemini-3-pro  # 🤖 agy/gemini-3-pro
+agentline-run -- ssh -F ~/bayrak-vcn/.ssh/config bayrak \
+  'claude -p "run the evals" --model opus'                        # 🤖 bayrak/opus
+agentline-run -- curl -s http://127.0.0.1:18080/v1/chat/completions -d @req.json
+                                                                   # 🤖 arb/qwen3.6
+agentline-run --label "nightly eval" -- python3 run_jev.py         # 🤖 nightly eval
+```
+
+```text
+agentline-run [--label TEXT] [--heartbeat SECONDS|0] -- CMD [ARGS...]
+```
+
+- The label defaults to the worker the command runs, named by the same classifier as the [subagent rows](#subagent-status-line) (see the table there). Anything else is shown by its program name (`make`, `build.py`). The label never contains the command's arguments, so a prompt or a key stays off the bar.
+- `--heartbeat` re-registers the row every 60 s by default. Without a heartbeat, a run longer than five minutes ages out of the display. `0` turns it off.
+- CMD keeps the caller's stdin, stdout and stderr, and its exit status is `agentline-run`'s. A CMD killed by a signal gets `agentline-run` killed by the same signal. `agentline-run` itself prints nothing but errors. It works under `timeout`, in scripts and nested inside another `agentline-run`. A nested run with the same label shows one row, not two.
+- `TERM` and `HUP` are passed on to CMD, then the row is removed. Ctrl-C reaches CMD directly from the terminal, and the row goes when CMD does. If the registry helper or `python3` is missing, the command simply runs.
+
+`install.sh` puts it in `~/.claude/agentline/agentline-run`. `bash install.sh --link-bin` also links it as `~/.local/bin/agentline-run`. It never overwrites a different file already at that name.
+
+## Subagent status line
+
+Claude Code lists running subagents in a panel of their own, one row each, and
+lets a [`subagentStatusLine`](https://code.claude.com/docs/en/statusline) command draw
+those rows. `bash install.sh --with-subagents` sets it to
+`~/.claude/agentline/agentline-subagents.sh`, which turns each row into:
+
+```text
+⠹ Review the parser changes │ Haiku 4.5 🟢low │ 📊 12% │ ⏱️ 5m │ → codex/gpt-6-astra ⏳2m │ ▃▅▆▇█▆ │ 📂 api
+```
+
+| Field | Source |
+|-------|--------|
+| status | a spinner while running, `✓` completed, `✗` failed, `⊘` killed or cancelled, `•` anything else |
+| label | the task's description (else its label or name) |
+| model + effort | the resolved model id as a short name, coloured like line 1 (`Opus 5.5`, `Sonnet 5`, `Haiku 4.5`, `✦ Fable 5.1`), and the effort pill when the subagent sets its own (a numeric budget shows as `⚙️ 16k`) |
+| context | `tokenCount / contextWindowSize`, with line 1's colours: yellow from 60 %, red `⚠️` from 80 % |
+| elapsed | since the task started. A finished one uses its transcript's last entry as the end |
+| activity | what the subagent is doing now: its newest tool call without a result, and how long it has run (`⏳2m`, `+1` when calls run in parallel) |
+| velocity | a six-cell sparkline of the growth between the last token samples |
+| cwd | the subagent's directory, when it is not the session's |
+
+The activity names the tool and its target without ever showing input text: `Read parser.py`, `Edit README.md`, `WebFetch docs.example.com` (host only), `search` for Grep, Glob and WebSearch, `agent/Explore`, `mcp:github`. For a `Bash` call it names the program (`Bash git`) or, in the worker colour, the external worker it runs:
+
+| Command | Row |
+|---------|-----|
+| `codex exec … -m <model>` | `codex/<model>` (no `-m`: `codex`) |
+| `agy … --model <m>` | `agy/<m>` |
+| `ssh … bayrak 'claude -p … --model <m>'` | `bayrak/<m>` (other commands on `bayrak`: `bayrak`) |
+| `ssh <host> …` | the worker its remote command runs, else `ssh/<host>` |
+| `127.0.0.1:18080`, model `arb-coder` | `arb/qwen3.6` |
+| `arbctl.py` | `arb/ctl` |
+| `127.0.0.1:18081`, `run_jev.py`, `jev_eval` | `jev/jevk5` |
+| `inference.hetzner.com`, `$HETZNER_INFERENCE_BASE_URL` | `hetzner/<model>` (`qwen3.6-fp8`, `qwen3.8-27b`, …) |
+| `integrate.api.nvidia.com`, `review-deepseek.py` | `deepseek` |
+| `claude -p … --model <m>` | `claude/<m>` |
+| `agentline-run --label X -- …` | `X` |
+
+`timeout`, `env`, `nohup`, `VAR=value` and `bash -c '…'` in front are looked through, and so are `cd … &&` and pipes. A model name is shown only when it is a short, plain token (`[A-Za-z0-9._/-]`, at most 40 characters), so a crafted command cannot put anything else on the row.
+
+Rows fit the width Claude Code gives them. When a row is too wide, the lowest-priority fields go first: cwd, velocity, the activity's timer, the activity, elapsed, context, effort, model. Then the label is shortened. A field with no data is left out. A task the script cannot make sense of (no id, an unknown shape) keeps Claude Code's own row, and without `python3` every row does. Themes, `NO_COLOR`, `AGENTLINE_GLYPHS=ascii` and the colour overrides apply as on the main line.
+
+The activity comes from the subagent's own transcript, `<project>/<session>/subagents/agent-<id>.jsonl` (or `…/subagents/workflows/wf_*/` for a workflow's agents). At most its last 128 KB is read, and only when the file is regular, yours, not a symlink, and inside the session's project directory. Every string taken from it is stripped of control characters, as the main line does. All tasks are rendered in one `python3` run: 16 subagents with 1 MB transcripts take about 60 ms.
+
 ## Manual install
 
 Copy `agentline.sh` anywhere and point `~/.claude/settings.json` at it:
@@ -327,7 +405,7 @@ It reports:
 - the bash, OS, `python3` and `timeout` it found;
 - the effective width, layout and drop list;
 - the cache directory, and whether it passed the owner/symlink check that caching depends on;
-- whether `settings.json` wires the status line (its command with every `NAME=value` word masked, so a report is safe to paste), `refreshInterval` and each hook event (a missing `SubagentStart` means re-run `install.sh --with-hooks`);
+- whether `settings.json` wires the status line (its command with every `NAME=value` word masked, so a report is safe to paste), `refreshInterval`, the subagent line, each hook event (a missing `SubagentStart` means re-run `install.sh --with-hooks`), and whether `agentline-run` is installed and on PATH;
 - the wall time of each phase of one cold render;
 - every host probe's value;
 - every segment, as `shown` or `hidden` with where its data comes from ("absent: cost.total_cost_usd" means the payload did not carry that field).
