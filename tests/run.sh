@@ -2653,6 +2653,56 @@ doctor "$T/doc2.json" TMPDIR="$T/dtmp"
 check "doctor: untrusted cache dir reported" dhas 'FAILED the owner/symlink check'
 check "doctor: nothing written into it" [ -z "$(ls -A "$T/dtmp/real")" ]
 rm -rf "$T/dtmp"
+# Missing git counts are explained (J10): every way out of the status gate
+# names itself on the "counts" row. The repositories are the C14 ones.
+if [ -n "${GR-}" ] && [ -d "$GR" ]; then
+  dgit() {  # dgit <cwd> [VAR=val...] -> doctor report in $T/dout
+    local c="$1"; shift
+    printf '{"session_id":"dgit-1","cwd":"%s","model":{"id":"claude-opus-5"}}' "$c" > "$T/dgit.json"
+    doctor "$T/dgit.json" ${1+"$@"}
+  }
+  dgit "$GR"
+  # ?3: the probe-cache test above left a third untracked file.
+  check "doctor git: counts shown" dhas '^  counts +shown +git status: ↑1↓1 ±1 \?3 ✖1$'
+  dgit "$GO"
+  check "doctor git: in sync and clean" dhas '^  counts +hidden +git status: in sync with its upstream, clean tree$'
+  dgit "$GR" AGENTLINE_GIT_STATUS=0
+  check "doctor git: disabled" dhas '^  counts +hidden +git status: disabled \(AGENTLINE_GIT_STATUS=0\)$'
+  for k in filter include fsmon; do
+    kc="$k"; [ "$k" = fsmon ] && kc=fsmonitor
+    dgit "$GM/$k"
+    check "doctor git: risky key named ($kc)" dhas "^  counts +hidden +git status: config names a key that can run a command \\($kc\\)$"
+  done
+  dgit "$GM/filter-wt"
+  check "doctor git: worktree common config" dhas 'git status: common dir: config names a key that can run a command \(filter\)$'
+  mkrepo bigcfg
+  i=0; while [ "$i" -lt 800 ]; do printf '# %s\n' "padding-line-$i-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"; i=$((i + 1)); done >> "$GM/bigcfg/.git/config"
+  dgit "$GM/bigcfg"
+  check "doctor git: oversized config" dhas 'git status: oversized config: config is past 64 KB$'
+  gq init "$GM/noup"; printf 'n\n' > "$GM/noup/n"; gq -C "$GM/noup" add n; gq -C "$GM/noup" commit -m n
+  dgit "$GM/noup"
+  check "doctor git: no upstream, clean" dhas '^  counts +hidden +git status: no upstream \(no ahead/behind\), clean tree$'
+  : > "$GM/noup/new"
+  dgit "$GM/noup"
+  check "doctor git: no upstream, dirty" dhas '^  counts +shown +git status: \?1; no upstream \(no ahead/behind\)$'
+  gq clone "$GB" "$GM/det"; gq -C "$GM/det" checkout --detach
+  dgit "$GM/det"
+  check "doctor git: detached HEAD" dhas 'git status: no branch \(a detached HEAD\)'
+  dgit "$T"
+  check "doctor git: not a repo" dhas '^  counts +hidden +git status: not a repo$'
+  # The back-off a real render obeys is read (not written) by the doctor.
+  mkdir -p "$CACHE_DIR"; printf '%s\n%s' 9999999999 "$GR" > "$(cbase dgit-1).gitslow"
+  dgit "$GR"
+  check "doctor git: back-off shown with its end" dhas 'git status: backed off after a slow repo \(git status timed out\) until [0-9][0-9]:[0-9][0-9]:[0-9][0-9]$'
+  rm -f "$(cbase dgit-1).gitslow"
+  # No timeout binary: a PATH of links to everything but timeout/gtimeout.
+  NT="$T/notimeout"; mkdir -p "$NT"
+  for b in python3 git awk sed date cat tr tail head grep ls stat mkdir mv rm wc tac uname id who df top ps pgrep env sh sleep cut sort tput; do
+    p=$(command -v "$b" 2>/dev/null) && ln -sf "$p" "$NT/$b"
+  done
+  dgit "$GR" PATH="$NT"
+  check "doctor git: no timeout binary" dhas 'git status: no timeout/gtimeout binary \(stock macOS'
+fi
 # stdin a terminal: the built-in sample, never a hang.
 python3 - "$T/dpty" "$WORK" "$PATH_F" "$HOME_F" "$TMP_F" "$SIDE" "$TEST_BASH" "$ROOT/agentline.sh" <<'PYEOF'
 import os, pty, select, sys

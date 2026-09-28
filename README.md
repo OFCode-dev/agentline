@@ -408,7 +408,8 @@ It reports:
 - whether `settings.json` wires the status line (its command with every `NAME=value` word masked, so a report is safe to paste), `refreshInterval`, the subagent line, each hook event (a missing `SubagentStart` means re-run `install.sh --with-hooks`), and whether `agentline-run` is installed and on PATH;
 - the wall time of each phase of one cold render;
 - every host probe's value;
-- every segment, as `shown` or `hidden` with where its data comes from ("absent: cost.total_cost_usd" means the payload did not carry that field).
+- every segment, as `shown` or `hidden` with where its data comes from ("absent: cost.total_cost_usd" means the payload did not carry that field);
+- under `git`, a `counts` row: the ahead/behind and dirty counts, or exactly why they are missing. The reasons are: `AGENTLINE_GIT_STATUS=0`, a repo config naming a key that can run a command (the class is named: `filter`, `include`, `credential`, `fsmonitor`, `hooksPath`, `sshCommand`, …), a git dir or HEAD you do not own, an oversized config, no `timeout`/`gtimeout` (stock macOS), a back-off after a slow repo (with the time it ends), no upstream (so no ahead/behind), a detached HEAD, or not a repo.
 
 Doctor mode bypasses both caches and writes none of them, so the timings are real and a sample never replaces the live line.
 

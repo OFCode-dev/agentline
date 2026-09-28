@@ -30,6 +30,14 @@
   `--with-hooks`). None of them runs until something asks for it.
 - `--doctor` reports the subagent line and whether `agentline-run` is
   installed and on PATH.
+- `--doctor` says why the git counts are missing. A new `counts` row under
+  `git` shows `↑1 ±2 ?1`, or the reason there are none: disabled
+  (`AGENTLINE_GIT_STATUS=0`), a repo config key that can run a command,
+  named by class (`filter`, `include`, `fsmonitor`, …, never the line
+  itself), a git dir or HEAD not owned by you, an oversized config, no
+  `timeout`/`gtimeout` binary, a back-off after a slow repo (until when),
+  no upstream, a detached HEAD, or not a repo. Before, all of these looked
+  the same: a branch and nothing beside it.
 
 ## 2.0.0 — 2026-09-28
 

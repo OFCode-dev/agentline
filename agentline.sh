@@ -882,21 +882,35 @@ fi
 # "x" ]", "[include]path=..", "fsMonitor = ..."). A word in a comment or a
 # value errs on the safe side: the counts are skipped, the branch stays.
 # Builtins only: `read` and `case`, with nocasematch (bash 3.1+).
+# A refusal leaves its reason in $_git_cfg_why, for --doctor: the key class
+# (filter, include, ...), never the line itself, which may hold a secret.
 _git_cfg_ok() {
   local f="$1" l total=0 rc=0 nc=0
   [ -e "$f" ] || [ -L "$f" ] || return 0
-  [ -f "$f" ] && [ -O "$f" ] && [ -r "$f" ] || return 1
+  [ -f "$f" ] && [ -O "$f" ] && [ -r "$f" ] || {
+    _git_cfg_why="${f##*/} is not a regular, readable file owned by you"; return 1; }
   shopt -q nocasematch && nc=1
   shopt -s nocasematch
   while IFS= read -r -n 4096 l || [ -n "$l" ]; do
-    [ ${#l} -ge 4096 ] && { rc=1; break; }
+    [ ${#l} -ge 4096 ] && { _git_cfg_why="oversized config: ${f##*/} has a line past 4 KB"; rc=1; break; }
     total=$(( total + ${#l} + 1 ))
-    [ "$total" -gt 65536 ] && { rc=1; break; }
+    [ "$total" -gt 65536 ] && { _git_cfg_why="oversized config: ${f##*/} is past 64 KB"; rc=1; break; }
     l="${l//[[:space:]]/}"
     case "$l" in
-      \[filter*|\[include*|\[credential*|*fsmonitor*|*hookspath*|*sshcommand*|*askpass*|*gitproxy*|*uploadpack*|*receivepack*)
-        rc=1; break ;;
+      \[filter*)      _git_cfg_why=filter ;;
+      \[include*)     _git_cfg_why=include ;;
+      \[credential*)  _git_cfg_why=credential ;;
+      *fsmonitor*)    _git_cfg_why=fsmonitor ;;
+      *hookspath*)    _git_cfg_why=hooksPath ;;
+      *sshcommand*)   _git_cfg_why=sshCommand ;;
+      *askpass*)      _git_cfg_why=askpass ;;
+      *gitproxy*)     _git_cfg_why=gitProxy ;;
+      *uploadpack*)   _git_cfg_why=uploadpack ;;
+      *receivepack*)  _git_cfg_why=receivepack ;;
+      *) continue ;;
     esac
+    _git_cfg_why="${f##*/} names a key that can run a command ($_git_cfg_why)"
+    rc=1; break
   done 2>/dev/null < "$f"
   [ "$nc" = 1 ] || shopt -u nocasematch
   return "$rc"
@@ -906,6 +920,7 @@ git_repo=""
 git_url=""
 git_ab=""
 git_dirty=""
+_git_why="not a repo"; _git_why_until=""
 if [ -n "$cwd" ] && [ -d "$cwd" ]; then
   _git_ask=0; _gd=""
   if [ -n "${GIT_DIR-}${GIT_WORK_TREE-}${GIT_CEILING_DIRECTORIES-}" ]; then
@@ -1046,10 +1061,24 @@ if [ -n "$cwd" ] && [ -d "$cwd" ]; then
   # a submodule moved to another commit still counts, edits inside one no
   # longer do) and GIT_NO_LAZY_FETCH=1 (git 2.44+; older git ignores it, and
   # the scan refuses the transport keys instead).
+  #
+  # Each way out leaves its reason in $_git_why, for --doctor ("why are my
+  # counts missing?" has eight answers, none visible on the line). Plain
+  # assignments: no fork, and it is never cached or shown.
   _git_st_ok=0
-  if [ -n "$git_branch" ] && [ -n "$_TIMEOUT" ] && [ "${AGENTLINE_GIT_STATUS:-1}" != 0 ] \
-     && [ -n "$_gd" ] && [ -d "$_gd" ] && [ -O "$_gd" ] && [ -f "$_gd/HEAD" ] && [ -O "$_gd/HEAD" ] \
-     && _git_cfg_ok "$_gd/config" && _git_cfg_ok "$_gd/config.worktree"; then
+  if [ -z "$git_branch" ]; then
+    { [ -n "$_gd" ] || [ "$_git_ask" = 1 ]; } && _git_why="no branch (a detached HEAD): no git segment"
+  elif [ "${AGENTLINE_GIT_STATUS:-1}" = 0 ]; then
+    _git_why="disabled (AGENTLINE_GIT_STATUS=0)"
+  elif [ -z "$_TIMEOUT" ]; then
+    _git_why="no timeout/gtimeout binary (stock macOS: brew install coreutils)"
+  elif [ -z "$_gd" ] || [ ! -d "$_gd" ]; then
+    _git_why="git dir not found by the file walk (GIT_DIR set, or a bare repo)"
+  elif [ ! -O "$_gd" ] || [ ! -f "$_gd/HEAD" ] || [ ! -O "$_gd/HEAD" ]; then
+    _git_why="git dir or HEAD not owned by you"
+  elif ! _git_cfg_ok "$_gd/config" || ! _git_cfg_ok "$_gd/config.worktree"; then
+    _git_why="$_git_cfg_why"
+  else
     _git_st_ok=1
     # A linked worktree's git dir holds its HEAD and config.worktree; the
     # shared config sits in the common dir its `commondir` file names.
@@ -1058,12 +1087,16 @@ if [ -n "$cwd" ] && [ -d "$cwd" ]; then
       [ -f "$_gd/commondir" ] && [ -O "$_gd/commondir" ] && IFS= read -r -n 1024 _l 2>/dev/null < "$_gd/commondir"
       [ ${#_l} -ge 1024 ] && _l=""
       case "$_l" in
-        '') _git_st_ok=0 ;;
+        '') _git_st_ok=0; _git_why="worktree commondir unreadable or not owned by you" ;;
         /*) ;;
         *)  _l="$_gd/$_l" ;;
       esac
       if [ "$_git_st_ok" = 1 ]; then
-        { [ -d "$_l" ] && [ -O "$_l" ] && _git_cfg_ok "$_l/config" && _git_cfg_ok "$_l/config.worktree"; } || _git_st_ok=0
+        if [ ! -d "$_l" ] || [ ! -O "$_l" ]; then
+          _git_st_ok=0; _git_why="the worktree's common git dir is not owned by you"
+        elif ! _git_cfg_ok "$_l/config" || ! _git_cfg_ok "$_l/config.worktree"; then
+          _git_st_ok=0; _git_why="common dir: $_git_cfg_why"
+        fi
       fi
     fi
   fi
@@ -1075,12 +1108,17 @@ if [ -n "$cwd" ] && [ -d "$cwd" ]; then
   # or the time passing, asks again. Read with builtins, like the caches.
   _gs_file=""
   [ -n "$CACHE_BASE" ] && _gs_file="${CACHE_BASE}.gitslow"
-  if [ "$_git_st_ok" = 1 ] && [ -n "$_gs_file" ] && [ -f "$_gs_file" ]; then
+  # --doctor has no cache base (it writes nothing) but reads the back-off a
+  # real render obeys, so its report says what the status line does.
+  _gs_read="$_gs_file"
+  [ -n "$_AL_DOCTOR" ] && [ "$_dt_cache_ok" = 1 ] && _gs_read="${CACHE_DIR}/render_${_sid}.v${CACHE_FORMAT}.gitslow"
+  if [ "$_git_st_ok" = 1 ] && [ -n "$_gs_read" ] && [ -f "$_gs_read" ]; then
     _gs_until=""; _gs_cwd=""
-    { IFS= read -r _gs_until; IFS= read -r _gs_cwd; } 2>/dev/null < "$_gs_file"
+    { IFS= read -r _gs_until; IFS= read -r _gs_cwd; } 2>/dev/null < "$_gs_read"
     case "$_gs_until" in
       ''|*[!0-9]*) ;;
-      *) [ "$_gs_cwd" = "$_cwd_q" ] && [ "$_now_epoch" -lt "$_gs_until" ] && _git_st_ok=0 ;;
+      *) [ "$_gs_cwd" = "$_cwd_q" ] && [ "$_now_epoch" -lt "$_gs_until" ] \
+           && { _git_st_ok=0; _git_why=back-off; _git_why_until="$_gs_until"; } ;;
     esac
   fi
   if [ "$_git_st_ok" = 1 ]; then
@@ -1093,6 +1131,10 @@ if [ -n "$cwd" ] && [ -d "$cwd" ]; then
       _gs_for=60
       case "$PROBE_TTL" in ''|*[!0-9]*|??????*) ;; *) [ $(( 10#$PROBE_TTL * 4 )) -gt 60 ] && _gs_for=$(( 10#$PROBE_TTL * 4 )) ;; esac
       printf '%s\n%s' "$(( _now_epoch + _gs_for ))" "$_cwd_q" > "$_gs_file" 2>/dev/null
+      _git_why=back-off; _git_why_until=$(( _now_epoch + _gs_for ))
+    elif [ "$_st_rc" != 0 ]; then
+      _git_why="git status failed (exit $_st_rc)"
+      [ "$_st_rc" = 124 ] && _git_why="git status timed out (1 s)"
     fi
     if [ "$_st_rc" = 0 ]; then
       _ahead=0; _behind=0; _chg=0; _unt=0; _cfl=0
@@ -1124,6 +1166,12 @@ if [ -n "$cwd" ] && [ -d "$cwd" ]; then
       [ "$_chg" -gt 0 ] && git_dirty="±${_chg}"
       [ "$_unt" -gt 0 ] && git_dirty="${git_dirty:+${git_dirty} }?${_unt}"
       [ "$_cfl" -gt 0 ] && git_dirty="${git_dirty:+${git_dirty} }✖${_cfl}"
+      # porcelain v2 prints "# branch.upstream" only when one is set.
+      case "$_st" in
+        *"# branch.upstream "*) _git_why="in sync with its upstream" ;;
+        *) _git_why="no upstream (no ahead/behind)" ;;
+      esac
+      [ -z "$git_dirty" ] && _git_why="$_git_why, clean tree"
     fi
   fi
 fi
@@ -2978,6 +3026,18 @@ if [ -n "$_AL_DOCTOR" ]; then
     # A hidden payload segment: its field was not in the payload.
     case "$_dt_s:$_dt_w" in "hidden:payload "*) _dt_w="absent: ${_dt_w#payload }" ;; esac
     printf '  %-9s %-7s %s%s\n' "$_n" "$_dt_s" "$_dt_w" "$_dt_note"
+    # The counts beside the branch are the git row's most asked-about part,
+    # and they go missing for many reasons: the gate above left one.
+    if [ "$_n" = git ]; then
+      _dt_w="$_git_why"
+      [ "$_dt_w" = back-off ] && _dt_w="backed off after a slow repo (git status timed out) until $(fmt_epoch "$_git_why_until" '%H:%M:%S')"
+      _dt_s=hidden
+      if [ -n "$git_ab$git_dirty" ]; then
+        _dt_s=shown; _dt_w="${git_ab}${git_ab:+${git_dirty:+ }}${git_dirty}"
+        case "$_git_why" in "no upstream"*) _dt_w="$_dt_w; no upstream (no ahead/behind)" ;; esac
+      fi
+      printf '  %-9s %-7s %s\n' counts "$_dt_s" "git status: $_dt_w"
+    fi
   done
   echo
   echo "render"
