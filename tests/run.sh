@@ -83,6 +83,10 @@ TNOW=$(date +%s)
 # pwd -P: macOS hands out /var/folders/… where /var is a symlink. Under
 # `env -i` bash rebuilds $PWD from getcwd(), i.e. the physical path, and the
 # probe cache is only honoured when its recorded cwd matches byte for byte.
+# The umask of a CI runner, whatever the host's: under Ubuntu's 002 every
+# mkdir -p here is group-writable, and the registry helper refuses such a
+# directory (J9c). The tests that want a wider mode set it themselves.
+umask 022
 T=$(mktemp -d "${TMPDIR:-/tmp}/agentline-test.XXXXXX") || exit 1
 T=$(cd "$T" && pwd -P)
 trap 'rm -rf "$T"' EXIT
@@ -2525,7 +2529,7 @@ check "reader honours CLAUDE_AGENTS_FILE" grep -q 'relocated' "$T/out"
 # files 0600. The previous release's /tmp files (here $LEG) are still read
 # while they are ours, and the writers fold them in and remove them.
 DTMP="$T/dtmp"; XDG="$T/xdg"; LEG="$T/legacy"
-mkdir -p "$DTMP" "$LEG"; mkdir -m 700 "$XDG"
+mkdir -p "$DTMP"; mkdir -m 700 "$XDG" "$LEG"
 DDIR="$DTMP/agentline-${EUID:-0}"
 side_env() { env -i PATH="$PATH_F" HOME="$HOME_F" TMPDIR="$DTMP" _AGENTLINE_LEGACY_TMP="$LEG" "$@"; }
 mode_of() { ls -ld "$1" 2>/dev/null | cut -c1-10; }
@@ -2907,6 +2911,53 @@ env -i PATH="$NOPY" CLAUDE_AGENTS_FILE="$REG" "$TEST_BASH" "$AGENT" add "no pyth
 check "no python3: exit 0 (got $lrc)" [ "$lrc" = 0 ]
 check "no python3: says skipped" grep -q 'python3 not found' "$T/rerr"
 check "no python3: file untouched" cmp -s "$REG" "$T/reg.before"
+env -i PATH="$NOPY" CLAUDE_AGENTS_FILE="$REG" "$TEST_BASH" "$AGENT" add "$(printf 'x\033[2Jy')" 2> "$T/rerr"
+check "no python3: the note carries no ESC" sh -c "! grep -q '$ESC' '$T/rerr'"
+
+# --- The registry helper under attack (review of J9b, stage J9c) --------------
+# Stored labels carry no control character, and no diagnostic prints one.
+reg add "$(printf 'esc\033[2Jlabel\302\233x')"
+check "label ESC: stored without it" grep -qx '[0-9]* esc\[2Jlabelx' "$REG"
+rm -f "$LOCKF"; mkdir "$LOCKF"
+reg add "$(printf 'x\033[2Jy')"
+check "label ESC: the skip note says why" grep -q 'cannot open the lock' "$T/rerr"
+check "label ESC: and carries no ESC" sh -c "! grep -q '$ESC' '$T/rerr'"
+rmdir "$LOCKF"
+# A FIFO at the registry's or the lock's name cannot hang a write: it is
+# opened without blocking and refused (and the registry replaced).
+rm -f "$REG" "$LOCKF"; mkfifo "$REG"
+reg add "past a fifo"
+check "fifo registry: at once (rc $lrc, ${lsecs}s)" [ "$lrc" = 0 -a "$lsecs" -le 2 ]
+check "fifo registry: replaced by a file with the row" sh -c "[ -f '$REG' ] && grep -q 'past a fifo' '$REG'"
+rm -f "$LOCKF"; mkfifo "$LOCKF"
+reg add "fifo lock"
+check "fifo lock: at once (rc $lrc, ${lsecs}s)" [ "$lrc" = 0 -a "$lsecs" -le 2 ]
+check "fifo lock: refused" grep -q 'cannot open the lock (not a regular file' "$T/rerr"
+rm -f "$LOCKF"
+# A huge registry is read in part, and pruned in one pass: 200000 live rows
+# (about 5 MB) cost what 32 do.
+python3 -c 'import sys, time; t = int(time.time()); open(sys.argv[1], "w").write("".join("%d big %d\n" % (t, i) for i in range(200000)))' "$REG"
+reg add "after big"
+check "big registry: at once (rc $lrc, ${lsecs}s)" [ "$lrc" = 0 -a "$lsecs" -le 2 ]
+check "big registry: capped to 32 rows ($(wc -l < "$REG"))" [ "$(wc -l < "$REG" | tr -d ' ')" = 32 ]
+check "big registry: the new row kept" grep -q 'after big' "$REG"
+# The directory: yours and writable by nobody else, whoever named it.
+WDIR="$T/wdir"; mkdir -m 777 "$WDIR"
+env -i PATH="$PATH_F" AGENTLINE_TMP="$WDIR" "$TEST_BASH" "$AGENT" add "open dir" 2> "$T/rerr"
+check "dir 0777 (AGENTLINE_TMP): nothing written" [ ! -e "$WDIR/claude_agents.txt" -a ! -e "$WDIR/claude_agents.txt.lock" ]
+check "dir 0777 (AGENTLINE_TMP): says so" grep -q 'writable by others' "$T/rerr"
+chmod 775 "$WDIR"
+env -i PATH="$PATH_F" CLAUDE_AGENTS_FILE="$WDIR/a.txt" "$TEST_BASH" "$AGENT" add "group dir" 2> "$T/rerr"
+check "dir 0775 (CLAUDE_AGENTS_FILE): nothing written" [ ! -e "$WDIR/a.txt" ]
+check "dir 0775: left as it was" [ "$(ls -ld "$WDIR" | cut -c1-10)" = drwxrwxr-x ]
+env -i PATH="$PATH_F" CLAUDE_AGENTS_FILE="$T/newdir/sub/a.txt" "$TEST_BASH" "$AGENT" add "new dir"
+check "dir made for CLAUDE_AGENTS_FILE: written" grep -q 'new dir' "$T/newdir/sub/a.txt"
+check "dir made for CLAUDE_AGENTS_FILE: 0700" [ "$(ls -ld "$T/newdir/sub" | cut -c1-10)" = drwx------ ]
+DT2="$T/dtmp2"; mkdir -p "$DT2"; mkdir -m 777 "$DT2/agentline-${EUID:-0}"
+env -i PATH="$PATH_F" TMPDIR="$DT2" _AGENTLINE_LEGACY_TMP="$T/nolegacy" "$TEST_BASH" "$AGENT" add "squatted" 2> "$T/rerr"
+check "default dir left 0777: refused" [ ! -e "$DT2/agentline-${EUID:-0}/claude_agents.txt" ]
+check "default dir left 0777: says so" grep -q 'writable by others' "$T/rerr"
+rm -rf "$WDIR" "$T/newdir" "$DT2"
 
 # --- --doctor -----------------------------------------------------------------
 # A report instead of the status line: phases timed, every segment shown or
@@ -3721,7 +3772,7 @@ w-hetzner|hetzner/qwen3.6-fp8
 w-hetzner-env|hetzner/qwen3.8-27b
 w-deepseek|deepseek
 w-nvidia|deepseek
-w-run|nightly eval
+w-run|Bash eval.py
 w-run-cls|codex/gpt-6-astra
 w-bashc|agy/gemini-3-flash
 w-ssh|ssh
@@ -3775,7 +3826,30 @@ l-host|ssh
 l-ip|ssh
 l-curl|hetzner
 l-prog|Bash
+l-label|Bash
+l-subst|Bash
+l-ansi-hd|Bash
+l-exec|Bash
+l-time|Bash
+l-sudo|Bash make
+l-xargs|Bash
+l-env-S|Bash env
+l-unknown|Bash
+l-worker-subst|codex/gpt-5
+l-script|Bash etl.py
 EOF
+check "subagents leak: nothing of an agentline-run --label, a \$( or a wrapper option" \
+  sh -c "! cut -f2 '$T/srows' | grep -qiE 'hunter|password|x45OF|antlara'"
+# The synthetic leak corpus: 399 invented commands, 771 planted fake keys,
+# names, hosts and paths, rendered and classified; none may show (J9c; the
+# rules, and the one exception for a script's basename, are in the checker).
+mkdir -m 700 "$T/leakcorpus"
+if lout=$(cd "$WORK" && python3 -I "$FIX/subagents/check_leaks.py" "$TEST_BASH" "$SUBS" \
+            "$FIX/subagents/leak-corpus.json" "$T/leakcorpus" 2>&1); then
+  pass
+else
+  fail "leak corpus: $lout"
+fi
 # The scripts are variables, not literals inside $(...): bash 3.2 looks for
 # heredocs in there.
 hd1=$'cat > f <<EOF\nAyseYilmaz x\nEOF\ncodex exec -m gpt-5 y'
@@ -3794,6 +3868,66 @@ done
 check "classify: a program named like a key is not named" [ -z "$(cls ./sk-live-AntlaraKey)" ]
 check "classify: a command past 4 KB is not looked at" \
   [ "$(cls bash -c "true $(printf '%05000d' 0); codex exec -m gpt-5")" = bash ]
+# Fail closed (review of J9b, stage J9c): a launcher's option value is never
+# the program, an unknown launcher form names the launcher, an unknown
+# program nothing, and a command line's own --label is not shown. A command
+# that comes to nothing shown is named by its first word when that is on
+# the fixed list (time, sudo, ...), for agentline-run's row.
+while IFS='|' read -r want args; do
+  # shellcheck disable=SC2086
+  got=$(cls $args)
+  check "classify: '$args' is '$want' (got '$got')" [ "$got" = "$want" ]
+done <<'EOF'
+|exec -a hunter2 sleep 60
+time|/usr/bin/time -f hunter2 sleep 1
+time|time -o hunter2 sleep 1
+nice|nice -n 5 hunter2x
+|ionice -c 3 hunter2x
+|stdbuf -o L hunter2x
+sudo|sudo -u hunter2 sleep 1
+git|sudo -u root -E git status
+env|env -u hunter2 sleep 1
+env|env -S hunter2 y
+make|timeout -s KILL 5 make
+timeout|timeout hunter2 make
+xargs|xargs -I hunter2 echo
+git|xargs -n 1 git
+sudo|sudo -e hunter2
+|agentline-run --label password=hunter2 -- sleep 60
+codex/gpt-5|agentline-run --label nightly --heartbeat 5 -- codex exec -m gpt-5 x
+|./hunter2tool --x
+etl.py|./etl.py
+sleep|sleep 30
+EOF
+# In a shell string, the words before a construct the lexer does not model
+# exactly still name a worker; nothing after it counts, and no program is
+# named from such a string.
+hs1='PASSWORD=$(true)hunter2 sleep 1'
+hs2=$': <<$\'\\x45OF\'\nx45OF\nhunter2\nEOF\n'
+hs3='codex exec -m gpt-5 $(cat p)'
+hs4='git status; eval "$X"; hunter2'
+hs5='cat <<"$X"
+hunter2
+$X
+make'
+check "classify: \$( ends the walk" [ "$(cls bash -c "$hs1")" = bash ]
+check "classify: a \$'...' heredoc delimiter ends the walk" [ "$(cls bash -c "$hs2")" = bash ]
+check "classify: a worker before \$( is still named" [ "$(cls bash -c "$hs3")" = codex/gpt-5 ]
+check "classify: no program from a string with eval" [ "$(cls bash -c "$hs4")" = bash ]
+check "classify: a \$ in a heredoc delimiter ends the walk" [ "$(cls bash -c "$hs5")" = bash ]
+for hs in 'cat <<< hunter2' 'diff <(hunter2) x' 'echo "unterminated hunter2' 'x=`hunter2`' 'echo $"hunter2"'; do
+  check "classify: '$hs' names nothing past it" [ "$(cls bash -c "$hs")" = bash ]
+done
+# agentline-run's own --label: shown when it looks like no secret, cleaned
+# and cut to 40; otherwise the run is named as if it had none.
+lab() { run_env "$TEST_BASH" "$SUBS" --classify --label "$1" -- sleep 1 2>&1; }
+check "label: plain text kept" [ "$(lab 'nightly eval')" = 'nightly eval' ]
+check "label: cut to 40" [ "$(lab "$(printf 'a%.0s' $(seq 1 60))")" = "$(printf 'a%.0s' $(seq 1 40))" ]
+check "label: controls go" [ "$(lab "$(printf 'a\033[2Jb')")" = 'a[2Jb' ]
+for l in 'password=hunter2' 'token: abc' 'API_KEY=x' 'sk-live-abc' 'run ghp_abc' 'deploy /home/x' '~/x' \
+         'aGVsbG8gd29ybGQgc2VjcmV0MTIz' 'user@host' 'job 10.1.2.3' 'see https://x.y' 'AKIAIOSFODNN7EXAMPLE' 'eyJhbGciOiJIUzI1'; do
+  check "label: '$l' is not shown" [ "$(lab "$l")" = sleep ]
+done
 
 # --- other tools, and which transcripts may be read ---------------------------
 srun "$SPAY/tools.json"
@@ -3958,7 +4092,7 @@ pwned "isolated: agentline-subagents.sh --classify"
 
 # --- agentline-run ------------------------------------------------------------
 RSIDE="$T/rside"; RF="$RSIDE/claude_agents.txt"; RBIN="$T/rbin"
-mkdir -p "$RSIDE" "$RBIN"
+mkdir -p "$RBIN"; mkdir -m 700 "$RSIDE"
 # A `codex` that shows the registry as it is while it runs.
 printf '#!/bin/sh\ncat "$AGENTLINE_TMP/claude_agents.txt"\nexit 0\n' > "$RBIN/codex"
 chmod +x "$RBIN/codex"
@@ -4002,6 +4136,84 @@ arun
 check "run: no command is a usage error" [ "$arc" = 2 ]
 arun --heartbeat soon -- true
 check "run: bad --heartbeat is a usage error" [ "$arc" = 2 ]
+# Bounded before CMD starts: a hundred nines used to overflow setitimer()
+# after it had, and orphan it (review of J9b, J9c).
+arun --heartbeat "$(printf '9%.0s' $(seq 1 100))" -- sh -c 'echo ran'
+check "run: a --heartbeat of 100 nines is a usage error, CMD not run" [ "$arc" = 2 -a ! -s "$T/rout" ]
+arun --heartbeat 3601 -- sh -c 'echo ran'
+check "run: --heartbeat 3601 is a usage error" [ "$arc" = 2 -a ! -s "$T/rout" ]
+arun --heartbeat 0003600 -- sh -c 'echo ran'
+check "run: --heartbeat 0003600 is 3600" [ "$arc" = 0 -a "$(cat "$T/rout")" = ran ]
+# A --label is displayed, so one that looks like a secret is not stored:
+# the run is named as if it had none.
+arun --label 'password=hunter2' -- sh -c 'cat "$AGENTLINE_TMP/claude_agents.txt"'
+check "run: a secret-looking --label is not stored" sh -c "! grep -q hunter2 '$T/rout'"
+check "run: ... the default label instead" grep -qE "^[0-9]+ cat$RK\$" "$T/rout"
+arun --label "$(printf 'a%.0s' $(seq 1 60))" -- sh -c 'cat "$AGENTLINE_TMP/claude_agents.txt"'
+check "run: --label cut to 40" grep -qE "^[0-9]+ a{40}$RK\$" "$T/rout"
+arun "$(printf -- '--x\033[2J')" -- true
+check "run: an unknown option's ESC is not echoed" sh -c "! grep -q '$ESC' '$T/rerr'"
+# A helper that hangs holds nothing up: each call gets 3 s, then its group
+# is killed.
+printf '#!/bin/sh\necho "$1" >> "%s"\nexec sleep %s\n' "$T/hcalls" "$(( 31000 + $$ % 900 ))" > "$T/hang-helper.sh"
+rm -f "$T/hcalls"
+hs=$(date +%s)
+AENV="AGENTLINE_AGENT_HELPER=$T/hang-helper.sh"
+arun -- sh -c 'echo ran'
+AENV=""
+hsecs=$(( $(date +%s) - hs ))
+check "run: hung helper, CMD still runs (got $arc)" [ "$arc" = 0 -a "$(cat "$T/rout")" = ran ]
+check "run: hung helper, 3 s a call (${hsecs}s)" [ "$hsecs" -ge 5 -a "$hsecs" -le 9 ]
+check "run: hung helper, killed" sh -c "! ps -eo args | grep -v grep | grep -q 'sleep $(( 31000 + $$ % 900 ))'"
+# ... and a TERM during a hung heartbeat reaches CMD at once, not after it.
+rm -f "$T/hcalls" "$T/got"
+( cd "$WORK" && exec env -i PATH="$PATH_F" HOME="$HOME_F" AGENTLINE_TMP="$RSIDE" \
+    AGENTLINE_AGENT_HELPER="$T/hang-helper.sh" LC_ALL=C "$TEST_BASH" "$ARUN" --heartbeat 1 -- \
+    sh -c "trap 'echo got > \"$T/got\"; exit 0' TERM; while :; do sleep 0.1; done" \
+    < /dev/null > /dev/null 2>&1 ) &
+apid=$!
+wait_for 15 sh -c "[ -f '$T/hcalls' ] && [ \$(wc -l < '$T/hcalls') -ge 2 ]"
+kill -TERM "$apid"
+if wait_for 2 [ -e "$T/got" ]; then pass; else fail "run: TERM during a hung heartbeat was held back"; fi
+{ wait "$apid"; } 2>/dev/null
+# Process groups: from a pipe or a file CMD gets a group of its own, and a
+# TERM stops all of it; from a terminal it stays in the foreground group.
+PG='import os; print(os.getpgrp() == os.getpgid(os.getppid()))'
+arun -- python3 -c "$PG"
+check "run: stdin not a terminal, CMD in a group of its own" [ "$(cat "$T/rout")" = False ]
+# Not pty.py: python puts the script's directory first on sys.path, and
+# the file would import itself for the stdlib pty.
+cat > "$T/onpty.py" <<'PYEOF'
+import os, pty, signal, sys, time
+# onpty.py <term-after-seconds|-> CMD...: CMD on a terminal; its output,
+# then "status N" (the wait status as a shell reports it).
+after, argv = sys.argv[1], sys.argv[2:]
+pid, fd = pty.fork()
+if pid == 0:
+    os.execvp(argv[0], argv)
+if after != '-':
+    time.sleep(float(after))
+    os.kill(pid, signal.SIGTERM)
+out = b''
+while True:
+    try:
+        b = os.read(fd, 4096)
+    except OSError:
+        break
+    if not b:
+        break
+    out += b
+_, st = os.waitpid(pid, 0)
+code = 128 + os.WTERMSIG(st) if os.WIFSIGNALED(st) else os.WEXITSTATUS(st)
+sys.stdout.write(out.decode('utf-8', 'replace').replace('\r', '') + 'status %d\n' % code)
+PYEOF
+tout=$(cd "$WORK" && env -i PATH="$PATH_F" HOME="$HOME_F" AGENTLINE_TMP="$RSIDE" LC_ALL=C \
+  python3 "$T/onpty.py" - "$TEST_BASH" "$ARUN" -- python3 -c "$PG")
+check "run: on a terminal, CMD in the foreground group ($tout)" [ "$(printf '%s\n' "$tout" | head -n 1)" = True ]
+tout=$(cd "$WORK" && env -i PATH="$PATH_F" HOME="$HOME_F" AGENTLINE_TMP="$RSIDE" LC_ALL=C \
+  python3 "$T/onpty.py" 2 "$TEST_BASH" "$ARUN" -- sleep 30)
+check "run: on a terminal, TERM passed on to CMD ($tout)" [ "$tout" = "status 143" ]
+check "run: on a terminal, row removed" [ -z "$(rrows)" ]
 # Through a symlink on PATH (install.sh --link-bin): the helpers are found
 # beside the link's target.
 ln -s "$ARUN" "$RBIN/agentline-run"
@@ -4094,6 +4306,17 @@ check "run TERM: no row afterwards" [ -z "$(rrows)" ]
 sleep 1
 check "run TERM: no row after a heartbeat period either" [ -z "$(rrows)" ]
 check "run TERM: no process left" sh -c "! ps -eo args | grep -v grep | grep -q 'sleep $mark'"
+# From a pipe or a file CMD has a group of its own, and a TERM stops all of
+# it: a `bash -c 'job & wait'` used to lose only the bash (J9c). ^sleep: the
+# wrapper's own argv holds the same words, before CMD runs.
+gmark=$(( 40000 + $$ % 900 ))
+arun_bg --heartbeat 0 -- bash -c "sleep $gmark & wait"
+if wait_for 10 sh -c "ps -eo args | grep -q '^sleep $gmark'"; then pass; else fail "run: the background job never started"; fi
+kill -TERM "$apid"; { wait "$apid"; } 2>/dev/null; arc=$?
+check "run: TERM, background job: died of it (got $arc)" [ "$arc" = 143 ]
+if wait_for 3 sh -c "! ps -eo args | grep -q '^sleep $gmark'"; then pass
+else fail "run: TERM left CMD's background job running"; pkill -f "sleep $gmark"; fi
+check "run: TERM, background job: row removed" [ -z "$(rrows)" ]
 # Two runs with one label have a row each: the first to end leaves the
 # second listed, and the bar shows them once, counted (review of J9, J9b).
 arun_bg --heartbeat 0 --label twin -- sleep 30; tw1=$apid

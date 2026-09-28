@@ -1,0 +1,2768 @@
+[
+ {
+  "cmd": "codex exec -m sk-ant-api03-fake1234567890abcdef -C /home/berkay/clients/medikal/ --output /tmp/out.log \"Analyze logs\"",
+  "planted": [
+   "sk-ant-api03-fake1234567890abcdef",
+   "/home/berkay/clients/medikal/"
+  ]
+ },
+ {
+  "cmd": "codex exec -m gpt-4 -C /home/elif/clients/dental/ -o result.txt -c api_key=ghp_abc123def456ghi789jkl012mno345pq67 \"Summarize patient data\"",
+  "planted": [
+   "/home/elif/clients/dental/",
+   "ghp_abc123def456ghi789jkl012mno345pq67"
+  ]
+ },
+ {
+  "cmd": "codex exec -m AKIAIOSFODNN7EXAMPLE -C /home/mert/clients/legal/ -o /tmp/legal.txt \"Review contract\" <<EOF\nhello\nEOF",
+  "planted": [
+   "AKIAIOSFODNN7EXAMPLE",
+   "/home/mert/clients/legal/"
+  ]
+ },
+ {
+  "cmd": "codex exec -m hf_a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4 -C /home/ayse/clients/retail/ -o output.json -c host=192.168.1.100 \"Generate report\"",
+  "planted": [
+   "hf_a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4",
+   "/home/ayse/clients/retail/",
+   "192.168.1.100"
+  ]
+ },
+ {
+  "cmd": "codex exec -m xoxb-1234567890-9876543210-abcdef123456 -C /home/kaan/clients/finance/ -o /tmp/fin.txt \"Audit transactions\"",
+  "planted": [
+   "xoxb-1234567890-9876543210-abcdef123456",
+   "/home/kaan/clients/finance/"
+  ]
+ },
+ {
+  "cmd": "codex exec -m nvapi-fakekey123456789 -C /home/zeynep/clients/ai/ -o /tmp/ai.txt -c token=nvapi-fakekey123456789 \"Train model\"",
+  "planted": [
+   "nvapi-fakekey123456789",
+   "/home/zeynep/clients/ai/",
+   "nvapi-fakekey123456789"
+  ]
+ },
+ {
+  "cmd": "codex exec -m gpt-4 -C /home/omer/clients/tech/ -o /tmp/tech.txt -c user=omer@fakecompany.com \"Write code\" <<EOF\neyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9\nEOF",
+  "planted": [
+   "/home/omer/clients/tech/",
+   "omer@fakecompany.com",
+   "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9"
+  ]
+ },
+ {
+  "cmd": "codex exec -m sk-proj-abc123def456ghi789jkl012mno345pq67 -C /home/deniz/clients/medical/ -o /tmp/med.txt \"Process data\"",
+  "planted": [
+   "sk-proj-abc123def456ghi789jkl012mno345pq67",
+   "/home/deniz/clients/medical/"
+  ]
+ },
+ {
+  "cmd": "codex exec -m gpt-4 -C /home/selin/clients/edu/ -o /tmp/edu.txt -c secret=ghp_xyz789abc456def123ghi789jkl012 \"Create quiz\" <<EOF\n12345678901\nEOF",
+  "planted": [
+   "/home/selin/clients/edu/",
+   "ghp_xyz789abc456def123ghi789jkl012",
+   "12345678901"
+  ]
+ },
+ {
+  "cmd": "codex exec -m AKIAQEXAMPLE123456 -C /home/burak/clients/logistics/ -o /tmp/log.txt \"Route analysis\"",
+  "planted": [
+   "AKIAQEXAMPLE123456",
+   "/home/burak/clients/logistics/"
+  ]
+ },
+ {
+  "cmd": "codex exec -m hf_zzz999yyy888xxx777wwww666vvv555 -C /home/gizem/clients/art/ -o /tmp/art.txt -c ip=10.0.0.5 \"Generate art\"",
+  "planted": [
+   "hf_zzz999yyy888xxx777wwww666vvv555",
+   "/home/gizem/clients/art/",
+   "10.0.0.5"
+  ]
+ },
+ {
+  "cmd": "codex exec -m gpt-4 -C /home/ahmet/clients/energy/ -o /tmp/energy.txt -c key=sk-ant-api03-realish123 \"Optimize grid\" <<EOF\n+905321234567\nEOF",
+  "planted": [
+   "/home/ahmet/clients/energy/",
+   "sk-ant-api03-realish123",
+   "+905321234567"
+  ]
+ },
+ {
+  "cmd": "codex exec -m xoxp-123456789-987654321-abcdef -C /home/emre/clients/food/ -o /tmp/food.txt \"Recipe suggestions\"",
+  "planted": [
+   "xoxp-123456789-987654321-abcdef",
+   "/home/emre/clients/food/"
+  ]
+ },
+ {
+  "cmd": "codex exec -m nvapi-abcdef123456 -C /home/ince/clients/auto/ -o /tmp/auto.txt -c email=ince@fakecar.com \"Car diagnostics\"",
+  "planted": [
+   "nvapi-abcdef123456",
+   "/home/ince/clients/auto/",
+   "ince@fakecar.com"
+  ]
+ },
+ {
+  "cmd": "codex exec -m gpt-4 -C /home/yasemin/clients/travel/ -o /tmp/travel.txt -c token=AKIAEXAMPLE1234567 \"Plan trip\" <<EOF\neyJhbGciOiJub25lIn0\nEOF",
+  "planted": [
+   "/home/yasemin/clients/travel/",
+   "AKIAEXAMPLE1234567",
+   "eyJhbGciOiJub25lIn0"
+  ]
+ },
+ {
+  "cmd": "codex exec -m sk-ant-api03-trunc123 -C /home/levi/clients/gaming/ -o /tmp/game.txt \"Game design\"",
+  "planted": [
+   "sk-ant-api03-trunc123",
+   "/home/levi/clients/gaming/"
+  ]
+ },
+ {
+  "cmd": "codex exec -m ghp_1234567890abcdef1234567890abcdef1234 -C /home/nur/clients/publishing/ -o /tmp/pub.txt \"Edit manuscript\"",
+  "planted": [
+   "ghp_1234567890abcdef1234567890abcdef1234",
+   "/home/nur/clients/publishing/"
+  ]
+ },
+ {
+  "cmd": "codex exec -m gpt-4 -C /home/serkan/clients/construction/ -o /tmp/build.txt -c host=172.16.0.1 \"Structural analysis\" <<EOF\n98765432109\nEOF",
+  "planted": [
+   "/home/serkan/clients/construction/",
+   "172.16.0.1",
+   "98765432109"
+  ]
+ },
+ {
+  "cmd": "codex exec -m hf_abcdef123456abcdef123456abcdef12 -C /home/tilay/clients/consulting/ -o /tmp/con.txt \"Market analysis\"",
+  "planted": [
+   "hf_abcdef123456abcdef123456abcdef12",
+   "/home/tilay/clients/consulting/"
+  ]
+ },
+ {
+  "cmd": "codex exec -m xoxb-9876543210-1234567890-fedcba -C /home/volkan/clients/insurance/ -o /tmp/ins.txt \"Claim processing\"",
+  "planted": [
+   "xoxb-9876543210-1234567890-fedcba",
+   "/home/volkan/clients/insurance/"
+  ]
+ },
+ {
+  "cmd": "codex exec -m gpt-4 -C /home/ilhan/clients/farming/ -o /tmp/farm.txt -c key=nvapi-ghijkl123456 \"Crop yield prediction\" <<EOF\nilhan@fakefarm.com\nEOF",
+  "planted": [
+   "/home/ilhan/clients/farming/",
+   "nvapi-ghijkl123456",
+   "ilhan@fakefarm.com"
+  ]
+ },
+ {
+  "cmd": "codex exec -m AKIAZEXAMPLE999888 -C /home/ceyda/clients/aviation/ -o /tmp/avia.txt \"Flight path optimization\"",
+  "planted": [
+   "AKIAZEXAMPLE999888",
+   "/home/ceyda/clients/aviation/"
+  ]
+ },
+ {
+  "cmd": "codex exec -m sk-proj-zzz999yyy888 -C /home/murat/clients/ecommerce/ -o /tmp/eco.txt \"Sales forecast\"",
+  "planted": [
+   "sk-proj-zzz999yyy888",
+   "/home/murat/clients/ecommerce/"
+  ]
+ },
+ {
+  "cmd": "codex exec -m gpt-4 -C /home/pelin/clients/realty/ -o /tmp/realty.txt -c secret=ghp_qqq111www222eee333rrr444ttt555 \"Property valuation\" <<EOF\n+905421234567\nEOF",
+  "planted": [
+   "/home/pelin/clients/realty/",
+   "ghp_qqq111www222eee333rrr444ttt555",
+   "+905421234567"
+  ]
+ },
+ {
+  "cmd": "codex exec -m eyJhbGciOiJSUzI1NiJ9 -C /home/kadir/clients/security/ -o /tmp/sec.txt \"Vulnerability scan\"",
+  "planted": [
+   "eyJhbGciOiJSUzI1NiJ9",
+   "/home/kadir/clients/security/"
+  ]
+ },
+ {
+  "cmd": "agy --model sk-ant-api03-fakeKey9876543210 -p 'Analyze data' --json-schema '{\"type\":\"object\"}' < /dev/stdin",
+  "planted": [
+   "sk-ant-api03-fakeKey9876543210"
+  ]
+ },
+ {
+  "cmd": "agy -p 'Query for Elif Kaya 12345678901' --add-dir /home/ozan_dev/clients/medix/",
+  "planted": [
+   "Elif Kaya",
+   "12345678901"
+  ]
+ },
+ {
+  "cmd": "agy --model ghp_1a2b3c4d5e6f7g8h9i0j1k2l3m4n5o6p7q8r -p 'test'",
+  "planted": [
+   "ghp_1a2b3c4d5e6f7g8h9i0j1k2l3m4n5o6p7q8r"
+  ]
+ },
+ {
+  "cmd": "agy --add-dir /home/ceyhan/clients/bankas/ -p 'Log in user admin@fakebank.com'",
+  "planted": [
+   "admin@fakebank.com"
+  ]
+ },
+ {
+  "cmd": "agy -p 'Contact 05321234567' --json-schema '{\"a\":1}'",
+  "planted": [
+   "05321234567"
+  ]
+ },
+ {
+  "cmd": "agy --model xoxb-1234567890-ABCDEF --add-dir /home/mert_ops/clients/retailco/",
+  "planted": [
+   "xoxb-1234567890-ABCDEF"
+  ]
+ },
+ {
+  "cmd": "agy -p 'Check host 192.168.1.105 for errors' --model hf_abcdefg1234567890",
+  "planted": [
+   "192.168.1.105",
+   "hf_abcdefg1234567890"
+  ]
+ },
+ {
+  "cmd": "agy --model AKIAIOSFODNN7EXAMPLE -p 'Process invoice 98765432109'",
+  "planted": [
+   "AKIAIOSFODNN7EXAMPLE",
+   "98765432109"
+  ]
+ },
+ {
+  "cmd": "agy -p 'Send mail to can.ozturk@fakecorp.io' --add-dir /home/ali/clients/fintech/",
+  "planted": [
+   "can.ozturk@fakecorp.io"
+  ]
+ },
+ {
+  "cmd": "agy --model nvapi-xyz123abc456def789 -p 'Debug build' < /tmp/input.json",
+  "planted": [
+   "nvapi-xyz123abc456def789"
+  ]
+ },
+ {
+  "cmd": "agy -p 'User Burak Demir 23456789012 needs reset' --json-schema '{\"id\":\"str\"}'",
+  "planted": [
+   "Burak Demir",
+   "23456789012"
+  ]
+ },
+ {
+  "cmd": "agy --add-dir /home/zeynep/clients/healthplus/ -p 'API key eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.fake',",
+  "planted": [
+   "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.fake"
+  ]
+ },
+ {
+  "cmd": "agy --model sk-proj-0123456789abcdef -p 'Query DB at db-prod-01.internal'",
+  "planted": [
+   "sk-proj-0123456789abcdef",
+   "db-prod-01.internal"
+  ]
+ },
+ {
+  "cmd": "agy -p 'Call 02129876543' --add-dir /home/burak/clients/logistics/",
+  "planted": [
+   "02129876543"
+  ]
+ },
+ {
+  "cmd": "agy --model ghp_9876543210fedcba09876543210fedcba098 -p 'Scan repo'",
+  "planted": [
+   "ghp_9876543210fedcba09876543210fedcba098"
+  ]
+ },
+ {
+  "cmd": "agy -p 'Contact info for clinic Dr. Ayse Yilmaz 34567890123' --json-schema '{}'",
+  "planted": [
+   "Dr. Ayse Yilmaz",
+   "34567890123"
+  ]
+ },
+ {
+  "cmd": "agy --model xoxp-abcdef-ghijkl-1234567890 -p 'Update config' < /dev/null",
+  "planted": [
+   "xoxp-abcdef-ghijkl-1234567890"
+  ]
+ },
+ {
+  "cmd": "agy -p 'Host api-gateway-02.local down?' --add-dir /home/evren/clients/saasapp/",
+  "planted": [
+   "api-gateway-02.local"
+  ]
+ },
+ {
+  "cmd": "agy --model AKIAJ6IAJSUKKE6EXAMPLE -p 'Ticket #45678901234'",
+  "planted": [
+   "AKIAJ6IAJSUKKE6EXAMPLE",
+   "45678901234"
+  ]
+ },
+ {
+  "cmd": "agy -p 'Email deniz.aksoy@fakeagency.com for docs' --model hf_xyz987zyx6543210",
+  "planted": [
+   "deniz.aksoy@fakeagency.com",
+   "hf_xyz987zyx6543210"
+  ]
+ },
+ {
+  "cmd": "agy --add-dir /home/fatma/clients/eduportal/ -p 'User Serkan Celik 45678901234'",
+  "planted": [
+   "Serkan Celik",
+   "45678901234"
+  ]
+ },
+ {
+  "cmd": "agy --model eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.fake -p 'Auth check'",
+  "planted": [
+   "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.fake"
+  ]
+ },
+ {
+  "cmd": "agy -p 'IP 10.0.5.12 unreachable' --json-schema '{\"status\":\"bool\"}'",
+  "planted": [
+   "10.0.5.12"
+  ]
+ },
+ {
+  "cmd": "agy --model sk-ant-api03-9876543210ZYX -p 'Refine text' < /tmp/stdin.txt",
+  "planted": [
+   "sk-ant-api03-9876543210ZYX"
+  ]
+ },
+ {
+  "cmd": "agy -p 'Contact 05554443322' --add-dir /home/gokhan/clients/mediahouse/",
+  "planted": [
+   "05554443322"
+  ]
+ },
+ {
+  "cmd": "ssh -F ~/.ssh/config bayrak \"claude -p --model sk-ant-api03-8f2a9b1c4d5e6f7a8b9c0d1e2f3a4b5c 'Summarize the Q3 report for Ayşe Yılmaz'\"",
+  "planted": [
+   "sk-ant-api03-8f2a9b1c4d5e6f7a8b9c0d1e2f3a4b5c",
+   "Ayşe Yılmaz"
+  ]
+ },
+ {
+  "cmd": "ssh -F /home/dev/.ssh/config bayrak \"bash -s <<'EOF'\nclaude -p --model claude-3-opus-20240229 --prompt 'Contact Dr. Mehmet Demir at 0532-123-45-67 for the clinic audit'\nEOF\"",
+  "planted": [
+   "Dr. Mehmet Demir",
+   "0532-123-45-67"
+  ]
+ },
+ {
+  "cmd": "ssh -F ~/.ssh/config bayrak \"claude -p --model ghp_1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a 'Review the contract for Ankara Med Kliniği'\"",
+  "planted": [
+   "ghp_1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a",
+   "Ankara Med Kliniği"
+  ]
+ },
+ {
+  "cmd": "ssh -F /home/ops/.ssh/config bayrak \"claude -p --model AKIAIOSFODNN7EXAMPLE 'Log the visit of Zeynep Kaya, TC: 12345678901'\"",
+  "planted": [
+   "AKIAIOSFODNN7EXAMPLE",
+   "Zeynep Kaya",
+   "12345678901"
+  ]
+ },
+ {
+  "cmd": "ssh -F ~/.ssh/config bayrak \"bash -s <<'EOF'\nexport API_KEY=xoxb-123456789012-123456789012-12345678901234-AbCdEfGhIjKlMnOpQrStUvWx\nclaude -p --model claude-3-5-sonnet 'Analyze the data for Can Arslan'\nEOF\"",
+  "planted": [
+   "xoxb-123456789012-123456789012-12345678901234-AbCdEfGhIjKlMnOpQrStUvWx",
+   "Can Arslan"
+  ]
+ },
+ {
+  "cmd": "ssh -F ~/.ssh/config bayrak \"claude -p --model eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c 'Check the email burak.ozturk@fake.com.tr'\"",
+  "planted": [
+   "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c",
+   "burak.ozturk@fake.com.tr"
+  ]
+ },
+ {
+  "cmd": "ssh -F /home/user1/.ssh/config bayrak \"claude -p --model hf_1234567890abcdef1234567890abcdef1234 'Generate a report for Istanbul Tech Ltd'\"",
+  "planted": [
+   "hf_1234567890abcdef1234567890abcdef1234",
+   "Istanbul Tech Ltd"
+  ]
+ },
+ {
+  "cmd": "ssh -F ~/.ssh/config bayrak \"bash -s <<'EOF'\nclaude -p --model nvapi-abc123xyz456 'Read the file /home/emre/clients/fintech/ledger.csv'\nEOF\"",
+  "planted": [
+   "nvapi-abc123xyz456",
+   "/home/emre/clients/fintech/ledger.csv"
+  ]
+ },
+ {
+  "cmd": "ssh -F ~/.ssh/config bayrak \"claude -p --model claude-3-haiku 'The patient ID 98765432109 belongs to Elif Şahin'\"",
+  "planted": [
+   "98765432109",
+   "Elif Şahin"
+  ]
+ },
+ {
+  "cmd": "ssh -F /home/admin/.ssh/config bayrak \"claude -p --model sk-proj-xyz789abc123def456 'Call the office at 0212-555-01-99'\"",
+  "planted": [
+   "sk-proj-xyz789abc123def456",
+   "0212-555-01-99"
+  ]
+ },
+ {
+  "cmd": "ssh -F ~/.ssh/config bayrak \"bash -s <<'EOF'\nclaude -p --model internal-db-prod-01 'Fetch the profile of Deniz Acar'\nEOF\"",
+  "planted": [
+   "internal-db-prod-01",
+   "Deniz Acar"
+  ]
+ },
+ {
+  "cmd": "ssh -F ~/.ssh/config bayrak \"claude -p --model AKIAJEXAMPLEKEY12345 'Update the record for 10.0.1.50'\"",
+  "planted": [
+   "AKIAJEXAMPLEKEY12345",
+   "10.0.1.50"
+  ]
+ },
+ {
+  "cmd": "ssh -F /home/qa/.ssh/config bayrak \"claude -p --model ghp_9f8e7d6c5b4a3210fedcba9876543210fedc 'Verify the email selin.celik@dummy.io'\"",
+  "planted": [
+   "ghp_9f8e7d6c5b4a3210fedcba9876543210fedc",
+   "selin.celik@dummy.io"
+  ]
+ },
+ {
+  "cmd": "ssh -F ~/.ssh/config bayrak \"bash -s <<'EOF'\nclaude -p --model claude-3-opus-20240229 'The invoice is from Bursa Medikal A.Ş.'\nEOF\"",
+  "planted": [
+   "Bursa Medikal A.Ş."
+  ]
+ },
+ {
+  "cmd": "ssh -F ~/.ssh/config bayrak \"claude -p --model xoxp-123456789012-1234567890123456 'Contact Serkan Doğan at 0544-999-88-77'\"",
+  "planted": [
+   "xoxp-123456789012-1234567890123456",
+   "Serkan Doğan",
+   "0544-999-88-77"
+  ]
+ },
+ {
+  "cmd": "ssh -F /home/dev/.ssh/config bayrak \"claude -p --model eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpZCI6InVzZXIxIn0.signature123 'Check the path /home/lara/clients/legal/deposit.txt'\"",
+  "planted": [
+   "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpZCI6InVzZXIxIn0.signature123",
+   "/home/lara/clients/legal/deposit.txt"
+  ]
+ },
+ {
+  "cmd": "ssh -F ~/.ssh/config bayrak \"bash -s <<'EOF'\nclaude -p --model hf_abcdef1234567890abcdef1234567890abcd 'The user is Ali Vural, TC: 11122233344'\nEOF\"",
+  "planted": [
+   "hf_abcdef1234567890abcdef1234567890abcd",
+   "Ali Vural",
+   "11122233344"
+  ]
+ },
+ {
+  "cmd": "ssh -F ~/.ssh/config bayrak \"claude -p --model nvapi-xyz987uvw654 'Query the internal host db-backup-02'\"",
+  "planted": [
+   "nvapi-xyz987uvw654",
+   "db-backup-02"
+  ]
+ },
+ {
+  "cmd": "ssh -F /home/ops/.ssh/config bayrak \"claude -p --model sk-ant-api03-11111111111111111111111111111111 'Send email to yusuf.kaya@test.org'\"",
+  "planted": [
+   "sk-ant-api03-11111111111111111111111111111111",
+   "yusuf.kaya@test.org"
+  ]
+ },
+ {
+  "cmd": "ssh -F ~/.ssh/config bayrak \"bash -s <<'EOF'\nclaude -p --model AKIAZEXAMPLEKEY99999 'The client is Istanbul Hukuk Bürosu'\nEOF\"",
+  "planted": [
+   "AKIAZEXAMPLEKEY99999",
+   "Istanbul Hukuk Bürosu"
+  ]
+ },
+ {
+  "cmd": "ssh -F ~/.ssh/config bayrak \"claude -p --model ghp_0000000000000000000000000000000000000000 'Phone: 0555-111-22-33 for Merve Çelik'\"",
+  "planted": [
+   "ghp_0000000000000000000000000000000000000000",
+   "0555-111-22-33",
+   "Merve Çelik"
+  ]
+ },
+ {
+  "cmd": "ssh -F /home/user/.ssh/config bayrak \"claude -p --model claude-3-5-sonnet-20241022 'File path: /home/bora/clients/health/notes.md'\"",
+  "planted": [
+   "/home/bora/clients/health/notes.md"
+  ]
+ },
+ {
+  "cmd": "ssh -F ~/.ssh/config bayrak \"bash -s <<'EOF'\nclaude -p --model xoxb-999999999999-999999999999-99999999999999-QwErTyUiOpAsDfGh 'The IP is 192.168.1.100'\nEOF\"",
+  "planted": [
+   "xoxb-999999999999-999999999999-99999999999999-QwErTyUiOpAsDfGh",
+   "192.168.1.100"
+  ]
+ },
+ {
+  "cmd": "ssh -F ~/.ssh/config bayrak \"claude -p --model eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.fake.fake 'Contact Fatma Yılmaz at 0533-444-55-66'\"",
+  "planted": [
+   "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.fake.fake",
+   "Fatma Yılmaz",
+   "0533-444-55-66"
+  ]
+ },
+ {
+  "cmd": "ssh -F /home/dev/.ssh/config bayrak \"claude -p --model sk-proj-aaa111bbb222ccc333 'The company is Ankara Yazılım A.Ş.'\"",
+  "planted": [
+   "sk-proj-aaa111bbb222ccc333",
+   "Ankara Yazılım A.Ş."
+  ]
+ },
+ {
+  "cmd": "curl -X POST http://127.0.0.1:18080/v1/chat/completions -H 'Content-Type: application/json' -H 'Authorization: Bearer sk-ant-api03-FakeKey1234567890' -d '{\"model\": \"canli-clinic\", \"messages\": [{\"role\": \"user\", \"content\": \"Hello\"}]}'",
+  "planted": [
+   "sk-ant-api03-FakeKey1234567890",
+   "canli-clinic"
+  ]
+ },
+ {
+  "cmd": "curl -X POST https://inference.hetzner.com/api/v1/chat/completions -m 30 -H 'Authorization: Bearer ghp_FakeGitHubToken123456789012345678' -d '{\"model\": \"15004500000\", \"prompt\": \"test\"}'",
+  "planted": [
+   "ghp_FakeGitHubToken123456789012345678",
+   "15004500000"
+  ]
+ },
+ {
+  "cmd": "curl -X POST http://10.0.0.5:8080/v1/chat/completions -d '{\"model\": \"AKIAFAKEKEY123456789\", \"user\": \"fakeuser\"}'",
+  "planted": [
+   "10.0.0.5",
+   "AKIAFAKEKEY123456789"
+  ]
+ },
+ {
+  "cmd": "export API_TOKEN='hf_FakeHuggingFaceToken1234567890' && curl -X POST http://127.0.0.1:18080/v1/chat/completions -H 'Authorization: Bearer $API_TOKEN' -d '{\"model\": \"ahmet.yilmaz\"}'",
+  "planted": [
+   "hf_FakeHuggingFaceToken1234567890",
+   "ahmet.yilmaz"
+  ]
+ },
+ {
+  "cmd": "curl -X POST https://inference.hetzner.com/api/v1/chat/completions?debug=1 -H 'Authorization: Bearer nvapi-FakeNvidiaKey12345' -d '{\"model\": \"fakeclinic.tr\", \"messages\": []}'",
+  "planted": [
+   "nvapi-FakeNvidiaKey12345",
+   "fakeclinic.tr"
+  ]
+ },
+ {
+  "cmd": "curl -X POST http://192.168.1.100:18080/v1/chat/completions -m 10 -d '{\"model\": \"sk-proj-FakeOpenAIKey1234567890\", \"prompt\": \"test\"}'",
+  "planted": [
+   "192.168.1.100",
+   "sk-proj-FakeOpenAIKey1234567890"
+  ]
+ },
+ {
+  "cmd": "curl -X POST http://127.0.0.1:18080/v1/chat/completions -H 'Authorization: Bearer xoxb-FakeSlackToken123456789' -d '{\"model\": \"05321234567\", \"content\": \"hello\"}'",
+  "planted": [
+   "xoxb-FakeSlackToken123456789",
+   "05321234567"
+  ]
+ },
+ {
+  "cmd": "curl -X POST https://inference.hetzner.com/api/v1/chat/completions -m 60 -d '{\"model\": \"fakeuser\", \"client\": \"fakeclient\"}'",
+  "planted": [
+   "fakeuser",
+   "fakeclient"
+  ]
+ },
+ {
+  "cmd": "curl -X POST http://127.0.0.1:18080/v1/chat/completions -H 'Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJmYWtlIjoidHJ1ZSJ9.fake' -d '{\"model\": \"elif.demir\", \"prompt\": \"test\"}'",
+  "planted": [
+   "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJmYWtlIjoidHJ1ZSJ9.fake",
+   "elif.demir"
+  ]
+ },
+ {
+  "cmd": "curl -X POST https://inference.hetzner.com/api/v1/chat/completions -m 15 -d '{\"model\": \"test@fake.com\", \"messages\": [{\"role\": \"user\", \"content\": \"hi\"}]}'",
+  "planted": [
+   "test@fake.com"
+  ]
+ },
+ {
+  "cmd": "curl -X POST http://127.0.0.1:18080/v1/chat/completions -H 'Authorization: Bearer sk-ant-api03-AnotherFakeKey98765' -d '{\"model\": \"15012345678\", \"user\": \"admin\"}'",
+  "planted": [
+   "sk-ant-api03-AnotherFakeKey98765",
+   "15012345678"
+  ]
+ },
+ {
+  "cmd": "curl -X POST https://inference.hetzner.com/api/v1/chat/completions?token=ghp_FakeToken7890123456789012345 -m 20 -d '{\"model\": \"fakeclinic\", \"prompt\": \"test\"}'",
+  "planted": [
+   "ghp_FakeToken7890123456789012345",
+   "fakeclinic"
+  ]
+ },
+ {
+  "cmd": "curl -X POST http://10.1.1.1:18080/v1/chat/completions -d '{\"model\": \"05059876543\", \"content\": \"test\"}'",
+  "planted": [
+   "10.1.1.1",
+   "05059876543"
+  ]
+ },
+ {
+  "cmd": "curl -X POST http://127.0.0.1:18080/v1/chat/completions -m 5 -H 'Authorization: Bearer nvapi-FakeKey9876543210' -d '{\"model\": \"fakeuser\", \"path\": \"/home/fakeuser/clients/fakeclient/\"}'",
+  "planted": [
+   "nvapi-FakeKey9876543210",
+   "/home/fakeuser/clients/fakeclient/"
+  ]
+ },
+ {
+  "cmd": "curl -X POST https://inference.hetzner.com/api/v1/chat/completions -d '{\"model\": \"mehmet.kaya\", \"prompt\": \"test\"}'",
+  "planted": [
+   "mehmet.kaya"
+  ]
+ },
+ {
+  "cmd": "curl -X POST http://127.0.0.1:18080/v1/chat/completions -H 'Authorization: Bearer AKIAFAKEKEY987654321' -d '{\"model\": \"fakeclinic.tr\", \"user\": \"test\"}'",
+  "planted": [
+   "AKIAFAKEKEY987654321",
+   "fakeclinic.tr"
+  ]
+ },
+ {
+  "cmd": "curl -X POST https://inference.hetzner.com/api/v1/chat/completions -m 45 -d '{\"model\": \"15098765432\", \"messages\": []}'",
+  "planted": [
+   "15098765432"
+  ]
+ },
+ {
+  "cmd": "curl -X POST http://192.168.0.5:18080/v1/chat/completions -H 'Authorization: Bearer hf_FakeToken9876543210' -d '{\"model\": \"fatma.sahin\", \"prompt\": \"test\"}'",
+  "planted": [
+   "192.168.0.5",
+   "hf_FakeToken9876543210",
+   "fatma.sahin"
+  ]
+ },
+ {
+  "cmd": "curl -X POST http://127.0.0.1:18080/v1/chat/completions -m 25 -d '{\"model\": \"xoxb-FakeSlackToken987654321\", \"content\": \"test\"}'",
+  "planted": [
+   "xoxb-FakeSlackToken987654321"
+  ]
+ },
+ {
+  "cmd": "curl -X POST https://inference.hetzner.com/api/v1/chat/completions?key=sk-proj-FakeKey987654321 -d '{\"model\": \"fakeuser\", \"prompt\": \"test\"}'",
+  "planted": [
+   "sk-proj-FakeKey987654321",
+   "fakeuser"
+  ]
+ },
+ {
+  "cmd": "curl -X POST http://127.0.0.1:18080/v1/chat/completions -H 'Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJmYWtlIjoidHJ1ZSJ9.anotherfake' -d '{\"model\": \"05329876543\", \"user\": \"admin\"}'",
+  "planted": [
+   "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJmYWtlIjoidHJ1ZSJ9.anotherfake",
+   "05329876543"
+  ]
+ },
+ {
+  "cmd": "curl -X POST https://inference.hetzner.com/api/v1/chat/completions -m 35 -d '{\"model\": \"fakeclinic\", \"prompt\": \"test\"}'",
+  "planted": [
+   "fakeclinic"
+  ]
+ },
+ {
+  "cmd": "curl -X POST http://10.2.2.2:18080/v1/chat/completions -d '{\"model\": \"AKIAFAKEKEY123456789\", \"user\": \"fakeuser\"}'",
+  "planted": [
+   "10.2.2.2",
+   "AKIAFAKEKEY123456789",
+   "fakeuser"
+  ]
+ },
+ {
+  "cmd": "curl -X POST http://127.0.0.1:18080/v1/chat/completions -m 12 -H 'Authorization: Bearer ghp_FakeToken12345678901234567890' -d '{\"model\": \"zeynep.acar\", \"content\": \"test\"}'",
+  "planted": [
+   "ghp_FakeToken12345678901234567890",
+   "zeynep.acar"
+  ]
+ },
+ {
+  "cmd": "curl -X POST https://inference.hetzner.com/api/v1/chat/completions?api=nvapi-FakeKey12345 -d '{\"model\": \"15054321098\", \"prompt\": \"test\"}'",
+  "planted": [
+   "nvapi-FakeKey12345",
+   "15054321098"
+  ]
+ },
+ {
+  "cmd": "export OPENAI_API_KEY=sk-ant-api03-9f8e7d6c5b4a39281706f5e4d3c2b1a09876543210; python scripts/run_pipeline.py --model \"Elif Yılmaz\" --env prod",
+  "planted": [
+   "sk-ant-api03-9f8e7d6c5b4a39281706f5e4d3c2b1a09876543210",
+   "Elif Yılmaz"
+  ]
+ },
+ {
+  "cmd": "curl -s https://api.internal.corp/v1/chat/completions -H \"Authorization: Bearer ghp_1a2b3c4d5e6f7g8h9i0j1k2l3m4n5o6p7q8r9s0t\" -d '{\"model\": \"Deniz Karaca\"}'",
+  "planted": [
+   "ghp_1a2b3c4d5e6f7g8h9i0j1k2l3m4n5o6p7q8r9s0t",
+   "Deniz Karaca"
+  ]
+ },
+ {
+  "cmd": "cd /home/berk.clients/acme_clinic && ./deploy.sh --target 10.0.5.12 --token \"AKIAQEXAMPLEKEY12345\" && echo \"Done\"",
+  "planted": [
+   "10.0.5.12",
+   "AKIAQEXAMPLEKEY12345"
+  ]
+ },
+ {
+  "cmd": "python train.py --config /home/mert/clients/mediflow/config.yaml --api_key \"hf_9876543210abcdef9876543210abcdef9876\"",
+  "planted": [
+   "hf_9876543210abcdef9876543210abcdef9876"
+  ]
+ },
+ {
+  "cmd": "timeout 30 bash -c 'echo \"Selin Ateş\" | wc -l'",
+  "planted": [
+   "Selin Ateş"
+  ]
+ },
+ {
+  "cmd": "ssh admin@db-proxy-01.internal \"psql -U postgres -c \\\"SELECT * FROM users WHERE email='canozturk@example.com'\\\"\"",
+  "planted": [
+   "db-proxy-01.internal",
+   "canozturk@example.com"
+  ]
+ },
+ {
+  "cmd": "export SLACK_BOT_TOKEN=xoxb-1234567890-abcdef-ghijklmnopqrstuv; ./notify.sh \"Meeting with Burak Demir\"",
+  "planted": [
+   "xoxb-1234567890-abcdef-ghijklmnopqrstuv",
+   "Burak Demir"
+  ]
+ },
+ {
+  "cmd": "cat <<EOF > /tmp/prompt.txt\nMerhaba Emre Kaya, please review the logs.\nEOF",
+  "planted": [
+   "Emre Kaya"
+  ]
+ },
+ {
+  "cmd": "docker run --rm -e AWS_SECRET_KEY=\"wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY\" -e MODEL_NAME=\"Aylin Şahin\" my-image:latest",
+  "planted": [
+   "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+   "Aylin Şahin"
+  ]
+ },
+ {
+  "cmd": "python /home/ozan/clients/techstartup/etl.py --source s3://bucket-9876/data.csv --dest postgresql://user:pass@192.168.1.100:5432/db",
+  "planted": [
+   "192.168.1.100"
+  ]
+ },
+ {
+  "cmd": "gcloud ai-platform predict --model \"Hakan Yalçın\" --json='{\"instances\": [{\"text\": \"Test\"}]}'",
+  "planted": [
+   "Hakan Yalçın"
+  ]
+ },
+ {
+  "cmd": "curl -X POST https://api.huggingface.co/inference -H \"Authorization: Bearer nvapi-key-1234567890abcdef\" -d '{\"inputs\": \"Test\"}'",
+  "planted": [
+   "nvapi-key-1234567890abcdef"
+  ]
+ },
+ {
+  "cmd": "jq '.name' <(curl -s -H \"Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.fakepayload.signature\" https://auth.internal/token) || true",
+  "planted": [
+   "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.fakepayload.signature"
+  ]
+ },
+ {
+  "cmd": "bash -c 'export DB_PASS=\"P@ssw0rd!123\"; psql -h localhost -U admin -d app_db -c \"SELECT 1\"'",
+  "planted": [
+   "P@ssw0rd!123"
+  ]
+ },
+ {
+  "cmd": "python scripts/backup.py --target /home/lale/clients/financeco/backups --owner \"Murat Korkmaz\"",
+  "planted": [
+   "Murat Korkmaz"
+  ]
+ },
+ {
+  "cmd": "aws s3 cp s3://secure-bucket/config.yaml /tmp/config.yaml --profile prod && echo \"Key: sk-proj-9876543210abcdef\"",
+  "planted": [
+   "sk-proj-9876543210abcdef"
+  ]
+ },
+ {
+  "cmd": "echo \"0532 123 45 67\" | grep -E \"^05[0-9]{2} [0-9]{3} [0-9]{2} [0-9]{2}$\" && echo valid",
+  "planted": [
+   "0532 123 45 67"
+  ]
+ },
+ {
+  "cmd": "docker exec -it container-123 bash -c \"cd /app && ./run.sh --user 'Zeynep Acar' --port 8080\"",
+  "planted": [
+   "Zeynep Acar"
+  ]
+ },
+ {
+  "cmd": "python app.py --env production --api_endpoint \"https://api.fintech.example.com/v1?key=sk-ant-api03-abcdef1234567890\" --user \"Ali Vural\"",
+  "planted": [
+   "sk-ant-api03-abcdef1234567890",
+   "Ali Vural"
+  ]
+ },
+ {
+  "cmd": "cat /etc/passwd | grep \"100000000000\" || echo \"No TC found\"",
+  "planted": [
+   "100000000000"
+  ]
+ },
+ {
+  "cmd": "python -c \"import requests; r=requests.get('https://internal-api.corp/users/9876543210'); print(r.json())\"",
+  "planted": [
+   "9876543210"
+  ]
+ },
+ {
+  "cmd": "export GITHUB_TOKEN=ghp_abcdef1234567890abcdef1234567890abcdef12; git push origin main",
+  "planted": [
+   "ghp_abcdef1234567890abcdef1234567890abcdef12"
+  ]
+ },
+ {
+  "cmd": "bash -c 'source /home/yilmaz/clients/clinicx/secrets.env && run_migration.sh --db \"postgres://admin@10.0.0.5:5432/prod\"'",
+  "planted": [
+   "10.0.0.5"
+  ]
+ },
+ {
+  "cmd": "python scripts/notify.py --to \"ayse.demir@fakecorp.com\" --subject \"Update\" --body \"Hello Ayşe Demir\"",
+  "planted": [
+   "ayse.demir@fakecorp.com",
+   "Ayşe Demir"
+  ]
+ },
+ {
+  "cmd": "cat > /home/ahmet_yilmaz/clients/medtech_inc/audit.log <<'EOF'\nT.C. 12345678901\nEOF",
+  "planted": [
+   "ahmet_yilmaz",
+   "medtech_inc",
+   "12345678901"
+  ]
+ },
+ {
+  "cmd": "codex exec -m sk-ant-api03-1234567890123456789012345678901234567890123456789012345678 --output /tmp/out.json",
+  "planted": [
+   "sk-ant-api03-1234567890123456789012345678901234567890123456789012345678"
+  ]
+ },
+ {
+  "cmd": "read -d '' API_KEY <<EOF\nAKIAIOSFODNN7EXAMPLE\nEOF",
+  "planted": [
+   "AKIAIOSFODNN7EXAMPLE"
+  ]
+ },
+ {
+  "cmd": ": <<'X'\nInternal note: Contact zeynep_kaya at 05321234567 for clinic_data\nX",
+  "planted": [
+   "zeynep_kaya",
+   "05321234567"
+  ]
+ },
+ {
+  "cmd": "python3 - <<'PY'\nimport os\nos.environ['HF_TOKEN'] = 'hf_1234567890abcdef1234567890abcdef1234'\nprint('Ready')\nPY",
+  "planted": [
+   "hf_1234567890abcdef1234567890abcdef1234"
+  ]
+ },
+ {
+  "cmd": "cat > /home/mehmet_demir/clients/finance_group/config.env <<'EOF'\nDB_HOST=10.0.5.12\nDB_USER=emre_saglam\nEOF",
+  "planted": [
+   "mehmet_demir",
+   "finance_group",
+   "10.0.5.12",
+   "emre_saglam"
+  ]
+ },
+ {
+  "cmd": "curl -H \"Authorization: Bearer ghp_1234567890abcdef1234567890abcdef123456\" https://api.internal.host/v1/status",
+  "planted": [
+   "ghp_1234567890abcdef1234567890abcdef123456",
+   "api.internal.host"
+  ]
+ },
+ {
+  "cmd": "codex exec -m xoxb-1234567890-1234567890-12345678901234567890abcdef -p /home/elif_aydin/clients/logistics_co/",
+  "planted": [
+   "xoxb-1234567890-1234567890-12345678901234567890abcdef",
+   "elif_aydin",
+   "logistics_co"
+  ]
+ },
+ {
+  "cmd": "cat > /tmp/creds.txt <<'EOF'\nNV_API=nvapi-1234567890123456789012345678901234567890123456789012345678\nEOF",
+  "planted": [
+   "nvapi-1234567890123456789012345678901234567890123456789012345678"
+  ]
+ },
+ {
+  "cmd": ": <<'X'\nPatient T.C.: 98765432109\nClinic: SaglikMerkeziAnkara\nX",
+  "planted": [
+   "98765432109",
+   "SaglikMerkeziAnkara"
+  ]
+ },
+ {
+  "cmd": "python3 - <<'PY'\nurl = 'http://192.168.10.5/admin?token=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U'\nprint(url)\nPY",
+  "planted": [
+   "192.168.10.5",
+   "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U"
+  ]
+ },
+ {
+  "cmd": "cat > /home/hasan_ozkan/clients/retail_chain/keys.pem <<'EOF'\n-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC7VtL0\n-----END PRIVATE KEY-----\nEOF",
+  "planted": [
+   "hasan_ozkan",
+   "retail_chain"
+  ]
+ },
+ {
+  "cmd": "codex exec -m AKIAJOSFODNN7EXAMPLE1 --input /dev/stdin",
+  "planted": [
+   "AKIAJOSFODNN7EXAMPLE1"
+  ]
+ },
+ {
+  "cmd": "read -d '' SECRET_VAR <<EOF\nsk-proj-123456789012345678901234567890123456789012345678901234567890\nEOF",
+  "planted": [
+   "sk-proj-123456789012345678901234567890123456789012345678901234567890"
+  ]
+ },
+ {
+  "cmd": ": <<'X'\nContact: burak_erdem\nPhone: +905439876543\nX",
+  "planted": [
+   "burak_erdem",
+   "+905439876543"
+  ]
+ },
+ {
+  "cmd": "cat > /home/selin_kaya/clients/techstartups/deploy.yml <<'EOF'\nimage: registry.internal.corp/app:v1\nuser: 11111111111\nEOF",
+  "planted": [
+   "selin_kaya",
+   "techstartups",
+   "registry.internal.corp",
+   "11111111111"
+  ]
+ },
+ {
+  "cmd": "python3 - <<'PY'\nprint(\"Auth: ghp_abcdef1234567890abcdef1234567890abcdef\")\nPY",
+  "planted": [
+   "ghp_abcdef1234567890abcdef1234567890abcdef"
+  ]
+ },
+ {
+  "cmd": "codex exec -m xoxb-9876543210-9876543210-0123456789abcdef0123456789 -o /home/kemal_aslan/clients/energy_co/out.txt",
+  "planted": [
+   "xoxb-9876543210-9876543210-0123456789abcdef0123456789",
+   "kemal_aslan",
+   "energy_co"
+  ]
+ },
+ {
+  "cmd": "cat > /tmp/backup.env <<'EOF'\nJWT=eyJhbGciOiJSUzI1NiJ9.eyJpc3MiOiJzdWIiLCJ1c2VyIjoiYW1pcmhfem9yYXkifQ.signature\nEOF",
+  "planted": [
+   "eyJhbGciOiJSUzI1NiJ9.eyJpc3MiOiJzdWIiLCJ1c2VyIjoiYW1pcmhfem9yYXkifQ.signature"
+  ]
+ },
+ {
+  "cmd": ": <<'X'\nHost: 172.16.0.55\nUser: deniz_aras\nX",
+  "planted": [
+   "172.16.0.55",
+   "deniz_aras"
+  ]
+ },
+ {
+  "cmd": "read -d '' TOKEN <<EOF\nhf_abcdef1234567890abcdef1234567890abcdef\nEOF",
+  "planted": [
+   "hf_abcdef1234567890abcdef1234567890abcdef"
+  ]
+ },
+ {
+  "cmd": "cat > /home/gokhan_turan/clients/medical_care/notes.txt <<'EOF'\nT.C. 55555555555\nEmail: gokhan.turan@fakeclinic.com\nEOF",
+  "planted": [
+   "gokhan_turan",
+   "medical_care",
+   "55555555555",
+   "gokhan.turan@fakeclinic.com"
+  ]
+ },
+ {
+  "cmd": "python3 - <<'PY'\napi_key = 'nvapi-abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890'\nprint(api_key)\nPY",
+  "planted": [
+   "nvapi-abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890"
+  ]
+ },
+ {
+  "cmd": "codex exec -m sk-ant-api03-abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890 -f /home/ceyda_ozden/clients/ad_firm/",
+  "planted": [
+   "sk-ant-api03-abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890",
+   "ceyda_ozden",
+   "ad_firm"
+  ]
+ },
+ {
+  "cmd": ": <<'X'\nInternal IP: 10.20.30.40\nAgent: serdar_bilal\nX",
+  "planted": [
+   "10.20.30.40",
+   "serdar_bilal"
+  ]
+ },
+ {
+  "cmd": "ssh -i /home/elifaydin/clients/medtech/.ssh/id_rsa admin@db-prod.internal",
+  "planted": [
+   "elifaydin",
+   "medtech",
+   "db-prod.internal"
+  ]
+ },
+ {
+  "cmd": "scp -r /home/mertkaya/clients/fintech/reports/*.pdf backup@10.20.30.40:/backups/",
+  "planted": [
+   "mertkaya",
+   "fintech",
+   "10.20.30.40"
+  ]
+ },
+ {
+  "cmd": "git clone https://ghp_1a2b3c4d5e6f7g8h9i0j1k2l3m4n5o6p7q8r9s0t@github.com/secret-repo.git",
+  "planted": [
+   "ghp_1a2b3c4d5e6f7g8h9i0j1k2l3m4n5o6p7q8r9s0t"
+  ]
+ },
+ {
+  "cmd": "codex exec -m sk-ant-api03-9876543210abcdef1234567890abcdef",
+  "planted": [
+   "sk-ant-api03-9876543210abcdef1234567890abcdef"
+  ]
+ },
+ {
+  "cmd": "rsync -avz -e \"ssh -i /home/zeynepdur/clients/retail/.ssh/id_rsa\" ./logs user@192.168.1.50:/var/log/",
+  "planted": [
+   "zeynepdur",
+   "retail",
+   "192.168.1.50"
+  ]
+ },
+ {
+  "cmd": "curl -H \"Authorization: Bearer AKIAIOSFODNN7EXAMPLE1234\" https://api.internal.aws/v1/data",
+  "planted": [
+   "AKIAIOSFODNN7EXAMPLE1234",
+   "api.internal.aws"
+  ]
+ },
+ {
+  "cmd": "ssh -p 2222 -o StrictHostKeyChecking=no root@web-frontend.internal",
+  "planted": [
+   "web-frontend.internal"
+  ]
+ },
+ {
+  "cmd": "scp -P 2222 /home/canozdemir/clients/edu/secret.key root@web-frontend.internal:/root/",
+  "planted": [
+   "canozdemir",
+   "edu",
+   "web-frontend.internal"
+  ]
+ },
+ {
+  "cmd": "git push https://hf_5f6e7d8c9b0a1z2y3x4w5v6u7t8s9r1q0p@huggingface.co/datasets/mydata.git",
+  "planted": [
+   "hf_5f6e7d8c9b0a1z2y3x4w5v6u7t8s9r1q0p"
+  ]
+ },
+ {
+  "cmd": "codex exec -m xoxb-123456789012-1234567890123-AbCdEfGhIjKlMnOpQrStUvWx",
+  "planted": [
+   "xoxb-123456789012-1234567890123-AbCdEfGhIjKlMnOpQrStUvWx"
+  ]
+ },
+ {
+  "cmd": "ssh -i /home/iremcelik/clients/healthcare/.ssh/id_rsa deploy@app-server.internal",
+  "planted": [
+   "iremcelik",
+   "healthcare",
+   "app-server.internal"
+  ]
+ },
+ {
+  "cmd": "rsync -avz -e \"ssh -i /home/burakkaya/clients/logistics/.ssh/id_rsa\" /data/shipments admin@10.11.12.13:/data/",
+  "planted": [
+   "burakkaya",
+   "logistics",
+   "10.11.12.13"
+  ]
+ },
+ {
+  "cmd": "curl -d \"key=nvapi-abcdef1234567890abcdef1234567890\" https://api.nvidia-cloud.com/v1/infer",
+  "planted": [
+   "nvapi-abcdef1234567890abcdef1234567890",
+   "api.nvidia-cloud.com"
+  ]
+ },
+ {
+  "cmd": "scp -r /home/selinaydin/clients/insurance/policies/ root@db-prod.internal:/var/backups/",
+  "planted": [
+   "selinaydin",
+   "insurance",
+   "db-prod.internal"
+  ]
+ },
+ {
+  "cmd": "git clone https://ghp_9s8d7f6g5h4j3k2l1z0x9c8v7b6n5m4q3w2e1r@github.com/secure-app.git",
+  "planted": [
+   "ghp_9s8d7f6g5h4j3k2l1z0x9c8v7b6n5m4q3w2e1r"
+  ]
+ },
+ {
+  "cmd": "codex exec -m eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.fake.jwt.token.here",
+  "planted": [
+   "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.fake.jwt.token.here"
+  ]
+ },
+ {
+  "cmd": "ssh -i /home/emrekaya/clients/energy/.ssh/id_rsa ops@monitoring.internal",
+  "planted": [
+   "emrekaya",
+   "energy",
+   "monitoring.internal"
+  ]
+ },
+ {
+  "cmd": "rsync -avz -e \"ssh -i /home/denizyilmaz/clients/tourism/.ssh/id_rsa\" ./logs user@172.16.0.5:/var/log/",
+  "planted": [
+   "denizyilmaz",
+   "tourism",
+   "172.16.0.5"
+  ]
+ },
+ {
+  "cmd": "curl -H \"Authorization: Bearer sk-proj-1234567890abcdefghijklmnopqrstuvwxyz\" https://api.openai.com/v1/chat",
+  "planted": [
+   "sk-proj-1234567890abcdefghijklmnopqrstuvwxyz",
+   "api.openai.com"
+  ]
+ },
+ {
+  "cmd": "scp -P 2222 /home/gokhanaydin/clients/telecom/config.yaml root@web-frontend.internal:/etc/",
+  "planted": [
+   "gokhanaydin",
+   "telecom",
+   "web-frontend.internal"
+  ]
+ },
+ {
+  "cmd": "git push https://hf_abcdef123456789012345678901234567890@huggingface.co/models/mymodel.git",
+  "planted": [
+   "hf_abcdef123456789012345678901234567890"
+  ]
+ },
+ {
+  "cmd": "codex exec -m xoxp-1234567890123-1234567890123-AbCdEfGhIjKlMnOpQrStUvWxYz",
+  "planted": [
+   "xoxp-1234567890123-1234567890123-AbCdEfGhIjKlMnOpQrStUvWxYz"
+  ]
+ },
+ {
+  "cmd": "ssh -i /home/ozgecelik/clients/real-estate/.ssh/id_rsa deploy@app-server.internal",
+  "planted": [
+   "ozgecelik",
+   "real-estate",
+   "app-server.internal"
+  ]
+ },
+ {
+  "cmd": "rsync -avz -e \"ssh -i /home/tolgaaksoy/clients/aviation/.ssh/id_rsa\" /data/flights admin@10.11.12.14:/data/",
+  "planted": [
+   "tolgaaksoy",
+   "aviation",
+   "10.11.12.14"
+  ]
+ },
+ {
+  "cmd": "curl -d \"token=nvapi-zyxwvutsrqponmlkjihgfedcba9876543210\" https://api.internal.aws/v1/infer",
+  "planted": [
+   "nvapi-zyxwvutsrqponmlkjihgfedcba9876543210",
+   "api.internal.aws"
+  ]
+ },
+ {
+  "cmd": "curl -s https://api.klinik-simulasyon.com/v1/patient?id=12345678901 -H \"Authorization: Bearer sk-ant-api03-fake1234567890123456789012345678901234567890\"",
+  "planted": [
+   "12345678901",
+   "sk-ant-api03-fake1234567890123456789012345678901234567890"
+  ]
+ },
+ {
+  "cmd": "codex exec -m AhmetYılmaz -p \"Hasta dosyası için T.C. kimlik no: 98765432109\"",
+  "planted": [
+   "AhmetYılmaz",
+   "98765432109"
+  ]
+ },
+ {
+  "cmd": "cat /home/doktorayse/client/merdivenli_klinik/guvenli_kayit.txt | grep -o \"AKIAIOSFODNN7EXAMPLE\"",
+  "planted": [
+   "/home/doktorayse/client/merdivenli_klinik/guvenli_kayit.txt",
+   "AKIAIOSFODNN7EXAMPLE"
+  ]
+ },
+ {
+  "cmd": "echo \"Merhaba Ayşe Hanım, randevunuz onaylandı\" | mail -s \"Randevu\" ayse.yilmaz@ornekmail.com",
+  "planted": [
+   "ayse.yilmaz@ornekmail.com"
+  ]
+ },
+ {
+  "cmd": "ssh admin@192.168.1.50 'tail -f /var/log/syslog' # Bağlantı: Dr. Mehmet Çelik",
+  "planted": [
+   "192.168.1.50",
+   "Dr. Mehmet Çelik"
+  ]
+ },
+ {
+  "cmd": "aws s3 cp s3://bucket-ornek/veriler.csv /home/sistemadmin/clients/farmaacil/veri.csv --profile prod",
+  "planted": [
+   "/home/sistemadmin/clients/farmaacil/veri.csv"
+  ]
+ },
+ {
+  "cmd": "curl -X POST https://hizmet.saglik.net/api/v1/send -d '{\"tel\": \"05321234567\", \"msg\": \"Test\"}'",
+  "planted": [
+   "05321234567"
+  ]
+ },
+ {
+  "cmd": "codex exec -m ghp_1234567890abcdef1234567890abcdef12345678 -p \"Güvenlik denetimi\" ",
+  "planted": [
+   "ghp_1234567890abcdef1234567890abcdef12345678"
+  ]
+ },
+ {
+  "cmd": "export HF_TOKEN=hf_abcdef1234567890123456789012345678; python3 model.py",
+  "planted": [
+   "hf_abcdef1234567890123456789012345678"
+  ]
+ },
+ {
+  "cmd": "cat <<EOF\nGizli Bilgi: xoxb-1234567890-1234567890-1234567890abcdef\nEOF",
+  "planted": [
+   "xoxb-1234567890-1234567890-1234567890abcdef"
+  ]
+ },
+ {
+  "cmd": "wget http://10.0.0.5/dosyalar/rapor.pdf -O /tmp/rapor.pdf",
+  "planted": [
+   "10.0.0.5"
+  ]
+ },
+ {
+  "cmd": "sqlite3 hastane.db \"SELECT * FROM hastalar WHERE tc='55443322110';\"",
+  "planted": [
+   "55443322110"
+  ]
+ },
+ {
+  "cmd": "codex exec -m nvapi-fake-key-1234567890 -p \"Veri analizi için\" ",
+  "planted": [
+   "nvapi-fake-key-1234567890"
+  ]
+ },
+ {
+  "cmd": "scp /home/user/clients/beyazakci/taranmis.pdf remote@203.0.113.10:/upload/",
+  "planted": [
+   "/home/user/clients/beyazakci/taranmis.pdf",
+   "203.0.113.10"
+  ]
+ },
+ {
+  "cmd": "echo 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.fake.token' > /tmp/token.txt",
+  "planted": [
+   "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.fake.token"
+  ]
+ },
+ {
+  "cmd": "curl -G 'https://ornek.com/api?isim=ZeynepKaya&telefon=05439876543'",
+  "planted": [
+   "ZeynepKaya",
+   "05439876543"
+  ]
+ },
+ {
+  "cmd": "codex exec -m CanDemir -p \"Müşteri şikayeti: 11122233344\"",
+  "planted": [
+   "CanDemir",
+   "11122233344"
+  ]
+ },
+ {
+  "cmd": "grep -r \"AKIAABCDEFGHIJKLMNOP\" /var/log/app/2023.log",
+  "planted": [
+   "AKIAABCDEFGHIJKLMNOP"
+  ]
+ },
+ {
+  "cmd": "docker run -e API_KEY=sk-proj-fake123456789012345678901234567890 myimage:latest",
+  "planted": [
+   "sk-proj-fake123456789012345678901234567890"
+  ]
+ },
+ {
+  "cmd": "cat <<HEREDOC\nİlk satır gizli: 05001112223\nİkinci satır normal\nHEREDOC",
+  "planted": [
+   "05001112223"
+  ]
+ },
+ {
+  "cmd": "ping -c 4 172.16.254.1 # Ağ geçidi testi",
+  "planted": [
+   "172.16.254.1"
+  ]
+ },
+ {
+  "cmd": "rsync -avz /home/muhasip/clients/kargoyildiz/defter.txt server.local:/backup/",
+  "planted": [
+   "/home/muhasip/clients/kargoyildiz/defter.txt"
+  ]
+ },
+ {
+  "cmd": "codex exec -m ElifŞahin -p \"Hesap numarası: 12345678901\"",
+  "planted": [
+   "ElifŞahin",
+   "12345678901"
+  ]
+ },
+ {
+  "cmd": "curl -u user:pass https://ornekapi.com/giris?user=ornek@gmail.com",
+  "planted": [
+   "ornek@gmail.com"
+  ]
+ },
+ {
+  "cmd": "sed -i 's/05331234567/****/g' /var/data/ileti.txt",
+  "planted": [
+   "05331234567"
+  ]
+ },
+ {
+  "cmd": "codex exec -m sk-ant-api03-fake0000000000000000000000000000000000000000 -C /home/elifaydin/clients/acmedental/ -c temperature=0.7 \"Summarize the file\"",
+  "planted": [
+   "sk-ant-api03-fake0000000000000000000000000000000000000000",
+   "/home/elifaydin/clients/acmedental/"
+  ]
+ },
+ {
+  "cmd": "codex exec -C /home/mertkaya/clients/zeytinklini/ -o /tmp/out.json <<EOF\nAKIAFAKE123456789012\nPlease analyze the logs\nEOF",
+  "planted": [
+   "/home/mertkaya/clients/zeytinklini/",
+   "AKIAFAKE123456789012"
+  ]
+ },
+ {
+  "cmd": "codex exec -m ghp_fakefakefakefakefakefakefakefakefake -c max_tokens=100 \"Explain this error\"",
+  "planted": [
+   "ghp_fakefakefakefakefakefakefakefakefake"
+  ]
+ },
+ {
+  "cmd": "codex exec -C /home/ayseguldemir/clients/bosnaklinik/ --model xoxb-1234-5678-9012-fakefakefakefake \"Read the input\"",
+  "planted": [
+   "/home/ayseguldemir/clients/bosnaklinik/",
+   "xoxb-1234-5678-9012-fakefakefakefake"
+  ]
+ },
+ {
+  "cmd": "codex exec -o report.txt -c key=value \"Process data for 12345678901\"",
+  "planted": [
+   "12345678901"
+  ]
+ },
+ {
+  "cmd": "codex exec -m nvapi-fakefakefakefakefakefakefakefakefake -C /home/burakkaya/clients/dentalplus/ \"Generate code\"",
+  "planted": [
+   "nvapi-fakefakefakefakefakefakefakefakefake",
+   "/home/burakkaya/clients/dentalplus/"
+  ]
+ },
+ {
+  "cmd": "codex exec <<EOF\nhello@fakeclinic.com\nReview this document\nEOF",
+  "planted": [
+   "hello@fakeclinic.com"
+  ]
+ },
+ {
+  "cmd": "codex exec -C /home/zeyneparslan/clients/medcenter/ -m hf_fakefakefakefakefakefakefakefakefake \"Analyze logs\"",
+  "planted": [
+   "/home/zeyneparslan/clients/medcenter/",
+   "hf_fakefakefakefakefakefakefakefakefake"
+  ]
+ },
+ {
+  "cmd": "codex exec -c endpoint=192.168.10.5 -o log.txt \"Ping the server\"",
+  "planted": [
+   "192.168.10.5"
+  ]
+ },
+ {
+  "cmd": "codex exec -m eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.fake.fake \"Verify token\"",
+  "planted": [
+   "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.fake.fake"
+  ]
+ },
+ {
+  "cmd": "codex exec -C /home/omerak/clients/pharmacys/ -c user=05321234567 \"Update patient info\"",
+  "planted": [
+   "/home/omerak/clients/pharmacys/",
+   "05321234567"
+  ]
+ },
+ {
+  "cmd": "codex exec <<EOF\n12345678901\nCheck the inventory\nEOF",
+  "planted": [
+   "12345678901"
+  ]
+ },
+ {
+  "cmd": "codex exec -m sk-proj-fakefakefakefakefakefakefakefakefake -C /home/denizyilmaz/clients/techcorp/ \"Deploy service\"",
+  "planted": [
+   "sk-proj-fakefakefakefakefakefakefakefakefake",
+   "/home/denizyilmaz/clients/techcorp/"
+  ]
+ },
+ {
+  "cmd": "codex exec -o output.csv -c host=internal-db-01 ",
+  "planted": [
+   "internal-db-01"
+  ]
+ },
+ {
+  "cmd": "codex exec -C /home/selinco/clients/financeco/ -m AKIAFAKE987654321098 \"Audit transactions\"",
+  "planted": [
+   "/home/selinco/clients/financeco/",
+   "AKIAFAKE987654321098"
+  ]
+ },
+ {
+  "cmd": "codex exec <<EOF\nadmin@fakehospital.org\nSend email report\nEOF",
+  "planted": [
+   "admin@fakehospital.org"
+  ]
+ },
+ {
+  "cmd": "codex exec -m xoxb-9876-5432-1098-fakefakefakefake -c timeout=30 \"Call API\"",
+  "planted": [
+   "xoxb-9876-5432-1098-fakefakefakefake"
+  ]
+ },
+ {
+  "cmd": "codex exec -C /home/hakanbulut/clients/logistics/ -o /tmp/res.txt \"Track package\"",
+  "planted": [
+   "/home/hakanbulut/clients/logistics/"
+  ]
+ },
+ {
+  "cmd": "codex exec -c secret=sk-ant-api03-abcdef1234567890abcdef \"Encrypt file\"",
+  "planted": [
+   "sk-ant-api03-abcdef1234567890abcdef"
+  ]
+ },
+ {
+  "cmd": "codex exec -m ghp_1234567890abcdef1234567890abcdef123456 \"Clone repo\"",
+  "planted": [
+   "ghp_1234567890abcdef1234567890abcdef123456"
+  ]
+ },
+ {
+  "cmd": "codex exec -C /home/gulderen/clients/retail/ -c phone=05431112222 \"Contact client\"",
+  "planted": [
+   "/home/gulderen/clients/retail/",
+   "05431112222"
+  ]
+ },
+ {
+  "cmd": "codex exec <<EOF\n12345678901\nVerify identity\nEOF",
+  "planted": [
+   "12345678901"
+  ]
+ },
+ {
+  "cmd": "codex exec -m hf_abcdef1234567890abcdef123456 -C /home/aliustao/clients/ai-lab/ \"Train model\"",
+  "planted": [
+   "hf_abcdef1234567890abcdef123456",
+   "/home/aliustao/clients/ai-lab/"
+  ]
+ },
+ {
+  "cmd": "codex exec -o data.json -c url=http://10.0.0.5/api \"Fetch data\"",
+  "planted": [
+   "http://10.0.0.5/api"
+  ]
+ },
+ {
+  "cmd": "codex exec -m nvapi-zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz \"Generate image\"",
+  "planted": [
+   "nvapi-zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz"
+  ]
+ },
+ {
+  "cmd": "agy exec -m sk-ant-api03-FakeTurk12345678901234567890 -p 'Summarize the logs' --json-schema '{\"type\":\"object\"}' --add-dir /home/emre_yilmaz/clients/medika_hastanesi/",
+  "planted": [
+   "sk-ant-api03-FakeTurk12345678901234567890",
+   "emre_yilmaz",
+   "medika_hastanesi"
+  ]
+ },
+ {
+  "cmd": "echo 'AKIAFAKE1234567890' | agy -p 'Analyze this secret' --model gpt-4o --stream-json",
+  "planted": [
+   "AKIAFAKE1234567890"
+  ]
+ },
+ {
+  "cmd": "agy -m hf_FakeKey9876543210AbCdEfGh -p 'Process data for Canan Demir' --add-dir /home/ali_vural/clients/turkcell_bilim/",
+  "planted": [
+   "hf_FakeKey9876543210AbCdEfGh",
+   "Canan Demir",
+   "ali_vural",
+   "turkcell_bilim"
+  ]
+ },
+ {
+  "cmd": "agy -p 'Contact info: +905321234567' --model llm-fake-01 --json-schema '{\"type\":\"string\"}'",
+  "planted": [
+   "+905321234567",
+   "llm-fake-01"
+  ]
+ },
+ {
+  "cmd": "cat <<EOF | agy --model gpt-4-turbo -p 'Parse this'\n12345678901\nEOF",
+  "planted": [
+   "12345678901"
+  ]
+ },
+ {
+  "cmd": "agy -m xoxb-123456789012-abcdefg -p 'Debug error at internal-api.corp.local:8080'",
+  "planted": [
+   "xoxb-123456789012-abcdefg",
+   "internal-api.corp.local:8080"
+  ]
+ },
+ {
+  "cmd": "agy -p 'User: user123@example.com' --add-dir /home/burak_kaya/clients/acme_software/ --model claude-3-opus",
+  "planted": [
+   "user123@example.com",
+   "burak_kaya",
+   "acme_software"
+  ]
+ },
+ {
+  "cmd": "agy --model nvapi-FakeKey00000000000000000000 -p 'Extract insights' --stream-json",
+  "planted": [
+   "nvapi-FakeKey00000000000000000000"
+  ]
+ },
+ {
+  "cmd": "echo 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.fakepayload' | agy -p 'Validate JWT' -m gpt-4o-mini",
+  "planted": [
+   "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.fakepayload"
+  ]
+ },
+ {
+  "cmd": "agy -p 'ID: 11122233344' --model fake-model-99 --add-dir /home/elif_sahin/clients/healthplus_clinic/",
+  "planted": [
+   "11122233344",
+   "fake-model-99",
+   "elif_sahin",
+   "healthplus_clinic"
+  ]
+ },
+ {
+  "cmd": "agy -m ghp_FakeGitHubKey12345678901234567890 -p 'Review code' --json-schema '{\"type\":\"array\"}'",
+  "planted": [
+   "ghp_FakeGitHubKey12345678901234567890"
+  ]
+ },
+ {
+  "cmd": "cat <<EOF | agy -p 'Read ID' --model llama-3-70b\n55566677788\nEOF",
+  "planted": [
+   "55566677788"
+  ]
+ },
+ {
+  "cmd": "agy -p 'Host: 192.168.10.50' -m sk-proj-FakeKey9876543210AbCd -a /home/mert_ozdemir/clients/finance_bank/",
+  "planted": [
+   "192.168.10.50",
+   "sk-proj-FakeKey9876543210AbCd",
+   "mert_ozdemir",
+   "finance_bank"
+  ]
+ },
+ {
+  "cmd": "agy --model fake-secret-model-123 -p 'Query: ?api_key=sk-ant-api03-XYZ123' --stream-json",
+  "planted": [
+   "fake-secret-model-123",
+   "sk-ant-api03-XYZ123"
+  ]
+ },
+ {
+  "cmd": "agy -p 'Patient: Zeynep Aksoy' --add-dir /home/kaan_aydin/clients/dental_care/ -m gpt-4o",
+  "planted": [
+   "Zeynep Aksoy",
+   "kaan_aydin",
+   "dental_care"
+  ]
+ },
+ {
+  "cmd": "echo 'AKIAFAKE9999999999' | agy -p 'Check AWS' --model claude-3-5-sonnet --json-schema '{\"type\":\"boolean\"}'",
+  "planted": [
+   "AKIAFAKE9999999999"
+  ]
+ },
+ {
+  "cmd": "agy -m hf_FakeHuggingFaceKey123456 -p 'Data from 10.0.0.15' --add-dir /home/selin_celik/clients/research_lab/",
+  "planted": [
+   "hf_FakeHuggingFaceKey123456",
+   "10.0.0.15",
+   "selin_celik",
+   "research_lab"
+  ]
+ },
+ {
+  "cmd": "cat <<EOF | agy -p 'Parse phone' -m gpt-4o\n+905339876543\nEOF",
+  "planted": [
+   "+905339876543"
+  ]
+ },
+ {
+  "cmd": "agy -p 'Email: dev@example.org' --model nvapi-FakeNvidiaKey1234 --stream-json",
+  "planted": [
+   "dev@example.org",
+   "nvapi-FakeNvidiaKey1234"
+  ]
+ },
+ {
+  "cmd": "agy --model xoxb-987654321098-zyxwvuts -p 'Host: db-prod.internal' -a /home/oguz_korkmaz/clients/retail_shop/",
+  "planted": [
+   "xoxb-987654321098-zyxwvuts",
+   "db-prod.internal",
+   "oguz_korkmaz",
+   "retail_shop"
+  ]
+ },
+ {
+  "cmd": "agy -p 'TC: 99988877766' -m sk-proj-AbCdEf1234567890 --json-schema '{\"type\":\"integer\"}'",
+  "planted": [
+   "99988877766",
+   "sk-proj-AbCdEf1234567890"
+  ]
+ },
+ {
+  "cmd": "echo 'ghp_FakeToken123456789012345678901234' | agy -p 'Git secret' --model fake-model-x1",
+  "planted": [
+   "ghp_FakeToken123456789012345678901234",
+   "fake-model-x1"
+  ]
+ },
+ {
+  "cmd": "agy -m gpt-4o -p 'User: baris_duran@example.com' --add-dir /home/gul_soylu/clients/edu_platform/",
+  "planted": [
+   "baris_duran@example.com",
+   "gul_soylu",
+   "edu_platform"
+  ]
+ },
+ {
+  "cmd": "cat <<EOF | agy -p 'Read Host' -m claude-3-haiku\napi-internal.corp.net\nEOF",
+  "planted": [
+   "api-internal.corp.net"
+  ]
+ },
+ {
+  "cmd": "agy -p 'Key: eyJfakejwt12345' --model sk-ant-api03-FakeOpenAI123 --stream-json",
+  "planted": [
+   "eyJfakejwt12345",
+   "sk-ant-api03-FakeOpenAI123"
+  ]
+ },
+ {
+  "cmd": "ssh -F /home/denizaksoy/clients/medline_klinik/bayrak_config bayrak 'claude -p --model sk-ant-api03-8f9a2b7c1d4e6f0a3b5c7d9e1f2a4b6c \"Review the intake form for Ayşe Demir, TC 12345678901, at 0532-1234567\"'",
+  "planted": [
+   "denizaksoy",
+   "medline_klinik",
+   "sk-ant-api03-8f9a2b7c1d4e6f0a3b5c7d9e1f2a4b6c",
+   "Ayşe Demir",
+   "12345678901",
+   "0532-1234567"
+  ]
+ },
+ {
+  "cmd": "ssh -F /home/emrekaya/clients/nova_tech/bayrak bayrak 'bash -s <<EOF\ncodex exec -m ghp_1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b Summarize logs for user kerem_yildiz@example.com\nEOF'",
+  "planted": [
+   "emrekaya",
+   "nova_tech",
+   "ghp_1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b",
+   "kerem_yildiz@example.com"
+  ]
+ },
+ {
+  "cmd": "ssh -F /home/elifaydin/clients/azure_health/bayrak_config bayrak 'claude -p --model AKIAIOSFODNN7EXAMPLE \"Check billing for Canan Kaya, phone 0505-9876543, key AKIAJOSFODNN7EXAMPLE2\"'",
+  "planted": [
+   "elifaydin",
+   "azure_health",
+   "AKIAIOSFODNN7EXAMPLE",
+   "Canan Kaya",
+   "0505-9876543",
+   "AKIAJOSFODNN7EXAMPLE2"
+  ]
+ },
+ {
+  "cmd": "ssh -F /home/burakkoc/clients/stellar_ai/bayrak bayrak 'bash -s <<EOF\nnvapi-x9y8z7w6v5u4t3s2r1q0 Deploy model for Selin Arslan, id 98765432109\nEOF'",
+  "planted": [
+   "burakkoc",
+   "stellar_ai",
+   "nvapi-x9y8z7w6v5u4t3s2r1q0",
+   "Selin Arslan",
+   "98765432109"
+  ]
+ },
+ {
+  "cmd": "ssh -F /home/mertozturk/clients/quantum_fin/bayrak_config bayrak 'claude -p --model xoxb-1234567890-ABCDEFGHIJKLMNOP \"Analyze transaction for Zeynep Şahin, card 4111111111111111\"'",
+  "planted": [
+   "mertozturk",
+   "quantum_fin",
+   "xoxb-1234567890-ABCDEFGHIJKLMNOP",
+   "Zeynep Şahin",
+   "4111111111111111"
+  ]
+ },
+ {
+  "cmd": "ssh -F /home/gokhanerdem/clients/vertex_cloud/bayrak bayrak 'bash -s <<EOF\nhf_abcdef1234567890abcdef1234567890 Run inference for Emre Çelik, email emre_celik@vertex.com\nEOF'",
+  "planted": [
+   "gokhanerdem",
+   "vertex_cloud",
+   "hf_abcdef1234567890abcdef1234567890",
+   "Emre Çelik",
+   "emre_celik@vertex.com"
+  ]
+ },
+ {
+  "cmd": "ssh -F /home/zeynepduran/clients/horizon_med/bayrak_config bayrak 'claude -p --model eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9 \"Verify patient Melis Aydın, TC 11122233344\"'",
+  "planted": [
+   "zeynepduran",
+   "horizon_med",
+   "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9",
+   "Melis Aydın",
+   "11122233344"
+  ]
+ },
+ {
+  "cmd": "ssh -F /home/ahmetyilmaz/clients/lambda_sys/bayrak bayrak 'bash -s <<EOF\nsk-proj-9876543210abcdef1234567890abcdef Update config for Deniz Koç, host 10.0.5.12\nEOF'",
+  "planted": [
+   "ahmetyilmaz",
+   "lambda_sys",
+   "sk-proj-9876543210abcdef1234567890abcdef",
+   "Deniz Koç",
+   "10.0.5.12"
+  ]
+ },
+ {
+  "cmd": "ssh -F /home/selinkara/clients/pixel_dev/bayrak_config bayrak 'claude -p --model ghp_0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b \"Debug error for user Burak Öztürk, ID 55544433322\"'",
+  "planted": [
+   "selinkara",
+   "pixel_dev",
+   "ghp_0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b",
+   "Burak Öztürk",
+   "55544433322"
+  ]
+ },
+ {
+  "cmd": "ssh -F /home/fatihkorkmaz/clients/nimbus_io/bayrak bayrak 'bash -s <<EOF\nAKIA1234567890ABCDEF Process data for Ece Güler, email ece.guler@nimbus.io\nEOF'",
+  "planted": [
+   "fatihkorkmaz",
+   "nimbus_io",
+   "AKIA1234567890ABCDEF",
+   "Ece Güler",
+   "ece.guler@nimbus.io"
+  ]
+ },
+ {
+  "cmd": "ssh -F /home/oguztan/clients/circuit_ai/bayrak_config bayrak 'claude -p --model nvapi-1234567890abcdef \"Train model for Hakan Yıldız, phone 0533-2221100\"'",
+  "planted": [
+   "oguztan",
+   "circuit_ai",
+   "nvapi-1234567890abcdef",
+   "Hakan Yıldız",
+   "0533-2221100"
+  ]
+ },
+ {
+  "cmd": "ssh -F /home/ceylinpolat/clients/delta_sec/bayrak bayrak 'bash -s <<EOF\nxoxp-987654321-XYZWVUTSRQPONMLKJIGFEDCBA Test auth for Kerem Aydın, ID 66677788899\nEOF'",
+  "planted": [
+   "ceylinpolat",
+   "delta_sec",
+   "xoxp-987654321-XYZWVUTSRQPONMLKJIGFEDCBA",
+   "Kerem Aydın",
+   "66677788899"
+  ]
+ },
+ {
+  "cmd": "ssh -F /home/muratcelik/clients/echo_lab/bayrak_config bayrak 'claude -p --model hf_zyxwvutsrqponmlkjihgfedcba9876543210 \"Scan logs for Selin Kaya, host 192.168.1.50\"'",
+  "planted": [
+   "muratcelik",
+   "echo_lab",
+   "hf_zyxwvutsrqponmlkjihgfedcba9876543210",
+   "Selin Kaya",
+   "192.168.1.50"
+  ]
+ },
+ {
+  "cmd": "ssh -F /home/iremsoylu/clients/zeta_fin/bayrak bayrak 'bash -s <<EOF\nsk-ant-api03-11111111111111111111111111111111 Send report to Ayşe Yılmaz, email ayse@zeta.fin\nEOF'",
+  "planted": [
+   "iremsoylu",
+   "zeta_fin",
+   "sk-ant-api03-11111111111111111111111111111111",
+   "Ayşe Yılmaz",
+   "ayse@zeta.fin"
+  ]
+ },
+ {
+  "cmd": "ssh -F /home/tanerdem/clients/omega_ai/bayrak_config bayrak 'claude -p --model AKIA9876543210ZYXWVU \"Validate input for Mehmet Demirel, TC 22233344455\"'",
+  "planted": [
+   "tanerdem",
+   "omega_ai",
+   "AKIA9876543210ZYXWVU",
+   "Mehmet Demirel",
+   "22233344455"
+  ]
+ },
+ {
+  "cmd": "ssh -F /home/gonulkaya/clients/pi_dev/bayrak bayrak 'bash -s <<EOF\nghp_9998887776665554443332221110009998887776 Compile code for Elif Şahin, ID 33344455566\nEOF'",
+  "planted": [
+   "gonulkaya",
+   "pi_dev",
+   "ghp_9998887776665554443332221110009998887776",
+   "Elif Şahin",
+   "33344455566"
+  ]
+ },
+ {
+  "cmd": "ssh -F /home/bariskaya/clients/rho_sys/bayrak_config bayrak 'claude -p --model eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9 \"Check status for Cihan Koç, phone 0542-1112233\"'",
+  "planted": [
+   "bariskaya",
+   "rho_sys",
+   "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9",
+   "Cihan Koç",
+   "0542-1112233"
+  ]
+ },
+ {
+  "cmd": "ssh -F /home/nurdanay/clients/sigma_lab/bayrak bayrak 'bash -s <<EOF\nnvapi-qwertyuiopasdfghjklzxcvbnm1234567890 Sync data for Deniz Arslan, host 172.16.0.10\nEOF'",
+  "planted": [
+   "nurdanay",
+   "sigma_lab",
+   "nvapi-qwertyuiopasdfghjklzxcvbnm1234567890",
+   "Deniz Arslan",
+   "172.16.0.10"
+  ]
+ },
+ {
+  "cmd": "ssh -F /home/kemaloz/clients/tau_ai/bayrak_config bayrak 'claude -p --model xoxb-222333444555666777888999000111222333444555 \"Log entry for Zeynep Demir, email zeynep@tau.ai\"'",
+  "planted": [
+   "kemaloz",
+   "tau_ai",
+   "xoxb-222333444555666777888999000111222333444555",
+   "Zeynep Demir",
+   "zeynep@tau.ai"
+  ]
+ },
+ {
+  "cmd": "ssh -F /home/oktayan/clients/upsilon_sec/bayrak bayrak 'bash -s <<EOF\nsk-proj-abcdef12345678901234567890abcdef1234567890 Alert for Hakan Yıldırım, ID 44455566677\nEOF'",
+  "planted": [
+   "oktayan",
+   "upsilon_sec",
+   "sk-proj-abcdef12345678901234567890abcdef1234567890",
+   "Hakan Yıldırım",
+   "44455566677"
+  ]
+ },
+ {
+  "cmd": "ssh -F /home/serpilguzel/clients/phi_fin/bayrak_config bayrak 'claude -p --model AKIA0000000000ABCDEF \"Report for Melis Kaya, TC 77788899900\"'",
+  "planted": [
+   "serpilguzel",
+   "phi_fin",
+   "AKIA0000000000ABCDEF",
+   "Melis Kaya",
+   "77788899900"
+  ]
+ },
+ {
+  "cmd": "ssh -F /home/ahmetkaya/clients/chai_dev/bayrak bayrak 'bash -s <<EOF\nhf_000000000000000000000000000000000000000000 Run test for Emre Şahin, host 10.1.1.10\nEOF'",
+  "planted": [
+   "ahmetkaya",
+   "chai_dev",
+   "hf_000000000000000000000000000000000000000000",
+   "Emre Şahin",
+   "10.1.1.10"
+  ]
+ },
+ {
+  "cmd": "ssh -F /home/elifay/clients/psi_ai/bayrak_config bayrak 'claude -p --model ghp_1212121212121212121212121212121212121212 \"Debug for Canan Yıldız, email canan@psi.ai\"'",
+  "planted": [
+   "elifay",
+   "psi_ai",
+   "ghp_1212121212121212121212121212121212121212",
+   "Canan Yıldız",
+   "canan@psi.ai"
+  ]
+ },
+ {
+  "cmd": "ssh -F /home/burakkork/clients/omega_sec/bayrak bayrak 'bash -s <<EOF\nAKIA1111111111ABCDEF Verify for Selin Koç, ID 88899900011\nEOF'",
+  "planted": [
+   "burakkork",
+   "omega_sec",
+   "AKIA1111111111ABCDEF",
+   "Selin Koç",
+   "88899900011"
+  ]
+ },
+ {
+  "cmd": "ssh -F /home/mertdemir/clients/zeta_lab/bayrak_config bayrak 'claude -p --model nvapi-zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz \"Update for Deniz Şahin, phone 0555-9998877\"'",
+  "planted": [
+   "mertdemir",
+   "zeta_lab",
+   "nvapi-zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz",
+   "Deniz Şahin",
+   "0555-9998877"
+  ]
+ },
+ {
+  "cmd": "curl -X POST http://127.0.0.1:18080/v1/chat/completions -H \"Authorization: Bearer sk-ant-api03-f4b7a2c1d9e8f0a1b2c3d4e5f6a7b8c9d0\" -d '{\"model\": \"canberkkaya\", \"messages\": [{\"role\": \"user\", \"content\": \"Hello\"}]}' -m 30",
+  "planted": [
+   "sk-ant-api03-f4b7a2c1d9e8f0a1b2c3d4e5f6a7b8c9d0",
+   "canberkkaya"
+  ]
+ },
+ {
+  "cmd": "curl -X POST https://inference.hetzner.com/api/v1/chat/completions -H \"Content-Type: application/json\" -d @- -m 60 <<EOF\n{ \"model\": \"gpt-4o\", \"prompt\": \"Contact 12345678901 for details\" }\nEOF",
+  "planted": [
+   "12345678901"
+  ]
+ },
+ {
+  "cmd": "curl -X POST http://127.0.0.1:18080/v1/chat/completions -m 10 -H \"Authorization: Bearer hf_9876543210abcdef\" -d '{\"model\": \"ayse_demir\", \"messages\": []}'",
+  "planted": [
+   "hf_9876543210abcdef",
+   "ayse_demir"
+  ]
+ },
+ {
+  "cmd": "curl -X POST https://inference.hetzner.com/api/v1/chat/completions -H \"Authorization: Bearer ghp_1a2b3c4d5e6f7g8h9i0j1k2l3m4n5o6p7q8r\" -d '{\"model\": \"gpt-4\", \"messages\": [{\"role\": \"user\", \"content\": \"Email: fake.email@example.com\"}]}'",
+  "planted": [
+   "ghp_1a2b3c4d5e6f7g8h9i0j1k2l3m4n5o6p7q8r",
+   "fake.email@example.com"
+  ]
+ },
+ {
+  "cmd": "curl -X POST http://127.0.0.1:18080/v1/chat/completions -m 45 -d '{\"model\": \"AKIAIOSFODNN7EXAMPLE12\", \"messages\": [{\"role\": \"system\", \"content\": \"You are a helper\"}]}'",
+  "planted": [
+   "AKIAIOSFODNN7EXAMPLE12"
+  ]
+ },
+ {
+  "cmd": "curl -X POST https://inference.hetzner.com/api/v1/chat/completions -H \"Authorization: Bearer nvapi-98765432109876543210987654321098\" -d '{\"model\": \"llama-3\", \"messages\": [{\"role\": \"user\", \"content\": \"Call me\"}]}' -m 120",
+  "planted": [
+   "nvapi-98765432109876543210987654321098"
+  ]
+ },
+ {
+  "cmd": "curl -X POST http://127.0.0.1:18080/v1/chat/completions -d '{\"model\": \"xoxb-1234567890-234567890-34567890-abcde\", \"messages\": [{\"role\": \"user\", \"content\": \"Test\"}]}' -m 5",
+  "planted": [
+   "xoxb-1234567890-234567890-34567890-abcde"
+  ]
+ },
+ {
+  "cmd": "curl -X POST https://inference.hetzner.com/api/v1/chat/completions -H \"Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.fake.jwt.payload\" -d '{\"model\": \"deniz_aydin\", \"messages\": []}' -m 300",
+  "planted": [
+   "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.fake.jwt.payload",
+   "deniz_aydin"
+  ]
+ },
+ {
+  "cmd": "curl -X POST http://127.0.0.1:18080/v1/chat/completions -m 15 -d '{\"model\": \"mustafa_kaya\", \"messages\": [{\"role\": \"user\", \"content\": \"TC: 11122233344\"}]}'",
+  "planted": [
+   "mustafa_kaya",
+   "11122233344"
+  ]
+ },
+ {
+  "cmd": "curl -X POST https://inference.hetzner.com/api/v1/chat/completions -H \"Authorization: Bearer sk-proj-abc123def456ghi789jkl012mno345pqr678stu901\" -d '{\"model\": \"gpt-4o\", \"messages\": [{\"role\": \"user\", \"content\": \"Visit /home/fakeuser/clients/fakeclient/\"}]}' -m 60",
+  "planted": [
+   "sk-proj-abc123def456ghi789jkl012mno345pqr678stu901",
+   "/home/fakeuser/clients/fakeclient/"
+  ]
+ },
+ {
+  "cmd": "curl -X POST http://127.0.0.1:18080/v1/chat/completions -m 20 -d '{\"model\": \"192.168.1.50\", \"messages\": [{\"role\": \"user\", \"content\": \"Ping\"}]}'",
+  "planted": [
+   "192.168.1.50"
+  ]
+ },
+ {
+  "cmd": "curl -X POST https://inference.hetzner.com/api/v1/chat/completions -H \"Authorization: Bearer hf_0a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6q7r\" -d '{\"model\": \"clinic_basaksehir\", \"messages\": [{\"role\": \"user\", \"content\": \"Appointment\"}]}' -m 90",
+  "planted": [
+   "hf_0a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6q7r",
+   "clinic_basaksehir"
+  ]
+ },
+ {
+  "cmd": "curl -X POST http://127.0.0.1:18080/v1/chat/completions -m 30 -d '{\"model\": \"gpt-3.5-turbo\", \"messages\": [{\"role\": \"user\", \"content\": \"Phone: 5321234567\"}]}'",
+  "planted": [
+   "5321234567"
+  ]
+ },
+ {
+  "cmd": "curl -X POST https://inference.hetzner.com/api/v1/chat/completions -H \"Authorization: Bearer AKIAJEXAMPLEFAKEKEY123\" -d '{\"model\": \"zeynep_yilmaz\", \"messages\": []}' -m 45",
+  "planted": [
+   "AKIAJEXAMPLEFAKEKEY123",
+   "zeynep_yilmaz"
+  ]
+ },
+ {
+  "cmd": "curl -X POST http://127.0.0.1:18080/v1/chat/completions -m 10 -d '{\"model\": \"internal-db-host\", \"messages\": [{\"role\": \"user\", \"content\": \"Query\"}]}'",
+  "planted": [
+   "internal-db-host"
+  ]
+ },
+ {
+  "cmd": "curl -X POST https://inference.hetzner.com/api/v1/chat/completions -H \"Authorization: Bearer xoxp-5555555555-6666666666-7777777777-zzzz\" -d '{\"model\": \"gpt-4\", \"messages\": [{\"role\": \"user\", \"content\": \"Email: info@fakeclinic.com\"}]}' -m 60",
+  "planted": [
+   "xoxp-5555555555-6666666666-7777777777-zzzz",
+   "info@fakeclinic.com"
+  ]
+ },
+ {
+  "cmd": "curl -X POST http://127.0.0.1:18080/v1/chat/completions -m 25 -d '{\"model\": \"burak_cevik\", \"messages\": [{\"role\": \"user\", \"content\": \"TC: 99988877766\"}]}'",
+  "planted": [
+   "burak_cevik",
+   "99988877766"
+  ]
+ },
+ {
+  "cmd": "curl -X POST https://inference.hetzner.com/api/v1/chat/completions -H \"Authorization: Bearer nvapi-11223344556677889900112233445566\" -d '{\"model\": \"mistral-large\", \"messages\": [{\"role\": \"user\", \"content\": \"Hello\"}]}' -m 120",
+  "planted": [
+   "nvapi-11223344556677889900112233445566"
+  ]
+ },
+ {
+  "cmd": "curl -X POST http://127.0.0.1:18080/v1/chat/completions -m 15 -d '{\"model\": \"10.0.0.5\", \"messages\": [{\"role\": \"user\", \"content\": \"Status\"}]}'",
+  "planted": [
+   "10.0.0.5"
+  ]
+ },
+ {
+  "cmd": "curl -X POST https://inference.hetzner.com/api/v1/chat/completions -H \"Authorization: Bearer ghp_zxywvutsrqponmlkjihgfedcba987654321\" -d '{\"model\": \"emre_sahin\", \"messages\": [{\"role\": \"user\", \"content\": \"File at /home/testuser/clients/acme/\"}]}' -m 300",
+  "planted": [
+   "ghp_zxywvutsrqponmlkjihgfedcba987654321",
+   "emre_sahin",
+   "/home/testuser/clients/acme/"
+  ]
+ },
+ {
+  "cmd": "curl -X POST http://127.0.0.1:18080/v1/chat/completions -m 20 -d '{\"model\": \"fake-company-ltd\", \"messages\": [{\"role\": \"user\", \"content\": \"Quote\"}]}'",
+  "planted": [
+   "fake-company-ltd"
+  ]
+ },
+ {
+  "cmd": "curl -X POST https://inference.hetzner.com/api/v1/chat/completions -H \"Authorization: Bearer eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.d2F0ZXJtYWxr\" -d '{\"model\": \"gpt-4o\", \"messages\": [{\"role\": \"user\", \"content\": \"Phone: 05351234567\"}]}' -m 60",
+  "planted": [
+   "eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.d2F0ZXJtYWxr",
+   "05351234567"
+  ]
+ },
+ {
+  "cmd": "curl -X POST http://127.0.0.1:18080/v1/chat/completions -m 30 -d '{\"model\": \"selin_acar\", \"messages\": [{\"role\": \"user\", \"content\": \"Email: selin@example.org\"}]}'",
+  "planted": [
+   "selin_acar",
+   "selin@example.org"
+  ]
+ },
+ {
+  "cmd": "curl -X POST https://inference.hetzner.com/api/v1/chat/completions -H \"Authorization: Bearer hf_qwertyuiopasdfghjklzxcvbnm1234567890\" -d '{\"model\": \"llama-2-70b\", \"messages\": [{\"role\": \"user\", \"content\": \"TC: 12345678901\"}]}' -m 90",
+  "planted": [
+   "hf_qwertyuiopasdfghjklzxcvbnm1234567890",
+   "12345678901"
+  ]
+ },
+ {
+  "cmd": "curl -X POST http://127.0.0.1:18080/v1/chat/completions -m 10 -d '{\"model\": \"172.16.0.1\", \"messages\": [{\"role\": \"user\", \"content\": \"Check\"}]}'",
+  "planted": [
+   "172.16.0.1"
+  ]
+ },
+ {
+  "cmd": "TOKEN=ghp_8s2d9fj3k1l0m4n5b6c7v8x9z0a1b2c3d4e5f6 timeout 30s bash -c 'curl -s https://api.github.com/repos/fakeuser/fakeclient | jq .'",
+  "planted": [
+   "ghp_8s2d9fj3k1l0m4n5b6c7v8x9z0a1b2c3d4e5f6"
+  ]
+ },
+ {
+  "cmd": "codex exec -m Melis Yildirim --input /home/melis/clients/acme.txt",
+  "planted": [
+   "Melis Yildirim"
+  ]
+ },
+ {
+  "cmd": "API_KEY=sk-ant-api03-7f8g9h0i1j2k3l4m5n6o7p8q9r0s1t2u3v4w5x6y7z8 ./run_model.py --host 10.20.30.40",
+  "planted": [
+   "sk-ant-api03-7f8g9h0i1j2k3l4m5n6o7p8q9r0s1t2u3v4w5x6y7z8",
+   "10.20.30.40"
+  ]
+ },
+ {
+  "cmd": "echo 'BEGIN_DATA' | head -1",
+  "planted": [
+   "BEGIN_DATA"
+  ]
+ },
+ {
+  "cmd": "python3 /home/kaan/clients/zeta/etl.py --key AKIAIOSFODNN7EXAMPLE123 --phone 0532-123-45-67",
+  "planted": [
+   "AKIAIOSFODNN7EXAMPLE123",
+   "0532-123-45-67",
+   "/home/kaan/clients/zeta/etl.py"
+  ]
+ },
+ {
+  "cmd": "HF_TOKEN=hf_AbCdEfGhIjKlMnOpQrStUvWxYz0123456789 python train.py",
+  "planted": [
+   "hf_AbCdEfGhIjKlMnOpQrStUvWxYz0123456789"
+  ]
+ },
+ {
+  "cmd": "timeout 10s ssh 192.168.1.100 'ls /tmp'",
+  "planted": [
+   "192.168.1.100"
+  ]
+ },
+ {
+  "cmd": "cat <<EOF\nAhmet Kaya\nEOF",
+  "planted": [
+   "Ahmet Kaya"
+  ]
+ },
+ {
+  "cmd": "OPENAI_API_KEY=sk-proj-9z8y7x6w5v4u3t2s1r0q9p8o7n6m5l4k3j2i1h0g ./agent.py",
+  "planted": [
+   "sk-proj-9z8y7x6w5v4u3t2s1r0q9p8o7n6m5l4k3j2i1h0g"
+  ]
+ },
+ {
+  "cmd": "curl -X POST https://internal.fake.dev/api?token=xoxb-12345-67890-123456789012",
+  "planted": [
+   "xoxb-12345-67890-123456789012"
+  ]
+ },
+ {
+  "cmd": "bash /home/emre/clients/beta/deploy.sh --id 12345678901",
+  "planted": [
+   "12345678901"
+  ]
+ },
+ {
+  "cmd": "export SLACK_TOKEN=xoxb-98765-43210-987654321098; ./notify.py",
+  "planted": [
+   "xoxb-98765-43210-987654321098"
+  ]
+ },
+ {
+  "cmd": "codex exec -m 34567890123 --mode fast",
+  "planted": [
+   "34567890123"
+  ]
+ },
+ {
+  "cmd": "python3 /home/burak/clients/gamma/sync.py --user burak.yilmaz@fakecorp.com",
+  "planted": [
+   "burak.yilmaz@fakecorp.com"
+  ]
+ },
+ {
+  "cmd": "AWS_SECRET_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY ./upload.py",
+  "planted": [
+   "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+  ]
+ },
+ {
+  "cmd": "echo 'Gizem Demir' > /tmp/id.txt",
+  "planted": [
+   "Gizem Demir"
+  ]
+ },
+ {
+  "cmd": "timeout 5s ping 10.5.6.7",
+  "planted": [
+   "10.5.6.7"
+  ]
+ },
+ {
+  "cmd": "API_URL=https://api.fake.ai/v1/chat?key=nvapi-xyz123abc456def789gh0 ./chat.py",
+  "planted": [
+   "nvapi-xyz123abc456def789gh0"
+  ]
+ },
+ {
+  "cmd": "cat <<HEREDOC\nDeniz Arslan\nHEREDOC",
+  "planted": [
+   "Deniz Arslan"
+  ]
+ },
+ {
+  "cmd": "bash -c 'echo $JWT' ; JWT=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.fake.payload.sig ./auth.py",
+  "planted": [
+   "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.fake.payload.sig"
+  ]
+ },
+ {
+  "cmd": "codex exec -m Fatih Celik --verbose",
+  "planted": [
+   "Fatih Celik"
+  ]
+ },
+ {
+  "cmd": "python3 /home/zeynep/clients/delta/report.py --tck 98765432109",
+  "planted": [
+   "98765432109"
+  ]
+ },
+ {
+  "cmd": "ENV=dev ./start.sh --host db.internal.fake.local",
+  "planted": [
+   "db.internal.fake.local"
+  ]
+ },
+ {
+  "cmd": "curl -H \"Authorization: Bearer ghp_1a2b3c4d5e6f7g8h9i0j1k2l3m4n5o6p7q8r9s0t\" -X POST https://api.gh.com",
+  "planted": [
+   "ghp_1a2b3c4d5e6f7g8h9i0j1k2l3m4n5o6p7q8r9s0t"
+  ]
+ },
+ {
+  "cmd": "echo 'Can Acikgoz' | wc -c",
+  "planted": [
+   "Can Acikgoz"
+  ]
+ },
+ {
+  "cmd": "cat > /home/emre_kaya/clients/acme/log.txt <<'EOF'\nMustafa Yılmaz\nEOF",
+  "planted": [
+   "emre_kaya",
+   "Mustafa Yılmaz"
+  ]
+ },
+ {
+  "cmd": "curl -X POST https://internal-gateway.local/api/v1/user -d \"tc=12345678901\" -d \"token=sk-proj-AbCdEfGhIjKlMnOpQrStUvWxYz012345\"",
+  "planted": [
+   "12345678901",
+   "sk-proj-AbCdEfGhIjKlMnOpQrStUvWxYz012345"
+  ]
+ },
+ {
+  "cmd": "python3 - <<'PY'\nimport os\nprint('Elif Demir')\nPY",
+  "planted": [
+   "Elif Demir"
+  ]
+ },
+ {
+  "cmd": "export API_KEY=ghp_1234567890abcdefghij1234567890abcd && curl -H \"Authorization: Bearer $API_KEY\" https://github.com/fake-repo",
+  "planted": [
+   "ghp_1234567890abcdefghij1234567890abcd"
+  ]
+ },
+ {
+  "cmd": "cat > /home/mehmet_oz/clients/xyz/conf.yaml <<'YAML'\nhost: 192.168.1.150\nadmin: Ayşe Yavuz\nYAML",
+  "planted": [
+   "mehmet_oz",
+   "192.168.1.150",
+   "Ayşe Yavuz"
+  ]
+ },
+ {
+  "cmd": "read -d '' COMMENT <<EOF\n# Note for Canan Kaya\n# Phone: 05321234567\nEOF",
+  "planted": [
+   "Canan Kaya",
+   "05321234567"
+  ]
+ },
+ {
+  "cmd": "codex exec -m 'sk-ant-api03-1234567890abcdef1234567890abcdef1234567890abcdef12345678' --prompt 'Test'",
+  "planted": [
+   "sk-ant-api03-1234567890abcdef1234567890abcdef1234567890abcdef12345678"
+  ]
+ },
+ {
+  "cmd": "cat >> /var/log/app.log <<'LOG'\nError reported by Burak Şahin\nLOG",
+  "planted": [
+   "Burak Şahin"
+  ]
+ },
+ {
+  "cmd": "AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE aws s3 ls",
+  "planted": [
+   "AKIAIOSFODNN7EXAMPLE"
+  ]
+ },
+ {
+  "cmd": "cat > /home/zev_aslan/clients/def/data.json <<'JSON'\n{\"email\": \"zeynep.demir@fakecorp.com\", \"id\": 98765432100}\nJSON",
+  "planted": [
+   "zev_aslan",
+   "zeynep.demir@fakecorp.com",
+   "98765432100"
+  ]
+ },
+ {
+  "cmd": "curl -u 'fakeuser:pass123' http://10.0.0.5/api/status",
+  "planted": [
+   "10.0.0.5"
+  ]
+ },
+ {
+  "cmd": "python3 - <<'PY'\nkey = 'hf_1234567890abcdefghijklmnopqr'\nprint(key)\nPY",
+  "planted": [
+   "hf_1234567890abcdefghijklmnopqr"
+  ]
+ },
+ {
+  "cmd": "cat > /home/ali_vural/clients/ghi/notes.txt <<'NOTE'\nContact: Selin Arslan\nNOTE",
+  "planted": [
+   "ali_vural",
+   "Selin Arslan"
+  ]
+ },
+ {
+  "cmd": "export SLACK_TOKEN=xoxb-123456789012-1234567890123-abcdefg1234567890123456 && curl https://slack.com/api/test",
+  "planted": [
+   "xoxb-123456789012-1234567890123-abcdefg1234567890123456"
+  ]
+ },
+ {
+  "cmd": "cat > /home/bahar_yildiz/clients/jkl/config.env <<'ENV'\nDB_HOST=192.168.10.5\nUSER=Deniz Koç\nENV",
+  "planted": [
+   "bahar_yildiz",
+   "192.168.10.5",
+   "Deniz Koç"
+  ]
+ },
+ {
+  "cmd": "read -r -d '' TOKEN <<EOF\nJWT: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.fake.fake\nEOF",
+  "planted": [
+   "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.fake.fake"
+  ]
+ },
+ {
+  "cmd": "codex exec -m 'nvapi-12345678901234567890123456789012' run task.sh",
+  "planted": [
+   "nvapi-12345678901234567890123456789012"
+  ]
+ },
+ {
+  "cmd": "cat > /home/hasan_aydin/clients/mno/log.out <<'OUT'\nProcessed by Emine Yıldırım\nOUT",
+  "planted": [
+   "hasan_aydin",
+   "Emine Yıldırım"
+  ]
+ },
+ {
+  "cmd": "curl -d 'phone=05559876543' -d 'name=Tolga Erden' https://api.fake.com/register",
+  "planted": [
+   "05559876543",
+   "Tolga Erden"
+  ]
+ },
+ {
+  "cmd": "python3 - <<'PY'\nprint('AKIAQWERTYUIOPASDF')\nPY",
+  "planted": [
+   "AKIAQWERTYUIOPASDF"
+  ]
+ },
+ {
+  "cmd": "cat > /home/gokhan_turan/clients/pqr/secret.key <<'KEY'\n12345678901\nKEY",
+  "planted": [
+   "gokhan_turan",
+   "12345678901"
+  ]
+ },
+ {
+  "cmd": "export GITHUB_TOKEN=ghp_zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz && git clone https://github.com/fake",
+  "planted": [
+   "ghp_zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz"
+  ]
+ },
+ {
+  "cmd": "cat > /home/pinar_ozturk/clients/rst/data.csv <<'CSV'\n11111111111,ahmet@fake.com\nCSV",
+  "planted": [
+   "pinar_ozturk",
+   "11111111111",
+   "ahmet@fake.com"
+  ]
+ },
+ {
+  "cmd": "read -d '' MSG <<EOF\nHello from Kadir Acar\nEOF",
+  "planted": [
+   "Kadir Acar"
+  ]
+ },
+ {
+  "cmd": "cat > /home/serkan_duran/clients/uvw/auth.txt <<'AUTH'\nToken: sk-ant-api03-abcdef1234567890abcdef1234567890abcdef1234567890abcdef12\nAUTH",
+  "planted": [
+   "serkan_duran",
+   "sk-ant-api03-abcdef1234567890abcdef1234567890abcdef1234567890abcdef12"
+  ]
+ },
+ {
+  "cmd": "ssh -o StrictHostKeyChecking=no -i /home/demirtas/clients/medtech-trust/keys/id_rsa deploy@10.20.45.12",
+  "planted": [
+   "demirtas",
+   "medtech-trust",
+   "10.20.45.12"
+  ]
+ },
+ {
+  "cmd": "scp -r /home/aksoy/clients/finance-core/exports/ /home/aksoy/backup/",
+  "planted": [
+   "aksoy",
+   "finance-core"
+  ]
+ },
+ {
+  "cmd": "gh repo create new-project --token ghp_1a2b3c4d5e6f7g8h9i0j1k2l3m4n5o6p7q8r9s0t",
+  "planted": [
+   "ghp_1a2b3c4d5e6f7g8h9i0j1k2l3m4n5o6p7q8r9s0t"
+  ]
+ },
+ {
+  "cmd": "rsync -avz /home/yilmaz/clients/legal-aid/ --delete user@db-prod.internal:/data/backups/",
+  "planted": [
+   "yilmaz",
+   "legal-aid",
+   "db-prod.internal"
+  ]
+ },
+ {
+  "cmd": "git clone https://xoxb-123456789012-234567890123-abc456def789github.com/org/repo.git",
+  "planted": [
+   "xoxb-123456789012-234567890123-abc456def789"
+  ]
+ },
+ {
+  "cmd": "codex exec -m sk-ant-api03-abc123def456ghi789jkl012mno345pqr678stu901vwx234yz",
+  "planted": [
+   "sk-ant-api03-abc123def456ghi789jkl012mno345pqr678stu901vwx234yz"
+  ]
+ },
+ {
+  "cmd": "ssh admin@api-gateway.internal 'echo \"User: emre.kaya@fakeclinic.tr\" >> /var/log/auth.log'",
+  "planted": [
+   "api-gateway.internal",
+   "emre.kaya@fakeclinic.tr"
+  ]
+ },
+ {
+  "cmd": "curl -X POST https://api.internal/v1/data -H \"Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.fake.jwt.token.abc123\"",
+  "planted": [
+   "api.internal",
+   "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.fake.jwt.token.abc123"
+  ]
+ },
+ {
+  "cmd": "scp -P 2222 /home/celik/clients/retail-hub/config.yml admin@192.168.5.20:/etc/app/",
+  "planted": [
+   "celik",
+   "retail-hub",
+   "192.168.5.20"
+  ]
+ },
+ {
+  "cmd": "git remote add origin https://AKIAQ3X5P7W9E1F3G5H7J9K:secret123@github.com/corp/repo.git",
+  "planted": [
+   "AKIAQ3X5P7W9E1F3G5H7J9K"
+  ]
+ },
+ {
+  "cmd": "heredoc_start <<EOF\nahmet.demir\nEOF",
+  "planted": [
+   "ahmet.demir"
+  ]
+ },
+ {
+  "cmd": "ssh -t root@10.0.0.5 'systemctl restart service-172.16.10.20'",
+  "planted": [
+   "10.0.0.5",
+   "172.16.10.20"
+  ]
+ },
+ {
+  "cmd": "rsync -e ssh -avz /home/ozturk/clients/health-plus/ root@backup-server.internal:/mnt/storage/",
+  "planted": [
+   "ozturk",
+   "health-plus",
+   "backup-server.internal"
+  ]
+ },
+ {
+  "cmd": "codex exec -m sk-proj-9z8y7x6w5v4u3t2s1r0q9p8o7n6m5l4k3j2i1h0g9f8e7d6c5b4a",
+  "planted": [
+   "sk-proj-9z8y7x6w5v4u3t2s1r0q9p8o7n6m5l4k3j2i1h0g9f8e7d6c5b4a"
+  ]
+ },
+ {
+  "cmd": "ssh -i /home/kaya/clients/insure-net/keys/aws_key.pem ec2-user@54.1.2.3",
+  "planted": [
+   "kaya",
+   "insure-net",
+   "54.1.2.3"
+  ]
+ },
+ {
+  "cmd": "curl -u hf_1234567890abcdef:pass https://huggingface.co/api/models",
+  "planted": [
+   "hf_1234567890abcdef"
+  ]
+ },
+ {
+  "cmd": "scp /home/arslan/clients/logistics-tracker/logs/*.log user@log-server.internal:/logs/",
+  "planted": [
+   "arslan",
+   "logistics-tracker",
+   "log-server.internal"
+  ]
+ },
+ {
+  "cmd": "git push https://ghp_9876543210zyxwvutsrqponmlkjiutsrqponmlkx@github.com/user/repo.git",
+  "planted": [
+   "ghp_9876543210zyxwvutsrqponmlkjiutsrqponmlkx"
+  ]
+ },
+ {
+  "cmd": "heredoc_start <<EOF\n05321234567\nEOF",
+  "planted": [
+   "05321234567"
+  ]
+ },
+ {
+  "cmd": "ssh admin@192.168.100.250 'grep \"TC: 12345678901\" /var/data/citizens.txt'",
+  "planted": [
+   "192.168.100.250",
+   "12345678901"
+  ]
+ },
+ {
+  "cmd": "rsync -avz /home/erdem/clients/edu-platform/ user@10.11.12.13:/var/www/html/",
+  "planted": [
+   "erdem",
+   "edu-platform",
+   "10.11.12.13"
+  ]
+ },
+ {
+  "cmd": "codex exec -m nvapi-abc123xyz789qwerty456iop",
+  "planted": [
+   "nvapi-abc123xyz789qwerty456iop"
+  ]
+ },
+ {
+  "cmd": "ssh -o ProxyCommand=\"ssh -W %h:%p jump.internal\" target@172.20.30.40",
+  "planted": [
+   "jump.internal",
+   "172.20.30.40"
+  ]
+ },
+ {
+  "cmd": "curl -H \"X-API-KEY: AKIAIOSFODNN7EXAMPLE\" https://fake-api.com/v1/resource",
+  "planted": [
+   "AKIAIOSFODNN7EXAMPLE"
+  ]
+ },
+ {
+  "cmd": "scp -r /home/sahin/clients/energy-grid/ root@10.50.60.70:/mnt/energy/",
+  "planted": [
+   "sahin",
+   "energy-grid",
+   "10.50.60.70"
+  ]
+ },
+ {
+  "cmd": "export TCKIMLIK=12345678901; curl -H \"Authorization: Bearer sk-ant-api03-abc123def456ghi789jkl012mno345pqr678stu901vwx234yz\" https://api.example.com/v1/chat",
+  "planted": [
+   "12345678901",
+   "sk-ant-api03-abc123def456ghi789jkl012mno345pqr678stu901vwx234yz"
+  ]
+ },
+ {
+  "cmd": "cat > /home/ahmetyilmaz/kliyanlar/mehmetdemir/notlar.txt <<EOF\nAhmet Yılmaz, 1990 doğumlu, İstanbul.",
+  "planted": [
+   "ahmetyilmaz",
+   "mehmetdemir",
+   "Ahmet Yılmaz"
+  ]
+ },
+ {
+  "cmd": "ssh root@192.168.1.50 'systemctl restart nginx'",
+  "planted": [
+   "192.168.1.50"
+  ]
+ },
+ {
+  "cmd": "codex exec -m ghp_1234567890abcdef1234567890abcdef1234",
+  "planted": [
+   "ghp_1234567890abcdef1234567890abcdef1234"
+  ]
+ },
+ {
+  "cmd": "echo \"Telefon: 05321234567, E-posta: emre.kaya@sahte.com\" >> /tmp/guvenli.log",
+  "planted": [
+   "05321234567",
+   "emre.kaya@sahte.com"
+  ]
+ },
+ {
+  "cmd": "aws s3 cp /home/elifcelik/dosyalar/rapor.pdf s3://buket-klinik/",
+  "planted": [
+   "elifcelik",
+   "buket-klinik"
+  ]
+ },
+ {
+  "cmd": "export HF_TOKEN=hf_abcdef1234567890123456789012345678; huggingface-cli whoami",
+  "planted": [
+   "hf_abcdef1234567890123456789012345678"
+  ]
+ },
+ {
+  "cmd": "grep -r \"AKIAIOSFODNN7EXAMPLE\" /home/selinaydin/projeler/",
+  "planted": [
+   "AKIAIOSFODNN7EXAMPLE",
+   "selinaydin"
+  ]
+ },
+ {
+  "cmd": "curl -X POST http://10.0.0.5/api/login -d 'user: canozturk'",
+  "planted": [
+   "10.0.0.5",
+   "canozturk"
+  ]
+ },
+ {
+  "cmd": "cat <<EOT\nxoxb-123456789012-123456789012-abcdef1234567890123456\nEOT",
+  "planted": [
+   "xoxb-123456789012-123456789012-abcdef1234567890123456"
+  ]
+ },
+ {
+  "cmd": "mv /home/ozguyener/arkadaslar/berksoydan.txt /tmp/",
+  "planted": [
+   "ozguyener",
+   "berksoydan"
+  ]
+ },
+ {
+  "cmd": "python3 -c \"import os; print(os.environ['NV_API_KEY'])\" # nvapi-1234567890abcdef",
+  "planted": [
+   "nvapi-1234567890abcdef"
+  ]
+ },
+ {
+  "cmd": "git clone https://github.com/denizarslan/repo.git",
+  "planted": [
+   "denizarslan"
+  ]
+ },
+ {
+  "cmd": "chmod 700 /home/muratkaya/kliyanlar/aylinsezer/",
+  "planted": [
+   "muratkaya",
+   "aylinsezer"
+  ]
+ },
+ {
+  "cmd": "echo 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0x52x9pAbYJ4N5fWbVZcLzZDg' > token.txt",
+  "planted": [
+   "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0x52x9pAbYJ4N5fWbVZcLzZDg"
+  ]
+ },
+ {
+  "cmd": "scp file.txt user@192.168.100.20:/var/www/html/",
+  "planted": [
+   "192.168.100.20"
+  ]
+ },
+ {
+  "cmd": "export SLACK_BOT_TOKEN=xoxb-987654321098-987654321098-zyxwvu987654321098765432",
+  "planted": [
+   "xoxb-987654321098-987654321098-zyxwvu987654321098765432"
+  ]
+ },
+ {
+  "cmd": "find /home/serkanacik -name \"*.log\" -exec grep \"burakgul\" {} \\;",
+  "planted": [
+   "serkanacik",
+   "burakgul"
+  ]
+ },
+ {
+  "cmd": "wget http://internal.host.local/backup.zip",
+  "planted": [
+   "internal.host.local"
+  ]
+ },
+ {
+  "cmd": "codex exec -m sk-proj-fakekey1234567890abcdefghijklmnopqrstuvwxyz123",
+  "planted": [
+   "sk-proj-fakekey1234567890abcdefghijklmnopqrstuvwxyz123"
+  ]
+ },
+ {
+  "cmd": "cat /home/zeynepkorkmaz/kişisel/telefon.txt",
+  "planted": [
+   "zeynepkorkmaz"
+  ]
+ },
+ {
+  "cmd": "curl -H \"X-Api-Key: AKIA0987654321QWERTY\" https://api.fake.com/data",
+  "planted": [
+   "AKIA0987654321QWERTY"
+  ]
+ },
+ {
+  "cmd": "echo \"TC Kimlik: 98765432109\" > /tmp/id.txt",
+  "planted": [
+   "98765432109"
+  ]
+ },
+ {
+  "cmd": "ssh -i ~/.ssh/id_rsa ops@10.20.30.40",
+  "planted": [
+   "10.20.30.40"
+  ]
+ },
+ {
+  "cmd": "docker run -e GITHUB_TOKEN=ghp_zyxwvutsrqponmlkjihgfedcba9876543210 -e HF_TOKEN=hf_zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz nginx",
+  "planted": [
+   "ghp_zyxwvutsrqponmlkjihgfedcba9876543210",
+   "hf_zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz"
+  ]
+ }
+]

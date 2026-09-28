@@ -50,6 +50,41 @@
   labels once, counted (`codex/gpt-6-astra ×2`). Installed to
   `~/.claude/agentline/`; `bash install.sh --link-bin` also links it into
   `~/.local/bin`, never over a different file.
+- The worker classifier fails closed. A program is named only when it is a
+  common tool (`Bash git`) or a script (`Bash etl.py`), any other is plain
+  `Bash`. It stops at the first construct it does not parse exactly (`$(`,
+  backquotes, `$'…'`, `$"…"`, `<(`, a here-string, `eval`, an unterminated
+  quote, a heredoc delimiter it cannot pin down), and from the words before
+  it names only a worker. `PASSWORD=$(true)hunter2 sleep 1` showed
+  `Bash hunter2`, and a heredoc opened with `<<$'\x45OF'` showed its body.
+  Launchers are read with their own option syntax (`exec -a`, `time -f`,
+  `sudo -u`, `nice -n`, `ionice -c`, `stdbuf -o`, `env -u`, `timeout -s`,
+  `xargs -I`), so an option's value is never taken for the program, and a
+  form it does not know shows the launcher. A command line's own
+  `agentline-run --label` is not shown: the row names what the run wraps.
+  A synthetic corpus of 399 commands with 771 planted fake secrets is now
+  part of the test suite, and none of them may reach a row or a label.
+- `agentline-run --label` is displayed, so it is cleaned, cut to 40
+  characters, and one that looks like a secret (a key prefix, a
+  `password=` pair, a JWT, a path, a URL, an address) is replaced by the
+  default label. `--heartbeat` is 0 to 3600, checked before CMD starts: a
+  hundred nines overflowed the timer after CMD had started and orphaned it.
+  With stdin not a terminal, CMD runs in a process group of its own, and
+  TERM, HUP, INT and QUIT reach all of it, so `bash -c 'job & wait'` no
+  longer leaves the job behind. From a terminal CMD stays in the foreground
+  group, as before. Each registry-helper call gets 3 s, and TERM is passed
+  on while one runs.
+- The registry helper checks its directory through an open descriptor: yours,
+  not a link, and writable by nobody else. A user-owned `/tmp/agentline-<uid>`
+  at mode 777 used to pass, and so did any `AGENTLINE_TMP`. One it creates
+  is set to 700, and any other is refused (a shared `/tmp` as
+  `AGENTLINE_TMP` included). Its files are opened relative to that
+  directory, without following links and without blocking, and used only
+  when they are regular files of yours. A FIFO at the registry's name hung
+  every write. A registry is read up to 256 KB and 512 lines, and pruned in
+  one pass (it was quadratic). Labels are stored without control
+  characters, and no diagnostic prints an ESC: `add $'\e[2J'` cleared the
+  terminal on a skipped write.
 - `install.sh` always copies `agentline-subagents.sh`, `agentline-run` and
   the registry helper `agentline-agent.sh` (which used to come only with
   `--with-hooks`). None of them runs until something asks for it.

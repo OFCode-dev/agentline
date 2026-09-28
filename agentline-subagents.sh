@@ -27,9 +27,10 @@
 # model server as arb/qwen3.6. The same classifier labels agentline-run's
 # rows on the main line, through the second mode:
 #
-#   agentline-subagents.sh --classify -- CMD [ARGS...]
+#   agentline-subagents.sh --classify [--label TEXT] -- CMD [ARGS...]
 #                           print the worker label for that command line
-#                           (codex/gpt-6-astra, ...), or its program name
+#                           (codex/gpt-6-astra, ...), or its program name;
+#                           TEXT instead when it looks like no secret
 #
 # Honours AGENTLINE_THEME (dark|light|mono), NO_COLOR, AGENTLINE_GLYPHS
 # (emoji|ascii) and the AGENTLINE_COLOR_* overrides, like agentline.sh.
@@ -60,6 +61,17 @@ MODE = sys.argv[1] if len(sys.argv) > 1 else 'render'
 # codex/sk-ant-api03-…, agy/hf_…, ssh/10.1.2.3 and codex//home/…/patients
 # all passed the old character check. So the worst a hostile command can do
 # is choose which of these short, inert strings appears.
+#
+# And it fails closed (review of J9b, stage J9c). A program is named only
+# when it is on a fixed list (PROGRAMS) or is a script basename of the SCRIPT
+# shape: `PASSWORD=$(true)hunter2 sleep 1`, cut apart by a lexer that did not
+# model $(, showed `Bash hunter2`, and a name merely shaped like a program is
+# no proof it is one. What the lexer does not parse exactly ($'…', $(, a
+# heredoc whose delimiter it cannot pin down, ...) ends the walk: only the
+# words before it count, and from those only a worker is named. A launcher
+# (env, sudo, timeout, exec, ...) is taken off by its own option syntax, so
+# `exec -a hunter2 sleep 60` is sleep and not hunter2; a form of it this does
+# not know names the launcher, never the word after it.
 SAFE = re.compile(r'[A-Za-z0-9._-]{1,40}')
 # Never shown, whatever else a token passes: the prefixes of the common API
 # keys and tokens (OpenAI/Anthropic, Stripe, GitHub, GitLab, Slack, AWS, JWT,
@@ -84,6 +96,23 @@ TRIVIAL = {'cd', 'pushd', 'popd', 'export', 'set', 'unset', 'source', '.', 'echo
            'else', 'elif', 'if', 'for', 'while', 'until', 'case', 'esac', '{', '}', '!'}
 INTERP = {'python', 'python3', 'node', 'bun', 'deno', 'ruby', 'perl', 'bash', 'sh', 'zsh'}
 SHELLS = {'bash', 'sh', 'zsh', 'dash', 'ksh'}
+# The only program names a row shows: common tools, whose name says nothing
+# about the work, and the interpreters and shells. Anything else is plain
+# "Bash".
+PROGRAMS = INTERP | SHELLS | set('''
+git gh glab pip pip3 pipx uv uvx poetry pytest tox ruff mypy black
+npm npx pnpm yarn tsc jest vitest eslint prettier
+make cmake ninja cargo rustc go java javac mvn gradle gem bundle rake php
+composer dotnet swift xcodebuild flutter dart docker podman kubectl helm terraform
+ansible ansible-playbook curl wget ssh scp sftp rsync jq yq rg grep egrep fgrep sed
+awk gawk ls cat head tail less wc sort uniq cut tr find fd xargs tar zip unzip gzip
+gunzip cp mv rm ln chmod chown touch du df ps kill pkill pgrep lsof diff patch tee
+fish timeout env sudo nohup nice time watch tmux screen sleep
+systemctl journalctl brew apt apt-get dnf yum nvidia-smi uptime ping dig nc openssl
+sqlite3 psql mysql redis-cli ffmpeg codex agy claude
+'''.split())
+# A script shown by its basename: a short plain name with a script suffix.
+SCRIPT = re.compile(r'[A-Za-z0-9._-]{1,32}\.(?:py|sh|js|ts|rb)')
 SSH_ARG = set('BbcDEeFIiJLlmOoPpQRSWw')  # ssh options that take a value
 LOCAL = r'(?:127\.0\.0\.1|localhost):'
 
@@ -129,24 +158,38 @@ def heredoc_end(s, pos, delim, dash):
         return len(s)
     return m.end() + 1 if s.startswith('\n', m.end()) else m.end()
 
+DQ_END = re.compile(r'"(?:[^"\\]|\\.)*"', re.S)
+# Launchers a command can start with before `eval` (A=1 eval ..., sudo eval).
+EVAL_LEAD = {'env', 'sudo', 'doas', 'command', 'builtin', 'exec', 'nohup', 'time', 'nice'}
+
 @functools.lru_cache(maxsize=64)
 def split_cmds(s):
-    """The simple commands of a shell string, each a tuple of words.
-    Newlines, ; && || | &, parentheses, $( and backquotes separate; a
-    redirection and its target are dropped, and so is a comment. A heredoc's
-    body is skipped up to its delimiter line (<< and <<-, quoted or not,
-    several on one line), and quoted text stays one word, unterminated or
-    not: neither is ever read as a command. Good enough to find programs,
-    which is all it is for."""
+    """(commands, exact): the simple commands of a shell string, each a
+    tuple of words, and whether it was all understood. Newlines, ; && || |
+    &, parentheses separate; a redirection and its target are dropped, and
+    so is a comment. A heredoc's body is skipped up to its delimiter line
+    (<< and <<-, quoted or not, several on one line), and quoted text stays
+    one word: neither is ever read as a command.
+
+    It fails closed. At the first construct it does not model exactly —
+    $'…' or $"…" quoting, $( or a backquote, <( or >(, a here-string, eval,
+    an unterminated quote, a heredoc delimiter that is quoted with $ or \\ in
+    it or missing — the walk stops, exact is False, and what comes back is
+    what came before it: the commands already complete and the whole words
+    of the one in progress (the word being built is dropped: the PASSWORD=
+    of PASSWORD=$(true)hunter2). Past the lexing budget the command that was
+    cut is dropped too; the rest is not looked at, which is no uncertainty:
+    a worker is named in the first few words."""
     cmds, cur, buf = [], [], []
     have = False              # a word is being built ('' is a word too)
     target = heredoc = None   # what the next word is: a redirection target,
     pending = []              # a heredoc delimiter (<<, <<-); bodies to skip
     pos = used = ntok = 0
     n = len(s)
+    exact = True
 
     def flush():
-        nonlocal have, target, heredoc
+        nonlocal have, target, heredoc, exact
         if not have:
             return
         word, have = ''.join(buf), False
@@ -157,6 +200,10 @@ def split_cmds(s):
         elif target:
             target = None
         elif word.strip():
+            if word == 'eval' and all(ASSIGN.match(x) or x.startswith('-') or base(x) in EVAL_LEAD
+                                      for x in cur):
+                exact = False
+                return
             cur.append(word)
 
     def end():
@@ -166,7 +213,7 @@ def split_cmds(s):
             cmds.append(tuple(cur))
             cur = []
 
-    while pos < n and used < LEX_CHARS and ntok < LEX_TOKENS:
+    while exact and pos < n and used < LEX_CHARS and ntok < LEX_TOKENS:
         # endpos: a quoted word of 100 KB is matched only as far as the
         # budget reaches, and the budget then ends the walk.
         m = LEX.match(s, pos, min(n, pos + LEX_CHARS - used))
@@ -175,6 +222,19 @@ def split_cmds(s):
         kind, tok = m.lastgroup, m.group()
         used += len(tok)
         pos = m.end()
+        if kind == 'ansi' or kind == 'sub' or tok in ('`', '<<<') \
+                or (tok in ('<', '>') and s.startswith('(', pos)) \
+                or (tok == '$' and s.startswith('"', pos)) \
+                or (kind == 'sq' and (len(tok) < 2 or not tok.endswith("'"))) \
+                or (kind == 'dq' and not DQ_END.fullmatch(tok)):
+            exact = False
+            break
+        if heredoc is not None and not have and kind in ('op', 'nl'):
+            exact = False  # << with no delimiter word
+            break
+        if heredoc is not None and ('$' in tok or '`' in tok or (kind == 'dq' and '\\' in tok)):
+            exact = False  # a delimiter this would have to expand
+            break
         if kind == 'ws':
             flush()
         elif kind == 'nl':
@@ -183,7 +243,7 @@ def split_cmds(s):
             for delim, dash in pending:
                 pos = heredoc_end(s, pos, delim, dash)
             del pending[:]
-        elif kind == 'op' or kind == 'sub':
+        elif kind == 'op':
             ntok += 1
             if tok in REDIR or tok in ('<<', '<<-'):
                 if have and not target and heredoc is None and ''.join(buf).isdigit():
@@ -204,17 +264,24 @@ def split_cmds(s):
                 ntok += 1
             have = True
             if kind == 'sq':
-                buf.append(tok[1:-1] if len(tok) > 1 and tok.endswith("'") else tok[1:])
+                buf.append(tok[1:-1])
             elif kind == 'dq':
-                buf.append(DQ_ESC.sub(r'\1', tok[1:-1] if len(tok) > 1 and tok.endswith('"') else tok[1:]))
-            elif kind == 'ansi':
-                buf.append(re.sub(r'\\(.)', r'\1', tok[2:-1] if len(tok) > 2 and tok.endswith("'") else tok[2:]))
+                buf.append(DQ_ESC.sub(r'\1', tok[1:-1]))
             elif kind == 'esc':
                 buf.append(tok[1:])
             else:
                 buf.append(tok)
-    end()
-    return tuple(cmds)
+    if exact and pos >= n and heredoc is not None and not have:
+        exact = False  # << at the very end
+    if exact and pos >= n:
+        end()
+    elif cur:
+        # Stopped early: the word being built is not whole. Past the budget
+        # the command is not whole either; before an unknown construct its
+        # whole words are exact.
+        if not exact:
+            cmds.append(tuple(cur))
+    return tuple(cmds), exact
 
 def opt_val(w, names):
     """The value of the first -m X / --model X / --model=X in w."""
@@ -243,33 +310,97 @@ def with_model(name, model, tail=False):
         return name
     return name + '/' + model if len(name) + 1 + len(model) <= 40 else name
 
+# The launchers unwrap() takes off, each by its own option syntax: (short
+# options that take a value, short flags, long options that take a value,
+# long flags). An option not listed here — `sudo -e`, `env -S`, `command -v`,
+# `ionice -p`, or one this simply does not know — means the form is not
+# understood, and the launcher is all that is left of the command: an
+# option's value is never taken for the program (exec -a NAME, time -f FMT,
+# sudo -u USER, xargs -I STR, all were). GNU and BSD spellings are merged;
+# a value both might take is taken.
+WRAP = {
+    'env': ('uC', 'i0v', {'unset', 'chdir'}, {'ignore-environment', 'null', 'debug'}),
+    'timeout': ('sk', 'v', {'signal', 'kill-after'}, {'foreground', 'preserve-status', 'verbose'}),
+    'nohup': ('', '', set(), set()),
+    'time': ('fo', 'apvqlh', {'format', 'output'}, {'append', 'portability', 'verbose', 'quiet'}),
+    'exec': ('a', 'cl', set(), set()),
+    'command': ('', 'p', set(), set()),
+    'nice': ('n', '0123456789', {'adjustment'}, set()),
+    'ionice': ('cn', 't', {'class', 'classdata'}, {'ignore'}),
+    'stdbuf': ('ioe', '', {'input', 'output', 'error'}, set()),
+    'sudo': ('ugpCDrtUTR', 'AbEHnPSsikB',
+             {'user', 'group', 'prompt', 'close-from', 'chdir', 'role', 'type', 'other-user',
+              'command-timeout', 'chroot'},
+             {'askpass', 'background', 'preserve-env', 'set-home', 'non-interactive',
+              'preserve-groups', 'stdin', 'shell', 'login', 'reset-timestamp', 'bell'}),
+    'doas': ('u', 'ns', set(), set()),
+    'xargs': ('InLPsdEa', '0rtpxoie',
+              {'max-args', 'max-lines', 'max-procs', 'max-chars', 'delimiter', 'eof', 'arg-file',
+               'process-slot-var'},
+              {'null', 'no-run-if-empty', 'verbose', 'interactive', 'exit', 'open-tty', 'replace'}),
+    'caffeinate': ('tw', 'dimsu', set(), set()),
+    # Its --label is not shown from here (A1 of J9c): a command line is the
+    # model's text, so the row names what the run wraps.
+    'agentline-run': ('', '', {'label', 'heartbeat'}, set()),
+}
+WRAP['gtimeout'] = WRAP['timeout']
+DURATION = re.compile(r'(?:[0-9]+\.?[0-9]*|\.[0-9]+)[smhd]?')
+
+def skip_opts(w, spec):
+    """The index of the first word after the options of w[0], by spec
+    (WRAP), or None for an option spec does not have."""
+    sv, sf, lv, lf = spec
+    i = 1
+    while i < len(w):
+        t = w[i]
+        if t == '--':
+            return i + 1
+        if t.startswith('--'):
+            name, eq, _ = t[2:].partition('=')
+            if name in lv:
+                i += 1 if eq else 2
+            elif name in lf:
+                i += 1
+            else:
+                return None
+            continue
+        if not t.startswith('-') or t == '-':
+            return i if t != '-' or w[0] != 'env' else i + 1  # env - is env -i
+        for j, c in enumerate(t[1:], 1):
+            if c in sv:
+                if j + 1 == len(t):
+                    i += 1  # the value is the next word
+                break
+            if c not in sf:
+                return None
+        i += 1
+    return i
+
 def unwrap(w):
-    """Strip launchers off the front of w (VAR=x, env, timeout, nohup, time,
-    exec, command, nice, stdbuf): what they start is what counts. Bounded,
-    so a pathological chain cannot spin."""
+    """Strip launchers off the front of w (VAR=x and WRAP): what they start
+    is what counts. A launcher form not understood leaves the launcher
+    alone. Bounded, so a pathological chain cannot spin."""
     for _ in range(8):
         if not w:
             break
-        p = base(w[0])
         if ASSIGN.match(w[0]):
             w = w[1:]
-        elif p == 'env':
-            i = 1
-            while i < len(w) and (w[i].startswith('-') or ASSIGN.match(w[i])):
-                i += 2 if w[i] in ('-u', '--unset', '-C', '--chdir') else 1
-            w = w[i:]
-        elif p in ('timeout', 'gtimeout'):
-            i = 1
-            while i < len(w) and w[i].startswith('-'):
-                i += 2 if w[i] in ('-s', '--signal', '-k', '--kill-after') else 1
-            w = w[i + 1:]  # past the duration
-        elif p in ('nohup', 'time', 'exec', 'command', 'nice', 'stdbuf', 'caffeinate'):
-            i = 1
-            while i < len(w) and w[i].startswith('-'):
-                i += 2 if w[i] in ('-n', '-o', '-e', '-i') and p in ('nice', 'stdbuf') else 1
-            w = w[i:]
-        else:
+            continue
+        p = base(w[0])
+        spec = WRAP.get(p)
+        if spec is None:
             break
+        i = skip_opts([p] + list(w[1:]), spec)
+        if i is None:
+            return w[:1]
+        if p in ('env', 'sudo'):
+            while i < len(w) and ASSIGN.match(w[i]):
+                i += 1
+        elif p in ('timeout', 'gtimeout'):
+            if i < len(w) and not DURATION.fullmatch(w[i]):
+                return w[:1]
+            i += 1  # past the duration
+        w = w[i:]
     return w
 
 def classify_words(w, depth=0):
@@ -278,25 +409,6 @@ def classify_words(w, depth=0):
     if not w or depth > MAX_DEPTH:
         return ''
     p = base(w[0])
-    if p == 'agentline-run':
-        # Its own --label is the name the user gave that work; without one,
-        # the command after it is classified like any other.
-        i = 1
-        while i < len(w) and w[i] != '--':
-            t = w[i]
-            if t == '--label' and i + 1 < len(w):
-                return label_text(w[i + 1])
-            if t.startswith('--label='):
-                return label_text(t[8:])
-            if t == '--heartbeat':
-                i += 2
-                continue
-            if not t.startswith('-'):
-                break
-            i += 1
-        if i < len(w) and w[i] == '--':
-            i += 1
-        return classify_words(w[i:], depth + 1)
     if p in SHELLS:
         # bash -c 'codex exec ...': the string is the command.
         i = 1
@@ -375,17 +487,24 @@ def classify_ssh(w, depth):
     return inner or 'ssh'
 
 def classify_string(s, depth=0):
+    # Also when split_cmds was not sure: what it returns then is only what
+    # came before the construct it stopped at.
     if depth > MAX_DEPTH:
         return ''
-    for w in split_cmds(s)[:32]:
+    for w in split_cmds(s)[0][:32]:
         lab = classify_words(w, depth)
         if lab:
             return lab
     return ''
 
+def script_name(t):
+    t = base(t)
+    return t if SCRIPT.fullmatch(t) and safe(t) else ''
+
 def program_words(w, depth=0):
-    """A program name for a command that is no known worker: its basename,
-    or the script an interpreter runs (x.py, for a python running x.py)."""
+    """A program name for a command that is no known worker: its basename
+    when that is on PROGRAMS, or the script it is or an interpreter runs
+    (x.py, for a python running x.py), else ''."""
     w = unwrap(w)
     if not w:
         return ''
@@ -393,22 +512,26 @@ def program_words(w, depth=0):
     if p in TRIVIAL:
         return ''
     if p in SHELLS and len(w) > 2 and re.fullmatch(r'-[a-z]*c[a-z]*', w[1]):
-        return program_string(w[2], depth + 1) or safe(p)
+        return program_string(w[2], depth + 1) or p
     if p in INTERP:
         for t in w[1:]:
             if t.startswith('-'):
                 if t in ('-c', '-m', '-e'):
                     break
                 continue
-            if re.search(r'\.(py|js|mjs|ts|rb|pl|sh)$', t):
-                return safe(base(t)) or safe(p)
+            if SCRIPT.fullmatch(base(t)):
+                return script_name(t) or p
             break
-    return safe(p)
+    return p if p in PROGRAMS else script_name(p)
 
 def program_string(s, depth=0):
+    # A program name is shown from an exact parse only.
     if depth > MAX_DEPTH:
         return ''
-    for w in split_cmds(s)[:32]:
+    cmds, exact = split_cmds(s)
+    if not exact:
+        return ''
+    for w in cmds[:32]:
         p = program_words(w, depth)
         if p:
             return p
@@ -429,11 +552,35 @@ def clean(s):
 def label_text(s, n=40):
     return re.sub(r' +', ' ', clean(s)).strip()[:n]
 
+# What a --label given to agentline-run may not carry. That label is the
+# caller's own words (a script, an orchestrator — not the model: a label
+# read from a transcript is never shown), and it is displayed, on a line
+# anyone looking at the screen reads. So a label that looks like it holds a
+# secret is not shown at all, and the run is named as if it had none: a key
+# prefix, a key=value of a credential, a JWT or AWS key id, a long run of
+# letters and digits (a token, base64), a path, a URL, an address, an IP.
+LABEL_DENY = re.compile(
+    r'(?:^|[^a-z0-9])(?:sk-|sk_|rk_|gh[pousr]_|github_pat_|glpat-|xox[a-z]-|hf_|nvapi-|aiza|ya29\.'
+    r'|npm_|pypi-)'
+    r'|(?:akia|asia)[a-z0-9]{12}|eyj[a-z0-9_-]{8}'
+    r'|(?:pass|pwd|secret|token|api[_-]?key|apikey|auth|cred|bearer|cookie|session|private)'
+    r'[a-z0-9_-]*\s*[=:]'
+    r'|(?=[a-z0-9+/_=]*[0-9])(?=[a-z0-9+/_=]*[a-z])[a-z0-9+/_=]{20}'
+    r'|(?:^|\s)[/~]|\.\.|//|@|\b[0-9]{1,3}(?:\.[0-9]{1,3}){3}\b', re.I)
+
+def run_label(s):
+    s = label_text(s)
+    return s if s and not LABEL_DENY.search(s) else ''
+
 if MODE == 'classify':
-    argv = sys.argv[2:]
-    lab = classify_words(argv) if argv else ''
+    # classify LABEL CMD...: LABEL is agentline-run's --label ('' for none).
+    argv = sys.argv[3:]
+    lab = run_label(sys.argv[2]) if len(sys.argv) > 2 else ''
     if not lab and argv:
-        lab = program_words(argv) or safe(base(argv[0]))
+        # A command the row is only about (sleep, in a job's wrapper) is
+        # still that run's name when it is on PROGRAMS.
+        p = base(argv[0])
+        lab = classify_words(argv) or program_words(argv) or (p if p in PROGRAMS else '')
     if lab:
         sys.stdout.write(lab + '\n')
     sys.exit(0)
@@ -908,17 +1055,22 @@ PYEOF
 case "${1-}" in
   --classify)
     shift
+    _al_label=""
+    case "${1-}" in
+      --label) _al_label="${2-}"; shift; [ $# -gt 0 ] && shift ;;
+      --label=*) _al_label="${1#--label=}"; shift ;;
+    esac
     [ "${1-}" = -- ] && shift
     command -v python3 >/dev/null 2>&1 || exit 0
-    exec python3 -I -c "$_AL_SUB_PY" classify "$@" ;;
+    exec python3 -I -c "$_AL_SUB_PY" classify "$_al_label" "$@" ;;
   -h|--help)
-    sed -n '2,33p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '2,34p' "$0" | sed 's/^# \{0,1\}//'
     exit 0 ;;
   '')
     # No python3: print nothing, and every row stays Claude Code's own.
     command -v python3 >/dev/null 2>&1 || exit 0
     exec python3 -I -c "$_AL_SUB_PY" render ;;
   *)
-    echo "usage: ${0##*/} [--classify -- CMD [ARGS...]]" >&2
+    echo "usage: ${0##*/} [--classify [--label TEXT] -- CMD [ARGS...]]" >&2
     exit 2 ;;
 esac

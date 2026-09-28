@@ -18,11 +18,17 @@
 #   --label TEXT       the row's text. Default: the worker the command runs,
 #                      named by the same classifier as the subagent rows
 #                      (codex/gpt-6-astra, bayrak/opus, arb/qwen3.6, ...),
-#                      else the program's name.
-#   --heartbeat SECS   re-register every SECS seconds (default 60; 0: never).
-#                      The registry forgets a row after 300 s, so a heartbeat
-#                      is what keeps a long job listed — and what brings its
-#                      row back should anything have dropped it.
+#                      else the program's name when it is a common tool.
+#                      The label is DISPLAYED, on a line anyone near the
+#                      screen reads: control characters go, it is cut to 40
+#                      characters, and one that looks like it holds a secret
+#                      (a key, a password=..., a path, a URL, an address) is
+#                      not shown at all — the default is used instead.
+#   --heartbeat SECS   re-register every SECS seconds (default 60; 0: never;
+#                      at most 3600). The registry forgets a row after 300 s,
+#                      so a heartbeat is what keeps a long job listed — and
+#                      what brings its row back should anything have dropped
+#                      it.
 #
 # CMD runs with this script's stdin (/dev/null if that is closed), stdout
 # and stderr, and its exit status is this script's; a CMD killed by a
@@ -30,11 +36,19 @@
 # nothing of its own except errors, on stderr. When the registry helper is
 # missing or python3 is not there, CMD simply runs.
 #
-# Signals: TERM and HUP are passed on to CMD, then the row is removed. INT
-# and QUIT are not passed on: Ctrl-C already reaches CMD from the terminal,
-# which signals the whole foreground process group, and a second INT would
-# cut short a CMD's own clean-up (codex, a python script). A `kill -INT` of
-# this process alone therefore stops nothing until CMD ends.
+# Signals, by where CMD runs:
+#   stdin a terminal (you typed it): CMD stays in the terminal's foreground
+#     process group, so Ctrl-C, Ctrl-Z and job control work as for CMD
+#     alone. TERM and HUP are passed on to CMD's pid, then the row is
+#     removed. INT and QUIT are not passed on: Ctrl-C already reaches CMD
+#     from the terminal, and a second INT would cut short a CMD's own
+#     clean-up (codex, a python script). A `kill -INT` of this process alone
+#     therefore stops nothing until CMD ends.
+#   stdin not a terminal (a background job, an orchestrator, a pipe): CMD
+#     gets a process group of its own, and TERM, HUP, INT and QUIT are
+#     passed on to that whole group — a `bash -c 'job & wait'` is stopped
+#     with its job, not just the bash. Such a CMD is a background job: one
+#     that reads the terminal (a password prompt) is stopped by it.
 #
 # Environment:
 #   AGENTLINE_AGENT_HELPER  the registry helper (default: agentline-agent.sh
@@ -55,13 +69,23 @@ while [ $# -gt 0 ]; do
     --label=*) label="${1#--label=}"; shift ;;
     --heartbeat) [ $# -ge 2 ] || usage; beat="$2"; shift 2 ;;
     --heartbeat=*) beat="${1#--heartbeat=}"; shift ;;
-    -h|--help) sed -n '2,42p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
-    -*) echo "${0##*/}: unknown option: $1" >&2; usage ;;
+    -h|--help) sed -n '2,56p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -*) echo "${0##*/}: unknown option: ${1//[[:cntrl:]]/?}" >&2; usage ;;
     *) break ;;
   esac
 done
 [ $# -gt 0 ] || usage
+# 0..3600, checked here, before CMD starts: a heartbeat of a hundred nines
+# passed the digits-only test and overflowed setitimer() once CMD ran, which
+# killed the supervisor and left CMD orphaned. Leading zeros go first, so
+# the length test sees the value, and the number test never sees a number
+# too big for the shell.
 case "$beat" in ''|*[!0-9]*) echo "${0##*/}: --heartbeat needs a number of seconds" >&2; usage ;; esac
+beat="${beat#"${beat%%[!0]*}"}"
+if [ "${#beat}" -gt 4 ] || [ "${beat:-0}" -gt 3600 ]; then
+  echo "${0##*/}: --heartbeat is at most 3600 seconds" >&2; usage
+fi
+beat="${beat:-0}"
 
 # A closed stdin (`agentline-run … <&-`) is /dev/null for CMD, as for any
 # program whose caller gave it none; before, the fd juggling failed on it
@@ -89,19 +113,22 @@ if [ -z "$helper" ] || [ ! -f "$helper" ] || ! command -v python3 >/dev/null 2>&
   exec "$@"
 fi
 
-if [ -z "$label" ]; then
-  for cls in "$here/agentline-subagents.sh" ""; do
-    [ -f "$cls" ] && break
-  done
-  [ -n "$cls" ] && label=$(bash "$cls" --classify -- "$@" 2>/dev/null)
-  # Nothing the classifier would show (its rules refuse a program name that
-  # looks like a key or a path): a fixed word, never the raw argv[0].
-  [ -n "$label" ] || label=run
+# The label goes through the classifier, a --label too: it cleans it, cuts
+# it to 40 characters and refuses one that looks like a secret, and without
+# a usable one names the worker or common tool CMD is. One python3 either
+# way. No classifier (a partial install), or nothing it would show: a fixed
+# word, never the raw argv[0] and never an unchecked label.
+for cls in "$here/agentline-subagents.sh" ""; do
+  [ -f "$cls" ] && break
+done
+if [ -n "$cls" ]; then
+  label=$(bash "$cls" --classify --label "$label" -- "$@" 2>/dev/null)
+else
+  label=""
 fi
+[ -n "$label" ] || label=run
 # One registry line per row, so no newline or control character may reach
-# it; agentline.sh cleans what it prints, this keeps the file well-formed.
-# A --label is the caller's own words and is kept, but no longer than a row
-# has room for.
+# it, whatever the classifier printed.
 label="${label//[[:cntrl:]]/ }"
 label="${label:0:40}"
 
@@ -142,12 +169,31 @@ key="$label"$'\037'"$$"
 # remove, in `finally`. A signal the caller had ignored (a background job's
 # INT) stays ignored, for CMD as well. The program sits at the top level,
 # not inside $(...), where bash 3.2 would parse its lines as shell.
+#
+# No helper call may hold the supervisor up: each one gets 3 s, then its
+# process group is killed, and while it runs a TERM or HUP for CMD is still
+# passed on. It used to be one blocking waitpid() with every signal held, so
+# a helper stuck on a FIFO planted at the registry's name stuck the wrapper,
+# deaf to TERM, for good.
 IFS= read -r -d '' _AL_RUN_PY <<'PYEOF'
-import os, signal, sys
+import os, signal, sys, time
 
 helper, key, beat = sys.argv[1], sys.argv[2], int(sys.argv[3])
 argv = sys.argv[4:]
 S = signal
+HELPER_DEADLINE = 3.0
+# CMD in a process group of its own when stdin is no terminal: a background
+# job or an orchestrator's child, where a signal for the run must reach all
+# of CMD's processes. From a terminal it stays in the foreground group, for
+# Ctrl-C and job control (see the header).
+OWN_GROUP = not os.isatty(0)
+FORWARD = {S.SIGTERM, S.SIGHUP} | ({S.SIGINT, S.SIGQUIT} if OWN_GROUP else set())
+live = None  # CMD's pid while it runs and is not yet reaped
+
+def esc(s):
+    # Untrusted text in a diagnostic: no control character reaches the terminal.
+    return ''.join(c if c.isprintable() else '\\x%02x' % ord(c) if ord(c) < 256 else '\\u%04x' % ord(c)
+                   for c in s)
 # Signals that end a process: CMD dying of one of these gets this process
 # killed by the same one. Any other (a SEGV, a stop signal) is only reported
 # as its exit status, 128 + n, the way a shell reports it.
@@ -164,17 +210,26 @@ for s in waited:
     S.signal(s, lambda *a: None)
 S.pthread_sigmask(S.SIG_BLOCK, waited)
 
-def spawn(args, null_fds):
+def spawn(args, null_fds, group=False):
     """fork + exec args with the caller's signal state: nothing blocked,
     SIGPIPE and SIGXFSZ back to default (python ignores them), null_fds on
-    /dev/null. Returns the pid, or None when the fork failed."""
+    /dev/null, and with group a process group of its own (set on both
+    sides of the fork, so neither can signal the group before it exists).
+    Returns the pid, or None when the fork failed."""
     try:
         pid = os.fork()
     except OSError:
         return None
     if pid:
+        if group:
+            try:
+                os.setpgid(pid, pid)
+            except OSError:
+                pass  # it has exec'd already, and set it itself
         return pid
     try:
+        if group:
+            os.setpgid(0, 0)
         # Default actions before the unblock: a TERM forwarded between the
         # fork and the exec is pending here, and must kill, not land in the
         # no-op handler (a CMD that then ran on regardless).
@@ -188,58 +243,92 @@ def spawn(args, null_fds):
         os.execvp(args[0], args)
     except OSError as e:
         try:
-            os.write(2, ('agentline-run: %s: %s\n' % (args[0], e.strerror)).encode('utf-8', 'replace'))
+            os.write(2, ('agentline-run: %s: %s\n' % (esc(args[0]), e.strerror)).encode('utf-8', 'replace'))
         except OSError:
             pass
         os._exit(127 if e.errno == 2 else 126)
     os._exit(126)
 
+def forward(sig):
+    """Pass sig on to CMD: its whole group when it has one of its own."""
+    try:
+        if OWN_GROUP:
+            os.killpg(live, sig)
+        else:
+            os.kill(live, sig)
+    except OSError:
+        pass
+
+def service():
+    # While a helper runs: a TERM or HUP (and in a group of its own an INT
+    # or QUIT) for CMD is taken and passed on now, not after the helper.
+    if live is None:
+        return  # no CMD yet: it stays pending, for the main loop
+    for s in FORWARD & waited & S.sigpending():
+        S.sigwait({s})
+        forward(s)
+
 def registry(op, quiet=False):
     # The helper never gets the caller's stdin or stdout (a pipe read from
     # this command must close when CMD is done); its stderr, a note that a
-    # write was skipped, is kept except for the heartbeat's.
-    pid = spawn(['bash', helper, op, key], (0, 1, 2) if quiet else (0, 1))
-    if pid:
+    # write was skipped, is kept except for the heartbeat's. It runs in a
+    # group of its own, so the deadline kills its python3 with it.
+    pid = spawn(['bash', helper, op, key], (0, 1, 2) if quiet else (0, 1), group=True)
+    if not pid:
+        return
+    deadline = time.monotonic() + HELPER_DEADLINE
+    while True:
         try:
-            os.waitpid(pid, 0)
+            if os.waitpid(pid, os.WNOHANG)[0]:
+                return
         except OSError:
-            pass
+            return
+        if time.monotonic() >= deadline:
+            try:
+                os.killpg(pid, S.SIGKILL)
+            except OSError:
+                pass
+            try:
+                os.waitpid(pid, 0)
+            except OSError:
+                pass
+            return
+        service()
+        time.sleep(0.01)
 
 status = None
 registry('add')
 try:
-    child = spawn(argv, ())
+    child = spawn(argv, (), group=OWN_GROUP)
     if child is None:
-        sys.stderr.write('agentline-run: cannot start %s\n' % argv[0])
+        sys.stderr.write('agentline-run: cannot start %s\n' % esc(argv[0]))
         status = 126 << 8
     else:
+        live = child
         # A Ctrl-C (INT or QUIT to the group) that came while the row was
         # being added reached this process only: CMD did not exist yet. It
-        # is still pending here, so it is passed on now. One that came in
-        # the microseconds after the fork reached CMD as well and is passed
-        # twice, which beats a CMD that never heard it.
+        # is still pending here, so it is taken and passed on now. From a
+        # terminal, one that came in the microseconds after the fork reached
+        # CMD as well and is passed twice, which beats a CMD that never
+        # heard it.
         for s in (S.SIGINT, S.SIGQUIT):
             if s in waited and s in S.sigpending():
-                try:
-                    os.kill(child, s)
-                except OSError:
-                    pass
+                S.sigwait({s})
+                forward(s)
         if beat > 0:
             S.setitimer(S.ITIMER_REAL, beat, beat)
         while status is None:
             sig = S.sigwait(waited)
             if sig == S.SIGALRM:
                 registry('add', quiet=True)
-            elif sig in (S.SIGTERM, S.SIGHUP):
-                try:
-                    os.kill(child, sig)
-                except OSError:
-                    pass
+            elif sig in FORWARD:
+                forward(sig)
             # Any wake-up may follow CMD's end (a heartbeat can consume the
             # moment), so every one checks; SIGCHLD just comes first.
             pid, st = os.waitpid(child, os.WNOHANG)
             if pid:
                 status = st
+                live = None
 finally:
     S.setitimer(S.ITIMER_REAL, 0)
     registry('remove')

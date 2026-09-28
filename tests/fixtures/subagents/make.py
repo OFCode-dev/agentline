@@ -225,6 +225,18 @@ LEAK = {
     'l-ip': 'ssh 10.1.2.3 uptime',
     'l-curl': 'curl -m 30 https://inference.hetzner.com/v1/chat',
     'l-prog': './sk-live-AntlaraKey --x',
+    # The review of J9b (stage J9c): a label, $( and $'...', wrapper options.
+    'l-label': "agentline-run --label 'password=hunter2' -- sleep 60",
+    'l-subst': 'PASSWORD=$(true)hunter2 sleep 1',
+    'l-ansi-hd': ": <<$'\\x45OF'\nx45OF\nhunter2\nEOF\n",
+    'l-exec': 'exec -a hunter2 sleep 60',
+    'l-time': '/usr/bin/time -f hunter2 sleep 1',
+    'l-sudo': 'sudo -u hunter2 make',
+    'l-xargs': 'xargs -I hunter2 echo',
+    'l-env-S': "env -S 'hunter2 x' y",
+    'l-unknown': 'hunter2tool --run',
+    'l-worker-subst': 'codex exec -m gpt-5 $(cat hunter2.txt)',
+    'l-script': 'python3 /home/w/antlara/etl.py',
 }
 for k, c in LEAK.items():
     running(k, 'Bash', {'command': c})
