@@ -1298,6 +1298,82 @@ else
   check "git status: a >64 KB status is counted in full" grep -qF '@main ↑1 ±1 ?1600' "$T/g2"
 fi
 
+# Fork budget (J10): the full render's numbers and dates moved from awk and
+# date to bash arithmetic and printf. Each one is checked against the very
+# awk/date line it replaced, on the values where a hand-rolled version goes
+# wrong: decimal ties (1.05 rounds up, 1.15 down, 1.25 to even: awk rounds
+# the double), the k/m boundaries, leading zeros, a float the parser passes
+# as "1e-05" (awk's path), and dates in a zone with a half-hour offset.
+nb() {  # nb <payload-json-body> <layout> [VAR=val...] -> normalized $T/nb, raw $T/out
+  local b="$1" l="$2"; shift 2
+  printf '{"session_id":"nb-0001",%s}\n' "$b" > "$T/nb.json"
+  prepare minimal "$T/nb.json"
+  [ -n "${NB_WC-}" ] && printf '%s\n' "$NB_WC" > "$SIDE/claude_wordcount.txt"
+  render "$T/nb.json" 300 AGENTLINE_LAYOUT="$l" ${1+"$@"}
+  normalize "$T/out" "$T/nb"
+}
+awk_tok() { awk -v n="$1" 'BEGIN { if (n >= 1000000) printf "%.1fm", n/1000000; else if (n >= 1000) printf "%.1fk", n/1000; else printf "%s", n }'; }
+set -- 999 1000 1049 1050 1150 1250 1350 2450 9950 10050 99950 999949 999950 999999 \
+  1000000 1050000 1150000 1250000 1350000 2450000 8400000 12345678 999950000 0012000 123456789012345
+while [ $# -ge 2 ]; do
+  nb "\"context_window\":{\"total_input_tokens\":\"$1\",\"total_output_tokens\":\"$2\"}" tok_in,tok_out
+  e1=$(awk_tok "$1"); e2=$(awk_tok "$2")
+  check "tokens: $1 -> $e1, $2 -> $e2 as awk printed them" grep -qF -- "$e1" "$T/nb"
+  if grep -qE -- "(^|[^0-9.])$(printf '%s' "$e2" | sed 's/\./\\./g')([^0-9.]|$)" "$T/nb"; then pass; else fail "tokens: $2 -> $e2 (got $(cat "$T/nb"))"; fi
+  shift 2
+done
+set --
+jnum() {  # jnum <value> — a JSON number, or a string when it has a leading zero
+  case "$1" in 0*[0-9]*) printf '"%s"' "$1" ;; *) printf '%s' "$1" ;; esac
+}
+awk_dur() { awk -v ms="$1" 'BEGIN { s = sprintf("%d", ms/1000); h = int(s / 3600); m = int((s % 3600) / 60); if (h > 0) printf "%dh%dm", h, m; else printf "%dm", m }'; }
+for d in 0 59999 60000 13320000 13320000.7 3599999 3600000 1e-05 007200000; do
+  nb "\"cost\":{\"total_duration_ms\":$(jnum "$d")}" dur
+  e=$(awk_dur "$d")
+  check "duration: $d ms -> $e" grep -qE -- "(^|[^0-9])$e\$" "$T/nb"
+done
+# The colour thresholds: context 60/80, the icon at 80.
+for p in 59.99 60 79.9 80 80.0 99.5 0012 1e-05; do
+  nb "\"context_window\":{\"used_percentage\":$(jnum "$p")}" ctx
+  e=$(awk -v p="$p" 'BEGIN { if (p >= 80) printf "1;31"; else if (p >= 60) printf "1;33"; else printf "1;32" }')
+  check "ctx colour: $p -> $e" grep -qF "${ESC}[${e}m" "$T/out"
+  if awk -v p="$p" 'BEGIN {exit !(p >= 80)}'; then
+    check "ctx icon: $p warns" grep -qF '⚠️' "$T/nb"
+  elif grep -qF '⚠️' "$T/nb"; then fail "ctx icon: $p does not warn"; else pass; fi
+done
+# The week's reset day and the date segment, against date itself, in UTC
+# and in two other zones (a half-hour offset, and one across a DST change).
+exp_date() {  # exp_date <epoch> <fmt>
+  if date -r 0 >/dev/null 2>&1; then date -r "$1" "+$2"; else date -d "@$1" "+$2"; fi
+}
+for z in UTC Asia/Kolkata America/New_York; do
+  for ts in 0 1790208000 1767225599 1772953200 1762063200; do
+    nb "\"rate_limits\":{\"seven_day\":{\"used_percentage\":5,\"resets_at\":$ts}}" week AGENTLINE_TZ="$z"
+    e=$(TZ="$z" exp_date "$ts" '%d/%m' | LC_ALL=C sed 's/^0//; s#/0#/#')
+    if grep -qE -- "(^|[^0-9/])$e([^0-9/]|\$)" "$T/nb"; then pass; else fail "week reset [$z $ts]: $e (got $(cat "$T/nb"))"; fi
+  done
+  nb '"model":{"id":"claude-opus-5"}' date AGENTLINE_TZ="$z"
+  e=$(TZ="$z" LC_ALL=C date "+%d/%m/%Y %a")
+  # Raw output: normalize masks the date.
+  check "date [$z]: $e" grep -qF -- "$e" "$T/out"
+done
+# Word counts from the hook's file: the k rounding, and a zero shows none.
+for wc in "1050 1150" "999 1250" "0 2450" "007 99950"; do
+  NB_WC="$wc" nb '"model":{"id":"claude-opus-5"}' words
+  set -- $wc
+  e1=$(awk -v n="$1" 'BEGIN { if (n >= 1000) printf "%.1fk", n/1000; else printf "%d", n }')
+  e2=$(awk -v n="$2" 'BEGIN { if (n >= 1000) printf "%.1fk", n/1000; else printf "%d", n }')
+  [ "$1" = 0 ] && e1=""
+  check "words: $wc -> ${e1:-none} / $e2" grep -qF -- "$e2" "$T/nb"
+  if [ -n "$e1" ]; then check "words: $1 -> $e1" grep -qF -- "$e1" "$T/nb"; fi
+done
+set --
+rm -f "$SIDE/claude_wordcount.txt"
+# A local.sh that replaces color_pct still colours every percentage.
+printf '%s\n' 'color_pct() { printf "\033[1;35m"; }' > "$T/local-cp.sh"
+nb '"context_window":{"used_percentage":12}' ctx AGENTLINE_LOCAL="$T/local-cp.sh"
+check "color_pct override from local.sh still used" grep -qF "${ESC}[1;35m" "$T/out"
+
 # Breadcrumb (C14): project_dir differing from cwd leads the path, dim.
 printf '{"session_id":"crumb-0001","cwd":"%s","workspace":{"project_dir":"/src/launch/"}}\n' "$WORK" > "$T/crumb.json"
 prepare minimal "$T/crumb.json"
@@ -1418,7 +1494,28 @@ PYEOF
   read -r full_forks full_progs <<< "$(count_procs "$T/st-full")"
   read -r tick_forks tick_progs <<< "$(count_procs "$T/st-tick")"
   if [ "$TEST_BASH_MAJOR" -ge 5 ]; then max_forks=1; allowed='cat'; else max_forks=3; allowed='cat date'; fi
-  check "strace sees the full render's forks ($full_forks)" [ "$full_forks" -gt 5 ]
+  check "strace sees the full render's forks ($full_forks)" [ "$full_forks" -gt 2 ]
+  # The full render's fork budget (J10): its numbers and dates are bash
+  # arithmetic and printf now, so none of the small formatters is exec'd
+  # (bash < 4.2 has no printf %()T and keeps date for the calendar). One
+  # awk stays: the agent registry reader (the fixture has a registry), whose
+  # label widths are the awk's own byte/character semantics.
+  fbad=""; fawk=0
+  for prog in ${full_progs//,/ }; do
+    case "$prog" in awk|mawk|gawk|nawk|sed|uname|date)
+      [ "$prog" = date ] && [ "$TEST_BASH_MAJOR" -lt 5 ] && continue
+      case "$prog" in *awk) fawk=$(( fawk + 1 )); [ "$fawk" = 1 ] && continue ;; esac
+      fbad="$fbad $prog" ;;
+    esac
+  done
+  check "full render: no awk/sed/uname/date exec (got:${fbad:- none}; all: $full_progs)" [ -z "$fbad" ]
+  # bash < 5 reads the clock with date (twice per stamp) and, below 4.2,
+  # formats the calendar with it: those are counted apart.
+  ndate=0
+  if [ "$TEST_BASH_MAJOR" -lt 5 ]; then
+    for prog in ${full_progs//,/ }; do [ "$prog" = date ] && ndate=$(( ndate + 1 )); done
+  fi
+  check "full render: at most 8 forks besides date (got $full_forks, $ndate date: $full_progs)" [ $(( full_forks - ndate )) -le 8 ]
   check "fast path: at most $max_forks fork(s), got $tick_forks ($tick_progs)" [ "$tick_forks" -le "$max_forks" ]
   bad=""
   for prog in ${tick_progs//,/ }; do

@@ -706,22 +706,39 @@ eval "$(PAYLOAD="$input" python3 -I -c "$_AL_PARSER")"
 # whose cleaned form is empty — nothing but control bytes, say "\x9b\x1b" —
 # stays empty on screen: falling back to the raw value there put a bare 0x9B
 # (the 8-bit CSI) straight onto line 2, and the folder segment just vanishes.
-[ -z "$cwd" ] && { cwd="$(pwd)"; cwd_disp="$cwd"; }
+[ -z "$cwd" ] && { cwd="$PWD"; cwd_disp="$cwd"; }
 
 # === Platform detection ===
 # One source tree runs on macOS laptops and Linux servers. Resolve the
-# platform once here; never probe per call site.
-OS="$(uname -s)"
+# platform once here; never probe per call site. $OSTYPE is bash's own
+# ("linux-gnu", "darwin23"), so the two common cases cost no `uname` fork;
+# anything else asks uname, whose answer the rest of the script compares to.
+case "${OSTYPE-}" in
+  linux*)  OS=Linux ;;
+  darwin*) OS=Darwin ;;
+  *)       OS="$(uname -s)" ;;
+esac
 
 # ($AGENTLINE_TZ is applied up in the fast path, before any clock is read.)
 
 # Epoch -> formatted date. GNU date wants `-d @<ts>`, BSD date wants `-r <ts>`.
-# The flavour is decided once, at definition time, not on every invocation.
-if date -r 0 >/dev/null 2>&1; then
-  fmt_epoch() { date -r "$1" "+$2" 2>/dev/null; }   # BSD / macOS
-else
-  fmt_epoch() { date -d "@$1" "+$2" 2>/dev/null; }  # GNU / Linux
-fi
+# Which one is asked on the first call, not at definition time: the probe was
+# a `date` fork on every full render, and most renders need no fmt_epoch at
+# all (bash >= 4.2 formats the dates it needs with printf %()T, see "Format
+# Helpers"). A call inside $(...) cannot keep the answer, so there the probe
+# rides along with the date it guards: two forks where one used to be paid
+# by every render.
+_date_flavour=""
+fmt_epoch() {
+  if [ -z "$_date_flavour" ]; then
+    if date -r 0 >/dev/null 2>&1; then _date_flavour=bsd; else _date_flavour=gnu; fi
+  fi
+  if [ "$_date_flavour" = bsd ]; then
+    date -r "$1" "+$2" 2>/dev/null     # BSD / macOS
+  else
+    date -d "@$1" "+$2" 2>/dev/null    # GNU / Linux
+  fi
+}
 
 # Reverse a file: GNU has tac, BSD/macOS has tail -r.
 if command -v tac >/dev/null 2>&1; then
@@ -1572,13 +1589,77 @@ if [ "$_AL_GLYPHS" = ascii ]; then
   agents_done="${agents_done//·//}"; agents_done="${agents_done//✓/ok:}"
 fi
 
+# === Number helpers ===
+# A full render used to fork ~18 small awk/date programs (a colour here, a
+# "%.1fk" there), ~60 ms of the payload-change path. The payload's numbers
+# are plain decimals ("42", "42.5", "0012"), and for those bash arithmetic
+# gives the same bytes: an integer part compared, a %.1f rounded the way awk
+# rounds it. Anything else the parser lets through ("1e-05", a negative, a
+# 16-digit part) takes the old awk line, so an odd value costs a fork, never
+# a different output. bash has no floating point; 10# keeps a leading zero
+# from reading as octal.
+#
+# _num_ge <number> <int>: 0 when number >= int, 1 when not, 2 when number is
+# no plain non-negative decimal (the caller then asks awk). For an integer
+# threshold, p >= h exactly when p's integer part is.
+_num_ge() {
+  local i
+  case "$1" in ''|*[!0123456789.]*|*.*.*|.*|*.) return 2 ;; esac
+  i="${1%%.*}"
+  [ ${#i} -le 15 ] || return 2
+  [ $(( 10#$i )) -ge "$2" ]
+}
+# _tenths <int> <unit: 1000|1000000> -> $_tenths_out, what awk's
+# printf "%.1f", n/unit prints. Off a tie the integer rounding is the
+# decimal one. On a decimal tie (n/unit = x.x5 = m/20, m odd) awk rounds
+# the double nearest m/20, so the direction is that double's: m/20 lies in
+# [2^e, 2^(e+1)), its 53-bit significand is m*2^(50-e)/5, and the fraction
+# (m*2^(50-e) mod 5)/5 below or above one half says whether the double
+# sits under or over the tie (2^k mod 5 cycles 1 2 4 3). A multiple of 5
+# is exact in binary (1.25) and printf rounds it half to even.
+_tenths() {
+  local n="$1" q=$(( $2 / 10 )) t r m e=0 p
+  t=$(( n / q )); r=$(( n % q ))
+  if [ "$r" -gt $(( q / 2 )) ]; then
+    t=$(( t + 1 ))
+  elif [ "$r" -eq $(( q / 2 )) ]; then
+    m=$(( 2 * t + 1 ))
+    if [ $(( m % 5 )) = 0 ]; then
+      [ $(( t % 2 )) = 1 ] && t=$(( t + 1 ))
+    else
+      while [ $(( 20 << (e + 1) )) -le "$m" ]; do e=$(( e + 1 )); done
+      case $(( (50 - e) % 4 )) in 0) p=1 ;; 1) p=2 ;; 2) p=4 ;; *) p=3 ;; esac
+      [ $(( m % 5 * p % 5 )) -ge 3 ] && t=$(( t + 1 ))
+    fi
+  fi
+  _tenths_out="$(( t / 10 )).$(( t % 10 ))"
+}
+
 color_pct() {
   local p="$1" high="${2:-90}" mid="${3:-70}"
+  _cp_builtin=1
+  [ -n "$_cp_probe" ] && return 0
   awk -v p="$p" -v h="$high" -v m="$mid" 'BEGIN {
     if (p >= h) printf "\033[1;31m";
     else if (p >= m) printf "\033[1;33m";
     else printf "\033[1;32m";
   }'
+}
+# _color_pct <pct> <high> <mid> -> $c. color_pct is a documented local.sh
+# override (see "Local overrides"), so it stays the function every colour
+# comes from when replaced; the check after local.sh runs it once to see
+# whether it is still this one. The built-in's answer is worked out here
+# instead, with no subshell and no awk, for a plain decimal and thresholds.
+_color_pct() {
+  local r
+  if [ "$_cp_own" != 1 ]; then c=$(color_pct "$@"); return; fi
+  case "$2$3" in *[!0123456789]*|'') c=$(color_pct "$@"); return ;; esac
+  _num_ge "$1" "$2"; r=$?
+  [ "$r" = 2 ] && { c=$(color_pct "$@"); return; }
+  if [ "$r" = 0 ]; then c=$'\033[1;31m'
+  elif _num_ge "$1" "$3"; then c=$'\033[1;33m'
+  else c=$'\033[1;32m'
+  fi
 }
 
 # === Local overrides ===
@@ -1593,6 +1674,14 @@ color_pct() {
 # AGENTLINE_CACHE_TTL.
 AGENTLINE_LOCAL="${AGENTLINE_LOCAL:-$HOME/.claude/agentline/local.sh}"
 [ -f "$AGENTLINE_LOCAL" ] && . "$AGENTLINE_LOCAL"
+# Is color_pct still the built-in? Only it sets _cp_builtin; a replacement
+# from local.sh does not, and then every colour is asked of it (see
+# _color_pct). One call, its output discarded: a redirect, not a fork, and
+# the built-in returns before its awk while _cp_probe is set.
+_cp_builtin=""; _cp_own=0; _cp_probe=1
+color_pct 0 1 1 >/dev/null 2>&1
+_cp_probe=""
+[ -n "$_cp_builtin" ] && _cp_own=1
 
 # === Format Helpers ===
 effort=""
@@ -1644,49 +1733,92 @@ if [ "$_AL_THEME" = mono ]; then
   esac
 fi
 
+# printf -v: the same builtin the $(printf ...) ran, without its subshell.
 cost_fmt=""
-[ -n "$cost" ] && cost_fmt=$(printf "%.2f" "$cost")
+[ -n "$cost" ] && printf -v cost_fmt "%.2f" "$cost"
 
+# awk's printf "%d", ms/1000 truncates toward zero, as bash's integer
+# division of the integer part does (12 digits: past that the double awk
+# divides in can no longer hold the fraction, and awk answers).
 duration_fmt=""
 if [ -n "$duration_ms" ]; then
-  total_sec=$(awk -v ms="$duration_ms" 'BEGIN {printf "%d", ms/1000}')
+  total_sec=""
+  _i="${duration_ms#-}"; _i="${_i%%.*}"
+  case "$duration_ms" in
+    *[!0123456789.-]*|?*-*|*.*.*|-|-.*|.*|*.) ;;
+    *) [ -n "$_i" ] && [ ${#_i} -le 12 ] && total_sec=$(( 10#$_i / 1000 ))
+       case "$duration_ms" in -*) total_sec=$(( -total_sec )) ;; esac ;;
+  esac
+  [ -z "$total_sec" ] && total_sec=$(awk -v ms="$duration_ms" 'BEGIN {printf "%d", ms/1000}')
   h=$((total_sec / 3600))
   m=$(((total_sec % 3600) / 60))
   [ $h -gt 0 ] && duration_fmt="${h}h${m}m" || duration_fmt="${m}m"
 fi
 
+# format_tokens <n> <var>: "8.4m", "12.3k" or n as it came, into <var>. A
+# token count is an integer; any other spelling is awk's, as before.
 format_tokens() {
-  local n="$1"
-  if [ -z "$n" ]; then echo ""
-  elif awk -v n="$n" 'BEGIN {exit !(n >= 1000000)}'; then awk -v n="$n" 'BEGIN {printf "%.1fm", n/1000000}'
-  elif awk -v n="$n" 'BEGIN {exit !(n >= 1000)}'; then awk -v n="$n" 'BEGIN {printf "%.1fk", n/1000}'
-  else echo "$n"
+  local n="$1" _v
+  if [ -z "$n" ]; then _v=""
+  elif case "$n" in *[!0123456789]*) false ;; *) [ ${#n} -le 15 ] ;; esac; then
+    if [ $(( 10#$n )) -ge 1000000 ]; then _tenths $(( 10#$n )) 1000000; _v="${_tenths_out}m"
+    elif [ $(( 10#$n )) -ge 1000 ]; then _tenths $(( 10#$n )) 1000; _v="${_tenths_out}k"
+    else _v="$n"
+    fi
+  elif awk -v n="$n" 'BEGIN {exit !(n >= 1000000)}'; then _v=$(awk -v n="$n" 'BEGIN {printf "%.1fm", n/1000000}')
+  elif awk -v n="$n" 'BEGIN {exit !(n >= 1000)}'; then _v=$(awk -v n="$n" 'BEGIN {printf "%.1fk", n/1000}')
+  else _v="$n"
   fi
+  printf -v "$2" '%s' "$_v"
 }
-tokens_in_fmt=$(format_tokens "$tokens_in")
-tokens_out_fmt=$(format_tokens "$tokens_out")
+format_tokens "$tokens_in" tokens_in_fmt
+format_tokens "$tokens_out" tokens_out_fmt
 
+# bash >= 4.2 formats an epoch itself: printf's %(fmt)T is strftime under
+# the same TZ as date (AGENTLINE_TZ is exported before this, and bash's
+# own getenv hands TZ to localtime). Older bash (macOS 3.2) keeps date.
+_ptime=0
+case "${BASH_VERSINFO[0]:-0}.${BASH_VERSINFO[1]:-0}" in
+  [5-9].*|[1-9][0-9]*.*|4.[2-9]*|4.[1-9][0-9]*) _ptime=1 ;;
+esac
+
+# fmt_reset <ts>: -> $_reset_out. A countdown for an epoch; a string that
+# is not one goes to date, which formats what it can (nothing, mostly).
 fmt_reset() {
-  local ts="$1"; [ -z "$ts" ] && return
+  local ts="$1" diff h m
+  _reset_out=""
+  [ -z "$ts" ] && return
   case "$ts" in
-    ''|*[!0-9]*) fmt_epoch "$ts" "%H:%M"; return ;;
+    *[!0-9]*) _reset_out=$(fmt_epoch "$ts" "%H:%M"); return ;;
   esac
   # $_now_epoch is already set (_tick_now, at startup): a `date +%s` here
   # was one more fork on every full render for a number the script had.
-  local diff h m
   diff=$(( ts - _now_epoch ))
   [ "$diff" -le 0 ] && return
   h=$((diff / 3600)); m=$(((diff % 3600) / 60))
-  if [ $h -gt 0 ]; then echo "${h}h${m}m"; else echo "${m}m"; fi
+  if [ $h -gt 0 ]; then _reset_out="${h}h${m}m"; else _reset_out="${m}m"; fi
 }
+# fmt_reset_week <ts> -> $_reset_out: "5/10", the day and month of <ts>.
+# Zero-padded %d/%m is the only form both GNU and BSD date support (the
+# GNU-only %-d no-pad flag breaks on macOS); the padding is stripped after,
+# as the sed that used to do it did: the first character when it is 0, and
+# the 0 after the slash. printf %()T takes an epoch of up to 11 digits
+# here; any other spelling goes to date as before.
 fmt_reset_week() {
-  # Zero-padded %d/%m is the only form both GNU and BSD date support (the
-  # GNU-only %-d no-pad flag breaks on macOS); strip the padding afterwards.
-  local ts="$1"; [ -z "$ts" ] && return
-  fmt_epoch "$ts" "%d/%m" | LC_ALL=C sed 's/^0//; s#/0#/#'
+  local ts="$1" d
+  _reset_out=""
+  [ -z "$ts" ] && return
+  case "$_ptime:$ts" in
+    1:*[!0-9]*|1:????????????*) d=$(fmt_epoch "$ts" "%d/%m") ;;
+    1:*) printf -v d '%(%d/%m)T' "$(( 10#$ts ))" ;;
+    *)   d=$(fmt_epoch "$ts" "%d/%m") ;;
+  esac
+  d="${d#0}"
+  case "$d" in *"/0"*) d="${d%%/0*}/${d#*/0}" ;; esac
+  _reset_out="$d"
 }
-five_hour_reset_fmt=$(fmt_reset "$five_hour_reset")
-seven_day_reset_fmt=$(fmt_reset_week "$seven_day_reset")
+fmt_reset "$five_hour_reset"; five_hour_reset_fmt="$_reset_out"
+fmt_reset_week "$seven_day_reset"; seven_day_reset_fmt="$_reset_out"
 
 # Pace: "S:60%" says nothing on its own — at 30 minutes to the reset it is
 # plenty of room, at 4 hours to go it is a wall. The window started
@@ -1911,7 +2043,17 @@ if [ -n "$lines_added" ] || [ -n "$lines_removed" ]; then
 fi
 
 # LC_ALL=C pins the day abbreviation to English regardless of the host locale.
-date_str=$(LC_ALL=C date "+%d/%m/%Y %a")
+# printf %()T (bash >= 4.2) formats in the shell's locale instead, so it is
+# asked for the weekday as a number and the C locale's name is looked up.
+if [ "$_ptime" = 1 ]; then
+  printf -v date_str '%(%d/%m/%Y %w)T' -1
+  case "${date_str##* }" in
+    0) _wd=Sun ;; 1) _wd=Mon ;; 2) _wd=Tue ;; 3) _wd=Wed ;; 4) _wd=Thu ;; 5) _wd=Fri ;; *) _wd=Sat ;;
+  esac
+  date_str="${date_str% *} $_wd"
+else
+  date_str=$(LC_ALL=C date "+%d/%m/%Y %a")
+fi
 # The clock is rendered as a placeholder so the cached line can be re-stamped
 # with the live time on every tick; it is substituted just before printing.
 time_str="$CLOCK_TOKEN"
@@ -1919,16 +2061,32 @@ time_str="$CLOCK_TOKEN"
 # Word counts from hook
 words_in_w=""
 words_out_w=""
+# The hook writes one line, "<in> <out>", read with the `read` builtin. Any
+# other shape (a second line, a count that is not an integer) keeps the old
+# cat/awk path, whose output it is.
+_words_fmt() {  # _words_fmt <count> <var>: "%.1fk" from 1000, else "%d", as awk printed
+  local n="$1" _v=""
+  if [ -n "$n" ] && [ "$n" != 0 ]; then
+    case "$n" in
+      *[!0123456789]*|????????????????*)
+        _v=$(awk -v n="$n" 'BEGIN { if (n >= 1000) printf "%.1fk", n/1000; else printf "%d", n }') ;;
+      *) if [ $(( 10#$n )) -ge 1000 ]; then _tenths $(( 10#$n )) 1000; _v="${_tenths_out}k"
+         else _v=$(( 10#$n ))
+         fi ;;
+    esac
+  fi
+  printf -v "$2" '%s' "$_v"
+}
 if [ -f "$AGENTLINE_TMP/claude_wordcount.txt" ]; then
-  wc_line=$(cat "$AGENTLINE_TMP/claude_wordcount.txt")
-  wi=$(echo "$wc_line" | awk '{print $1}')
-  wo=$(echo "$wc_line" | awk '{print $2}')
-  [ -n "$wi" ] && [ "$wi" != "0" ] && words_in_w=$(awk -v n="$wi" 'BEGIN {
-    if (n >= 1000) printf "%.1fk", n/1000; else printf "%d", n
-  }')
-  [ -n "$wo" ] && [ "$wo" != "0" ] && words_out_w=$(awk -v n="$wo" 'BEGIN {
-    if (n >= 1000) printf "%.1fk", n/1000; else printf "%d", n
-  }')
+  wi=""; wo=""; _wx=""
+  { IFS=$' \t' read -r wi wo _; IFS= read -r _wx && _wx=1; } 2>/dev/null < "$AGENTLINE_TMP/claude_wordcount.txt"
+  if [ -n "$_wx" ]; then
+    wc_line=$(cat "$AGENTLINE_TMP/claude_wordcount.txt")
+    wi=$(echo "$wc_line" | awk '{print $1}')
+    wo=$(echo "$wc_line" | awk '{print $2}')
+  fi
+  _words_fmt "$wi" words_in_w
+  _words_fmt "$wo" words_out_w
 fi
 
 # === Hyperlinks ===
@@ -1984,12 +2142,12 @@ fi
 _seg effort "$effort"
 [ -n "$fast_icon" ] && _seg fast "${YELLOW}${fast_icon}${RESET}"
 if [ -n "$used_pct" ]; then
-  c=$(color_pct "$used_pct" 80 60)
+  _color_pct "$used_pct" 80 60
   ctx_icon="$G_CTX"
   ctx_tag=""
-  if awk -v p="$used_pct" 'BEGIN {exit !(p >= 80)}'; then
-    ctx_icon="$G_WARN"
-  fi
+  _num_ge "$used_pct" 80; _r=$?
+  [ "$_r" = 2 ] && { awk -v p="$used_pct" 'BEGIN {exit !(p >= 80)}'; _r=$?; }
+  [ "$_r" = 0 ] && ctx_icon="$G_WARN"
   # Past 200k tokens on a larger window the percentage keeps its own 60/80
   # colours. exceeds_200k_tokens is only Claude Code's fixed-threshold flag,
   # and this segment used to turn it into a yellow ⚠️ at 20-25% on the 1M
@@ -2004,7 +2162,8 @@ if [ -n "$used_pct" ]; then
   # the flag. The parser has already ignored it on a 200k window, where it
   # is just "about 100%" again.
   [ -n "$warn_200k" ] && [ "${AGENTLINE_TAG_200K:-0}" = 1 ] && ctx_tag=" ${DIM}>200k${RESET}"
-  _seg ctx "${c}${ctx_icon}$(printf '%.0f' "$used_pct")%${RESET}${ctx_tag}"
+  printf -v _pct '%.0f' "$used_pct"
+  _seg ctx "${c}${ctx_icon}${_pct}%${RESET}${ctx_tag}"
 elif [ "$compact_n" -gt 0 ] && [ -n "$compact_post" ] && [ "$compact_fresh" = 1 ]; then
   # Just compacted, and the payload has no figure until the next API call:
   # an approximate one from the compaction's own postTokens (see
@@ -2021,10 +2180,11 @@ elif [ "$compact_n" -gt 0 ] && [ -n "$compact_post" ] && [ "$compact_fresh" = 1 
 fi
 [ "$compact_n" -gt 0 ] && _seg compact "${DIM}${G_COMPACT}${compact_n}${RESET}"
 if [ -n "$five_hour" ]; then
-  c=$(color_pct "$five_hour" 90 70)
+  _color_pct "$five_hour" 90 70
   reset_part=""; [ -n "$five_hour_reset_fmt" ] && reset_part="${DIM}${G_RESET}${five_hour_reset_fmt}${RESET}"
   pace_arrow "$five_hour" "$five_hour_reset" 18000 10
-  _seg 5h "${c}S:$(printf '%.0f' $five_hour)%${RESET}${_pace_out:+ }${_pace_out}${reset_part:+ }${reset_part}"
+  printf -v _pct '%.0f' "$five_hour"
+  _seg 5h "${c}S:${_pct}%${RESET}${_pace_out:+ }${_pace_out}${reset_part:+ }${reset_part}"
 fi
 # === Fable weekly limit — opt-in network source ===
 # When the payload carried no per-model bucket (the normal case on 2.1.x, see
@@ -2192,8 +2352,9 @@ fi
 # missing; the segment renders whichever exist and disappears when neither do.
 week_body=""
 if [ -n "$seven_day" ]; then
-  c=$(color_pct "$seven_day" 90 70)
-  week_body="${c}W:$(printf '%.0f' $seven_day)%${RESET}"
+  _color_pct "$seven_day" 90 70
+  printf -v _pct '%.0f' "$seven_day"
+  week_body="${c}W:${_pct}%${RESET}"
   # The pace follows W: directly, before F: — it is the account-wide
   # window's pace; the Fable share has no reset of its own in the payload.
   pace_arrow "$seven_day" "$seven_day_reset" 604800 3
@@ -2201,7 +2362,8 @@ if [ -n "$seven_day" ]; then
 fi
 case "$seven_day_top" in
   ''|*[!0-9.]*) ;;
-  *) week_body="${week_body:+${week_body} }${ORANGE}F:$(printf '%.0f' "$seven_day_top")%${RESET}" ;;
+  *) printf -v _pct '%.0f' "$seven_day_top"
+     week_body="${week_body:+${week_body} }${ORANGE}F:${_pct}%${RESET}" ;;
 esac
 if [ -n "$week_body" ]; then
   reset_part=""; [ -n "$seven_day_reset_fmt" ] && reset_part="${DIM}${G_RESET}${seven_day_reset_fmt}${RESET}"
@@ -2279,7 +2441,7 @@ if [ -n "$disk_pct" ]; then
   if [ "$disk_pct" -ge 80 ]; then
     _seg disk "${RED}${G_WARN}${G_DISK}${disk_pct}%${RESET}"; _WARNED="${_WARNED},disk"
   else
-    c=$(color_pct "$disk_pct" 90 80)
+    _color_pct "$disk_pct" 90 80
     _seg disk "${c}${G_DISK}${disk_pct}%${RESET}"
   fi
 fi

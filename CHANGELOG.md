@@ -38,6 +38,16 @@
   `timeout`/`gtimeout` binary, a back-off after a slow repo (until when),
   no upstream, a detached HEAD, or not a repo. Before, all of these looked
   the same: a branch and nothing beside it.
+- A payload-change render no longer forks its formatters. The colour of
+  each percentage, the context warning, `8.4m`/`12.3k` tokens and words,
+  the duration, the reset countdown, the week's reset day and the date were
+  about 18 short `awk`, `date`, `sed` and `uname` runs (and a `date -r 0`
+  probe) on every full render. They are bash arithmetic and `printf` now,
+  byte for byte the same: a `%.1f` tie such as 1.05 or 1.25 rounds the way
+  awk rounds the double, and a number in any unusual spelling (`1e-05`)
+  still goes to awk. On bash ≥ 4.2 a full render execs `cat` and the two
+  `python3` only. A `color_pct` replaced in local.sh is still called for
+  every colour.
 
 ## 2.0.0 — 2026-09-28
 
