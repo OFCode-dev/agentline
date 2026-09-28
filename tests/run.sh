@@ -40,7 +40,9 @@ set -u
 # builtin (bash 3.2 too).
 for _v in $(compgen -A variable AGENTLINE_) $(compgen -A variable LC_) $(compgen -A variable GIT_) \
           $(compgen -A variable PYTHON); do
-  case "$_v" in AGENTLINE_TEST_BASH|AGENTLINE_TEST_LC) ;; *) unset "$_v" ;; esac
+  # The suite's own knobs stay (the perf override used to be swept away here
+  # with the rest, so it never took effect).
+  case "$_v" in AGENTLINE_TEST_BASH|AGENTLINE_TEST_LC|AGENTLINE_TEST_PERF_MS) ;; *) unset "$_v" ;; esac
 done
 unset COLUMNS LINES LANG CLAUDE_CONFIG_DIR CLAUDE_AGENTS_FILE NO_COLOR FORCE_HYPERLINK \
       TMUX STY ZELLIJ TERM_PROGRAM COLORFGBG http_proxy https_proxy HTTP_PROXY HTTPS_PROXY \
@@ -284,6 +286,25 @@ if [ "$ENV_SELFTEST" = 1 ]; then
   cmp -s "$T/got" "$GOLD/full.w120.txt" || { echo "full.w120 differs:"; diff "$GOLD/full.w120.txt" "$T/got" | head -n 6; exit 1; }
   exit 0
 fi
+
+# The host's speed, measured once here for the timing budgets below: a bare
+# `python3 -I -c pass`, best of three. A fixed budget failed on a slower
+# (4-core ARM) host at 124-128 ms against 100, for code that was fine; the
+# budget is now max(the fixed one, 6 × this), so it still catches work that
+# grows with the input without flaking where interpreters simply start
+# slower. The program is a file, not a heredoc inside $(...), for bash 3.2.
+cat > "$T/pybase.py" <<'PYEOF'
+import subprocess, sys, time
+best = None
+for _ in range(3):
+    t = time.monotonic()
+    subprocess.run([sys.executable, '-I', '-c', 'pass'])
+    ms = (time.monotonic() - t) * 1000
+    best = ms if best is None else min(best, ms)
+print(int(best + 0.5))
+PYEOF
+PY_BASE_MS=$(python3 -I "$T/pybase.py" 2>/dev/null)
+case "$PY_BASE_MS" in ''|*[!0-9]*) PY_BASE_MS=0 ;; esac
 
 # ===========================================================================
 # 1. Syntax
@@ -3807,14 +3828,18 @@ print(int(best))
 PYEOF
 perf_ms=$(cd "$WORK" && run_env python3 -I "$T/perf.py" "$TEST_BASH" "$SUBS" "$SPAY/perf.json")
 # 100 ms is the budget; a hosted macOS runner starts python3 alone in about
-# half of that, so it gets more room. AGENTLINE_TEST_PERF_MS overrides both.
+# half of that, so it gets more room; a host whose bare python3 start is
+# slow gets 6 × that start (PY_BASE_MS, measured at the top).
+# AGENTLINE_TEST_PERF_MS overrides all of it.
 perf_max=100; [ "$(uname -s)" = Darwin ] && perf_max=250
+[ $(( PY_BASE_MS * 6 )) -gt "$perf_max" ] && perf_max=$(( PY_BASE_MS * 6 ))
 perf_max="${AGENTLINE_TEST_PERF_MS:-$perf_max}"
-check "subagents perf: 16 tasks x 1 MB in ${perf_ms}ms (< $perf_max)" [ "${perf_ms:-9999}" -lt "$perf_max" ]
+perf_why="budget $perf_max ms; bare python3 start ${PY_BASE_MS} ms"
+check "subagents perf: 16 tasks x 1 MB in ${perf_ms}ms (< $perf_max; $perf_why)" [ "${perf_ms:-9999}" -lt "$perf_max" ]
 # 32 pending commands of ~120 KB (heredocs, ssh + bash -c, a long argument):
 # only the first 4 KB of each is lexed, so this costs what the small ones do.
 perf_ms=$(cd "$WORK" && run_env python3 -I "$T/perf.py" "$TEST_BASH" "$SUBS" "$SPAY/heavy.json")
-check "subagents perf: 32 x 120 KB commands in ${perf_ms}ms (< $perf_max)" [ "${perf_ms:-9999}" -lt "$perf_max" ]
+check "subagents perf: 32 x 120 KB commands in ${perf_ms}ms (< $perf_max; $perf_why)" [ "${perf_ms:-9999}" -lt "$perf_max" ]
 srun "$SPAY/heavy.json"
 sgot h-00 "→ codex/gpt-6-astra ⏳2m"
 sgot h-01 "→ ssh ⏳2m"
