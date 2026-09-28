@@ -3931,6 +3931,38 @@ if [ -n "$TO" ]; then
 else
   skip "run under timeout: no timeout(1)"
 fi
+# Exit statuses that look like stop signals are plain statuses: the wrapper
+# used to `kill -STOP` itself on 147-150 and stay stopped (review of J9, J9b).
+AIN=/dev/null
+arun -- sh -c 'exit 148'
+check "run: exit 148 is an exit status (got $arc)" [ "$arc" = 148 ]
+arun -- sh -c 'exit 145'
+check "run: exit 145 is an exit status (got $arc)" [ "$arc" = 145 ]
+# A CMD killed by a non-terminating signal is reported, not re-raised.
+arun -- sh -c 'kill -KILL $$'
+check "run: CMD killed by KILL -> killed by KILL (got $arc)" [ "$arc" = 137 ]
+# A closed stdin is /dev/null for CMD, which then runs.
+( cd "$WORK" && run_env AGENTLINE_TMP="$RSIDE" PATH="$RBIN:$PATH_F" "$TEST_BASH" "$ARUN" -- sh -c 'cat; echo ran' \
+    <&- > "$T/rout" 2> "$T/rerr" )
+arc=$?
+check "run: closed stdin, CMD still runs (got $arc)" [ "$arc" = 0 -a "$(cat "$T/rout")" = ran ]
+check "run: closed stdin, row gone" [ -z "$(rrows)" ]
+# A missing program: the shell's 127, a message, no row left.
+arun -- no-such-program-j9b
+check "run: missing program exits 127 (got $arc)" [ "$arc" = 127 ]
+check "run: missing program says so" grep -q 'no-such-program-j9b' "$T/rerr"
+check "run: missing program, row gone" [ -z "$(rrows)" ]
+# After a TERM nothing is left behind: no row, no heartbeat, no CMD. The
+# sleep's odd duration is the marker that finds this run's processes only.
+mark=$(( 30000 + $$ % 9000 ))
+arun_bg --heartbeat 1 -- sleep "$mark"
+wait_for 10 sh -c "grep -q ' sleep\$' '$RF'"
+sleep 2  # a heartbeat or two
+kill -TERM "$apid"; { wait "$apid"; } 2>/dev/null
+check "run TERM: no row afterwards" [ -z "$(rrows)" ]
+sleep 1
+check "run TERM: no row after a heartbeat period either" [ -z "$(rrows)" ]
+check "run TERM: no process left" sh -c "! ps -eo args | grep -v grep | grep -q 'sleep $mark'"
 rm -f "$PWNED"
 erun /dev/null AGENTLINE_TMP="$RSIDE" PATH="$RBIN:$PATH_F" "$TEST_BASH" "$ARUN" -- codex
 pwned "isolated: agentline-run"

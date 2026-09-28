@@ -24,17 +24,17 @@
 #                      is what keeps a long job listed — and what brings its
 #                      row back should anything have dropped it.
 #
-# CMD runs with this script's stdin, stdout and stderr, and its exit status
-# is this script's; a CMD killed by a signal gets this script killed by the
-# same signal. agentline-run prints nothing of its own except errors, on
-# stderr. When the registry helper is missing or python3 is not there, CMD
-# simply runs.
+# CMD runs with this script's stdin (/dev/null if that is closed), stdout
+# and stderr, and its exit status is this script's; a CMD killed by a
+# terminating signal gets this script killed by the same signal. It prints
+# nothing of its own except errors, on stderr. When the registry helper is
+# missing or python3 is not there, CMD simply runs.
 #
-# Signals: TERM and HUP are passed on to CMD, then the row is removed. INT is
-# not passed on: Ctrl-C already reaches CMD from the terminal, which signals
-# the whole foreground process group, and a second INT would cut short a
-# CMD's own clean-up (codex, a python script). A `kill -INT` of this
-# process alone therefore stops nothing until CMD ends.
+# Signals: TERM and HUP are passed on to CMD, then the row is removed. INT
+# and QUIT are not passed on: Ctrl-C already reaches CMD from the terminal,
+# which signals the whole foreground process group, and a second INT would
+# cut short a CMD's own clean-up (codex, a python script). A `kill -INT` of
+# this process alone therefore stops nothing until CMD ends.
 #
 # Environment:
 #   AGENTLINE_AGENT_HELPER  the registry helper (default: agentline-agent.sh
@@ -62,6 +62,11 @@ while [ $# -gt 0 ]; do
 done
 [ $# -gt 0 ] || usage
 case "$beat" in ''|*[!0-9]*) echo "${0##*/}: --heartbeat needs a number of seconds" >&2; usage ;; esac
+
+# A closed stdin (`agentline-run … <&-`) is /dev/null for CMD, as for any
+# program whose caller gave it none; before, the fd juggling failed on it
+# and CMD never ran.
+{ : <&0; } 2>/dev/null || exec </dev/null
 
 # The directory this script really lives in: ~/.local/bin/agentline-run is a
 # symlink (install.sh --link-bin), and the helpers sit beside the target.
@@ -110,83 +115,137 @@ esac
 _AGENTLINE_RUN_LABELS="${_AGENTLINE_RUN_LABELS:-$_rs}$label$_rs"
 export _AGENTLINE_RUN_LABELS
 
-bash "$helper" add "$label"
-
-hb=""
-if [ "$beat" -gt 0 ]; then
-  # The heartbeat, a subshell that outlives nothing: it checks this shell is
-  # still there before every beat, so a SIGKILL of the parent (no trap runs)
-  # ends it within one period. Its stdio is not the caller's, so a pipe read
-  # from this command closes when CMD and this script are done, not when
-  # the heartbeat next wakes.
-  parent=$$
-  (
-    trap - INT TERM HUP
-    while sleep "$beat"; do
-      kill -0 "$parent" 2>/dev/null || exit 0
-      bash "$helper" add "$label"
-    done
-  ) </dev/null >/dev/null 2>&1 &
-  hb=$!
-fi
-
-cleaned=""
-cleanup() {
-  [ -n "$cleaned" ] && return
-  cleaned=1
-  [ -n "$hb" ] && kill "$hb" 2>/dev/null
-  bash "$helper" remove "$label"
-}
-
-# CMD runs as a background child that this shell waits on, because a trap
-# runs only between commands: with CMD in the foreground, a TERM sent to this
-# process would wait for CMD to finish on its own. `wait` returns as soon as
-# a trapped signal arrives. A background job of a non-interactive shell gets
-# stdin from /dev/null and SIGINT/SIGQUIT ignored, so stdin is handed over
-# explicitly (fd 3) and the two signals are reset in the child: `trap -`
-# does that in bash 5, while bash 3.2 (macOS) keeps them ignored, and there
-# the child resets them in a python3 exec shim before it becomes CMD.
-child=""
-on_sig() {
-  [ "$1" != INT ] && [ -n "$child" ] && kill -"$1" "$child" 2>/dev/null
-  return 0
-}
-trap 'on_sig INT' INT
-trap 'on_sig TERM' TERM
-trap 'on_sig HUP' HUP
-
-exec 3<&0
-if [ "${BASH_VERSINFO[0]:-0}" -ge 5 ]; then
-  ( trap - INT QUIT; exec "$@" ) <&3 3<&- &
-else
-  python3 -I -c '
+# The supervisor: one python3 that becomes this process (exec, so a signal
+# sent to agentline-run reaches it) and does all of the child management.
+# The shell version it replaced — CMD as a background job, `wait` in a loop,
+# traps, a heartbeat subshell — could not be made reliable: on bash 3.2
+# (macOS /bin/bash) a signal landing between `kill -0` and `wait` was lost
+# and `wait` blocked for good (Ctrl-C hung 7 runs of 12, the heartbeat
+# re-adding the row all along); on bash 5 a TERM to the group sometimes made
+# `wait` return -1, so the wrapper exited 255 instead of dying of TERM; a
+# heartbeat `add` still in flight could land after the final `remove`, a
+# ghost row for 300 s; and a CMD exiting 147-150 made it stop itself.
+#
+# Here every signal it handles is blocked and taken with sigwait(): a signal
+# is pending until it is taken, so none can slip between a check and a
+# wait. SIGCHLD says CMD may be done, SIGALRM (an interval timer) is the
+# heartbeat, TERM and HUP are forwarded, INT and QUIT only noted (the
+# terminal gave them to CMD too). Heartbeat and removal run one after the
+# other in this one process, so the last word on the row is always the
+# remove, in `finally`. A signal the caller had ignored (a background job's
+# INT) stays ignored, for CMD as well. The program sits at the top level,
+# not inside $(...), where bash 3.2 would parse its lines as shell.
+IFS= read -r -d '' _AL_RUN_PY <<'PYEOF'
 import os, signal, sys
-signal.signal(signal.SIGINT, signal.SIG_DFL)
-signal.signal(signal.SIGQUIT, signal.SIG_DFL)
+
+helper, key, beat = sys.argv[1], sys.argv[2], int(sys.argv[3])
+argv = sys.argv[4:]
+S = signal
+# Signals that end a process: CMD dying of one of these gets this process
+# killed by the same one. Any other (a SEGV, a stop signal) is only reported
+# as its exit status, 128 + n, the way a shell reports it.
+TERMINATING = {S.SIGHUP, S.SIGINT, S.SIGQUIT, S.SIGABRT, S.SIGKILL, S.SIGPIPE,
+               S.SIGTERM, S.SIGALRM, S.SIGUSR1, S.SIGUSR2}
+waited = {S.SIGCHLD, S.SIGALRM}
+for s in (S.SIGTERM, S.SIGHUP, S.SIGINT, S.SIGQUIT):
+    if S.getsignal(s) != S.SIG_IGN:
+        waited.add(s)
+for s in waited:
+    # A handler, never run (the signal is blocked and taken by sigwait), so
+    # that no signal here has an "ignore" action a blocked signal could be
+    # discarded under.
+    S.signal(s, lambda *a: None)
+S.pthread_sigmask(S.SIG_BLOCK, waited)
+
+def spawn(args, null_fds):
+    """fork + exec args with the caller's signal state: nothing blocked,
+    SIGPIPE and SIGXFSZ back to default (python ignores them), null_fds on
+    /dev/null. Returns the pid, or None when the fork failed."""
+    try:
+        pid = os.fork()
+    except OSError:
+        return None
+    if pid:
+        return pid
+    try:
+        # Default actions before the unblock: a TERM forwarded between the
+        # fork and the exec is pending here, and must kill, not land in the
+        # no-op handler (a CMD that then ran on regardless).
+        for s in waited | {S.SIGPIPE, S.SIGXFSZ}:
+            S.signal(s, S.SIG_DFL)
+        S.pthread_sigmask(S.SIG_SETMASK, ())
+        if null_fds:
+            null = os.open(os.devnull, os.O_RDWR)
+            for fd in null_fds:
+                os.dup2(null, fd)
+        os.execvp(args[0], args)
+    except OSError as e:
+        try:
+            os.write(2, ('agentline-run: %s: %s\n' % (args[0], e.strerror)).encode('utf-8', 'replace'))
+        except OSError:
+            pass
+        os._exit(127 if e.errno == 2 else 126)
+    os._exit(126)
+
+def registry(op, quiet=False):
+    # The helper never gets the caller's stdin or stdout (a pipe read from
+    # this command must close when CMD is done); its stderr, a note that a
+    # write was skipped, is kept except for the heartbeat's.
+    pid = spawn(['bash', helper, op, key], (0, 1, 2) if quiet else (0, 1))
+    if pid:
+        try:
+            os.waitpid(pid, 0)
+        except OSError:
+            pass
+
+status = None
+registry('add')
 try:
-    os.execvp(sys.argv[1], sys.argv[1:])
-except OSError as e:
-    sys.stderr.write("agentline-run: %s: %s\n" % (sys.argv[1], e.strerror))
-    sys.exit(127 if e.errno == 2 else 126)
-' "$@" <&3 3<&- &
-fi
-child=$!
-exec 3<&-
+    child = spawn(argv, ())
+    if child is None:
+        sys.stderr.write('agentline-run: cannot start %s\n' % argv[0])
+        status = 126 << 8
+    else:
+        # A Ctrl-C (INT or QUIT to the group) that came while the row was
+        # being added reached this process only: CMD did not exist yet. It
+        # is still pending here, so it is passed on now. One that came in
+        # the microseconds after the fork reached CMD as well and is passed
+        # twice, which beats a CMD that never heard it.
+        for s in (S.SIGINT, S.SIGQUIT):
+            if s in waited and s in S.sigpending():
+                try:
+                    os.kill(child, s)
+                except OSError:
+                    pass
+        if beat > 0:
+            S.setitimer(S.ITIMER_REAL, beat, beat)
+        while status is None:
+            sig = S.sigwait(waited)
+            if sig == S.SIGALRM:
+                registry('add', quiet=True)
+            elif sig in (S.SIGTERM, S.SIGHUP):
+                try:
+                    os.kill(child, sig)
+                except OSError:
+                    pass
+            # Any wake-up may follow CMD's end (a heartbeat can consume the
+            # moment), so every one checks; SIGCHLD just comes first.
+            pid, st = os.waitpid(child, os.WNOHANG)
+            if pid:
+                status = st
+finally:
+    S.setitimer(S.ITIMER_REAL, 0)
+    registry('remove')
 
-# A wait cut short by a trapped signal returns 128+n while CMD still runs:
-# wait again until it is gone. The last wait returns its real status, which
-# bash keeps for a reaped child.
-while kill -0 "$child" 2>/dev/null; do
-  wait "$child"
-done
-wait "$child"
-rc=$?
-cleanup
+if os.WIFSIGNALED(status):
+    n = os.WTERMSIG(status)
+    if n in TERMINATING:
+        if n != S.SIGKILL:
+            S.signal(n, S.SIG_DFL)
+        os.kill(os.getpid(), n)
+        S.pthread_sigmask(S.SIG_UNBLOCK, {n})
+    sys.exit(128 + n)
+sys.exit(os.WEXITSTATUS(status) if os.WIFEXITED(status) else 1)
+PYEOF
 
-# CMD died of a signal (128+n): die of the same one, so the caller — a
-# shell loop, `timeout`, make — sees a signal death and not an exit code.
-if [ "$rc" -gt 128 ] && [ "$rc" -lt 160 ]; then
-  trap - INT TERM HUP
-  kill -$(( rc - 128 )) $$ 2>/dev/null
-fi
-exit "$rc"
+exec python3 -I -c "$_AL_RUN_PY" "$helper" "$label" "$beat" "$@"

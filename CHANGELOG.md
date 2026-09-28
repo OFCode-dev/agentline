@@ -40,7 +40,12 @@
   work on the 🤖 segment: it registers a row named after the worker it runs
   (the same classifier), keeps it alive with a heartbeat and removes it
   when CMD ends, also on TERM, HUP or Ctrl-C. CMD's stdio and exit status
-  pass through, and it prints nothing of its own. Installed to
+  pass through, and it prints nothing of its own. A small `python3`
+  supervisor runs CMD, so Ctrl-C under macOS's bash 3.2 no longer hangs
+  the wrapper. A TERM to the process group is a TERM death, not exit 255,
+  and a CMD exiting 147-150 no longer stops the wrapper. A closed stdin
+  runs CMD on `/dev/null`, and no heartbeat can re-add the row after it
+  was removed. Installed to
   `~/.claude/agentline/`; `bash install.sh --link-bin` also links it into
   `~/.local/bin`, never over a different file.
 - `install.sh` always copies `agentline-subagents.sh`, `agentline-run` and
