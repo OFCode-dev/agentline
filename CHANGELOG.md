@@ -74,7 +74,9 @@
   holds, where awk sees the double and not the decimal (`"79.999999999999999"`
   is 80, red), and a negative duration past 12 digits. On bash ≥ 4.2 a full render execs `cat` and the two
   `python3` only. A `color_pct` replaced in local.sh is still called for
-  every colour.
+  every colour, a wrapper around the built-in included. Whether it was
+  replaced is read from where bash says it is defined, so local.sh's
+  function is never called just to find out.
 - Custom segments. `local.sh` can call `agentline_seg <name> <content>` to
   add a segment of its own, `local:<name>` for `AGENTLINE_LAYOUT` and
   `AGENTLINE_DROP`. By default these segments close line 4, in call order.

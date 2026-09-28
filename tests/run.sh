@@ -1405,6 +1405,28 @@ rm -f "$SIDE/claude_wordcount.txt"
 printf '%s\n' 'color_pct() { printf "\033[1;35m"; }' > "$T/local-cp.sh"
 nb '"context_window":{"used_percentage":12}' ctx AGENTLINE_LOCAL="$T/local-cp.sh"
 check "color_pct override from local.sh still used" grep -qF "${ESC}[1;35m" "$T/out"
+# A wrapper around the built-in is an override too: it used to be taken for
+# the built-in, which it calls, and ignored (review of J10, stage J9b). Its
+# side effect shows whether it ran at all.
+cat > "$T/local-cpw.sh" <<'EOF'
+eval "_orig_$(declare -f color_pct)"
+color_pct() {
+  echo x >> "$AGENTLINE_TMP/cp-calls"
+  if [ "${1%%.*}" -ge 95 ]; then printf '\033[1;35m'; else _orig_color_pct "$@"; fi
+}
+EOF
+rm -f "$SIDE/cp-calls"
+nb '"context_window":{"used_percentage":97}' ctx AGENTLINE_LOCAL="$T/local-cpw.sh"
+check "color_pct wrapper: its colour at 97%" grep -qF "${ESC}[1;35m" "$T/out"
+nb '"context_window":{"used_percentage":50}' ctx AGENTLINE_LOCAL="$T/local-cpw.sh"
+check "color_pct wrapper: the built-in's below" grep -qF "${ESC}[1;32m" "$T/out"
+# A local.sh that leaves color_pct alone: the built-in, never a call to it
+# from the check.
+printf '%s\n' 'agentline_seg note "hi"' > "$T/local-nocp.sh"
+nb '"context_window":{"used_percentage":97}' ctx AGENTLINE_LOCAL="$T/local-nocp.sh"
+check "color_pct untouched by local.sh: the built-in red" grep -qF "${ESC}[1;31m" "$T/out"
+check "color_pct wrapper: it ran" [ "$(wc -l < "$SIDE/cp-calls" | tr -d ' ')" -ge 1 ]
+rm -f "$SIDE/cp-calls"
 
 # Custom segments from local.sh (J10): agentline_seg <name> <content> adds
 # local:<name>, placed at the end of line 4 by default, in call order.

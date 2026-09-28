@@ -1683,10 +1683,11 @@ _tenths() {
   _tenths_out="$(( t / 10 )).$(( t % 10 ))"
 }
 
+# Where the built-in is defined, file and line: after local.sh, a color_pct
+# defined anywhere else is an override (see below).
+_CP_WHERE="color_pct $(( LINENO + 1 )) ${BASH_SOURCE[0]-}"
 color_pct() {
   local p="$1" high="${2:-90}" mid="${3:-70}"
-  _cp_builtin=1
-  [ -n "$_cp_probe" ] && return 0
   awk -v p="$p" -v h="$high" -v m="$mid" 'BEGIN {
     if (p >= h) printf "\033[1;31m";
     else if (p >= m) printf "\033[1;33m";
@@ -1695,9 +1696,9 @@ color_pct() {
 }
 # _color_pct <pct> <high> <mid> -> $c. color_pct is a documented local.sh
 # override (see "Local overrides"), so it stays the function every colour
-# comes from when replaced; the check after local.sh runs it once to see
-# whether it is still this one. The built-in's answer is worked out here
-# instead, with no subshell and no awk, for a plain decimal and thresholds.
+# comes from when replaced; the check after local.sh asks bash where it is
+# defined now. The built-in's answer is worked out here instead, with no
+# subshell and no awk, for a plain decimal and thresholds.
 _color_pct() {
   local r
   if [ "$_cp_own" != 1 ]; then c=$(color_pct "$@"); return; fi
@@ -1790,15 +1791,20 @@ agentline_seg() {  # agentline_seg <name> <content> — for local.sh
   return 0
 }
 
-[ -f "$AGENTLINE_LOCAL" ] && . "$AGENTLINE_LOCAL"
-# Is color_pct still the built-in? Only it sets _cp_builtin; a replacement
-# from local.sh does not, and then every colour is asked of it (see
-# _color_pct). One call, its output discarded: a redirect, not a fork, and
-# the built-in returns before its awk while _cp_probe is set.
-_cp_builtin=""; _cp_own=0; _cp_probe=1
-color_pct 0 1 1 >/dev/null 2>&1
-_cp_probe=""
-[ -n "$_cp_builtin" ] && _cp_own=1
+# Is color_pct still the built-in? Without a local.sh it is. With one, bash
+# says where the function now in force was defined (extdebug makes
+# `declare -F` print its line and file): anything but this file at the
+# built-in's line is an override, and every colour is asked of it (see
+# _color_pct). That is one fork, for local.sh users only. The check used to
+# call color_pct and see whether the built-in's flag got set, which took a
+# local.sh wrapper around the built-in (`eval "_orig_$(declare -f
+# color_pct)"`, then a color_pct that calls _orig_color_pct) for the
+# built-in, and ignored it — and it ran the user's function in this shell.
+_cp_own=1
+if [ -f "$AGENTLINE_LOCAL" ]; then
+  . "$AGENTLINE_LOCAL"
+  [ "$(shopt -s extdebug; declare -F color_pct 2>/dev/null)" = "$_CP_WHERE" ] || _cp_own=0
+fi
 
 # === Format Helpers ===
 effort=""
