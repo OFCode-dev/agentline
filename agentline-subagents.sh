@@ -42,7 +42,7 @@
 # comments; `-I` keeps it from importing a json.py or re.py that happens to
 # sit in the project directory Claude Code runs it in.
 IFS= read -r -d '' _AL_SUB_PY <<'PYEOF'
-import json, os, re, shlex, stat, sys, time
+import functools, json, os, re, stat, sys, time
 
 MODE = sys.argv[1] if len(sys.argv) > 1 else 'render'
 
@@ -54,13 +54,29 @@ MODE = sys.argv[1] if len(sys.argv) > 1 else 'render'
 #
 # Nothing it returns is raw command text. A command line can hold a prompt,
 # a token, a file body or a URL with a query string, and it is written by a
-# model; the label is built only from fixed names and from model tokens that
-# pass SAFE, so the worst a hostile command can do is choose which of these
-# short, inert strings appears.
-SAFE = re.compile(r'[A-Za-z0-9._/-]{1,40}')
+# model; the label is built only from fixed names, from program names that
+# pass safe(), and from model names that also have the shape of a model of
+# that worker (MODEL). A token that only looked harmless was not enough:
+# codex/sk-ant-api03-…, agy/hf_…, ssh/10.1.2.3 and codex//home/…/patients
+# all passed the old character check. So the worst a hostile command can do
+# is choose which of these short, inert strings appears.
+SAFE = re.compile(r'[A-Za-z0-9._-]{1,40}')
+# Never shown, whatever else a token passes: the prefixes of the common API
+# keys and tokens (OpenAI/Anthropic, Stripe, GitHub, GitLab, Slack, AWS, JWT,
+# Hugging Face, NVIDIA, Google, npm, PyPI), and anything path-like.
+DENY = re.compile(r'sk-|sk_|rk_|gh[pousr]_|github_pat_|glpat-|xox[a-z]-|akia|asia|eyj|hf_'
+                  r'|nvapi-|aiza|ya29\.|npm_|pypi-|\.\.|//|^[/~]', re.I)
+# The model names a worker's label may carry, by shape. Anything else — a
+# typo, a path, a secret in the model's place — leaves the worker unnamed
+# (plain "codex"), which is still right about what runs.
+MODEL = {
+    'codex': re.compile(r'(?:gpt|o[0-9]|codex)[A-Za-z0-9._-]{0,30}', re.I),
+    'agy': re.compile(r'(?:gemini|claude|gpt-oss)[A-Za-z0-9._-]{0,40}', re.I),
+    'claude': re.compile(r'opus|sonnet|haiku|fable|mythos|opusplan|claude-[a-z0-9.-]{1,40}', re.I),
+    'hetzner': re.compile(r'qwen[0-9][a-z0-9._-]{0,30}'),
+}
 ASSIGN = re.compile(r'[A-Za-z_][A-Za-z0-9_]*=')
 MODEL_JSON = re.compile(r'"model"\s*:\s*"([^"\\]{1,80})"')
-OPS = set('();<>|&\n')
 # Commands that set the stage and are never the thing a row should name.
 TRIVIAL = {'cd', 'pushd', 'popd', 'export', 'set', 'unset', 'source', '.', 'echo',
            'printf', 'true', 'false', ':', 'sleep', 'test', '[', '[[', 'local',
@@ -72,44 +88,133 @@ SSH_ARG = set('BbcDEeFIiJLlmOoPpQRSWw')  # ssh options that take a value
 LOCAL = r'(?:127\.0\.0\.1|localhost):'
 
 def safe(tok):
-    return tok if isinstance(tok, str) and SAFE.fullmatch(tok) else ''
+    return tok if isinstance(tok, str) and SAFE.fullmatch(tok) and not DENY.search(tok) else ''
 
 def base(w):
     return w.rsplit('/', 1)[-1]
 
+# The shell lexer below walks a command one token at a time with a single
+# regex, so a long command is consumed in C-sized chunks, not by a Python
+# loop per character. shlex, which this replaced, lexed the whole string —
+# a 60 KB heredoc was 69 ms per task and tick, and every ssh or bash -c
+# level lexed its part again — and it knew nothing of heredocs, so the
+# first word of every body line became a "program" on the row (a name, a
+# figure, a line of a file being written).
+LEX = re.compile(r'''
+    (?P<ws>(?:[^\S\n]|\\\n)+)
+  | (?P<nl>\n)
+  | (?P<op>&&|\|\||;;&?|;&|<<<|<<-|<<|>>|>&|<&|&>>?|>\||<>|[;&|()<>`])
+  | (?P<sub>\$\()
+  | (?P<sq>'[^']*'?)
+  | (?P<ansi>\$'[^'\\]*(?:\\.[^'\\]*)*'?)
+  | (?P<dq>"[^"\\]*(?:\\.[^"\\]*)*"?)
+  | (?P<esc>\\.?)
+  | (?P<hash>\#)
+  | (?P<lit>[^\s'"\\;&|()<>`#$]+|\$)
+''', re.X | re.S)
+REDIR = {'<', '>', '>>', '>&', '<&', '&>', '&>>', '>|', '<>', '<<<'}
+DQ_ESC = re.compile(r'\\([$`"\\\n])')
+# Bounds on the work one command may cost, whatever its size: this many
+# characters of it are lexed (heredoc bodies, skipped by a search, do not
+# count), into at most this many tokens, and a command inside a command
+# (bash -c, ssh, agentline-run) is followed this many levels deep. A worker
+# is named in the first few words of a command, never 4 KB into it.
+LEX_CHARS, LEX_TOKENS, MAX_DEPTH = 4096, 256, 2
+
+def heredoc_end(s, pos, delim, dash):
+    """Where the heredoc body starting at pos ends: past its delimiter line,
+    or the end of s when the delimiter never comes (bash reads to EOF)."""
+    m = re.compile('^' + ('\t*' if dash else '') + re.escape(delim) + '$', re.M).search(s, pos)
+    if not m:
+        return len(s)
+    return m.end() + 1 if s.startswith('\n', m.end()) else m.end()
+
+@functools.lru_cache(maxsize=64)
 def split_cmds(s):
-    """The simple commands of a shell string, each a list of words. Newlines,
-    ; && || | & and parentheses separate; a redirection and its target are
-    dropped. Quoting is honoured (shlex), so a URL or a prompt in quotes
-    stays one word. Good enough to find programs, which is all it is for."""
-    try:
-        lex = shlex.shlex(s, posix=True, punctuation_chars='();<>|&\n')
-        lex.whitespace = ' \t\r'
-        lex.whitespace_split = True
-        lex.commenters = ''
-        toks = list(lex)
-    except ValueError:
-        toks = s.split()
-    cmds, cur, target = [], [], False
-    for t in toks:
-        if target:
-            target = False
-            continue
-        if t and all(c in OPS for c in t):
-            if '<' in t or '>' in t:
-                if cur and cur[-1].isdigit():
-                    cur.pop()  # the 2 of 2>&1
-                target = True
-                continue
-            if cur:
-                cmds.append(cur)
-                cur = []
-            continue
-        if t.strip():
-            cur.append(t)
-    if cur:
-        cmds.append(cur)
-    return cmds
+    """The simple commands of a shell string, each a tuple of words.
+    Newlines, ; && || | &, parentheses, $( and backquotes separate; a
+    redirection and its target are dropped, and so is a comment. A heredoc's
+    body is skipped up to its delimiter line (<< and <<-, quoted or not,
+    several on one line), and quoted text stays one word, unterminated or
+    not: neither is ever read as a command. Good enough to find programs,
+    which is all it is for."""
+    cmds, cur, buf = [], [], []
+    have = False              # a word is being built ('' is a word too)
+    target = heredoc = None   # what the next word is: a redirection target,
+    pending = []              # a heredoc delimiter (<<, <<-); bodies to skip
+    pos = used = ntok = 0
+    n = len(s)
+
+    def flush():
+        nonlocal have, target, heredoc
+        if not have:
+            return
+        word, have = ''.join(buf), False
+        del buf[:]
+        if heredoc is not None:
+            pending.append((word, heredoc))
+            heredoc = None
+        elif target:
+            target = None
+        elif word.strip():
+            cur.append(word)
+
+    def end():
+        nonlocal cur
+        flush()
+        if cur:
+            cmds.append(tuple(cur))
+            cur = []
+
+    while pos < n and used < LEX_CHARS and ntok < LEX_TOKENS:
+        # endpos: a quoted word of 100 KB is matched only as far as the
+        # budget reaches, and the budget then ends the walk.
+        m = LEX.match(s, pos, min(n, pos + LEX_CHARS - used))
+        if not m:  # cannot happen: every character starts some token
+            break
+        kind, tok = m.lastgroup, m.group()
+        used += len(tok)
+        pos = m.end()
+        if kind == 'ws':
+            flush()
+        elif kind == 'nl':
+            end()
+            ntok += 1
+            for delim, dash in pending:
+                pos = heredoc_end(s, pos, delim, dash)
+            del pending[:]
+        elif kind == 'op' or kind == 'sub':
+            ntok += 1
+            if tok in REDIR or tok in ('<<', '<<-'):
+                if have and not target and heredoc is None and ''.join(buf).isdigit():
+                    del buf[:]  # the 2 of 2>&1
+                    have = False
+                flush()
+                if tok in ('<<', '<<-'):
+                    heredoc = tok == '<<-'
+                else:
+                    target = True
+            else:
+                end()
+        elif kind == 'hash' and not have:
+            nl = s.find('\n', pos)  # a comment, up to the line's end
+            pos = n if nl < 0 else nl
+        else:
+            if not have:
+                ntok += 1
+            have = True
+            if kind == 'sq':
+                buf.append(tok[1:-1] if len(tok) > 1 and tok.endswith("'") else tok[1:])
+            elif kind == 'dq':
+                buf.append(DQ_ESC.sub(r'\1', tok[1:-1] if len(tok) > 1 and tok.endswith('"') else tok[1:]))
+            elif kind == 'ansi':
+                buf.append(re.sub(r'\\(.)', r'\1', tok[2:-1] if len(tok) > 2 and tok.endswith("'") else tok[2:]))
+            elif kind == 'esc':
+                buf.append(tok[1:])
+            else:
+                buf.append(tok)
+    end()
+    return tuple(cmds)
 
 def opt_val(w, names):
     """The value of the first -m X / --model X / --model=X in w."""
@@ -130,10 +235,13 @@ def body_model(w):
     return ''
 
 def with_model(name, model, tail=False):
+    """name/model when model is safe and has the shape of one of name's
+    models (MODEL), else the bare name."""
     if tail:
         model = model.rsplit('/', 1)[-1].lower()
-    model = safe(model)
-    return name + '/' + model if model and len(name) + 1 + len(model) <= 40 else name
+    if not (safe(model) and MODEL[name].fullmatch(model)):
+        return name
+    return name + '/' + model if len(name) + 1 + len(model) <= 40 else name
 
 def unwrap(w):
     """Strip launchers off the front of w (VAR=x, env, timeout, nohup, time,
@@ -167,7 +275,7 @@ def unwrap(w):
 def classify_words(w, depth=0):
     """The worker label of one simple command, or ''."""
     w = unwrap(w)
-    if not w or depth > 3:
+    if not w or depth > MAX_DEPTH:
         return ''
     p = base(w[0])
     if p == 'agentline-run':
@@ -228,9 +336,11 @@ def classify_words(w, depth=0):
         return 'arb/qwen3.6'
     hz = os.environ.get('HETZNER_INFERENCE_BASE_URL', '')
     hz = re.sub(r'^[A-Za-z]+://', '', hz).split('/', 1)[0] if hz else ''
+    # An HTTP worker's model is taken from the request body alone: an option
+    # of curl's is no model name (-m is curl's --max-time: "hetzner/30").
     if any('inference.hetzner.com' in t or 'HETZNER_INFERENCE_BASE_URL' in t
            or (hz and hz in t) for t in w):
-        return with_model('hetzner', body_model(w) or opt_val(w, ('--model', '-m')), tail=True)
+        return with_model('hetzner', body_model(w), tail=True)
     if any('integrate.api.nvidia.com' in t or base(t) == 'review-deepseek.py' for t in w):
         return 'deepseek'
     return ''
@@ -238,7 +348,9 @@ def classify_words(w, depth=0):
 def classify_ssh(w, depth):
     """ssh [opts] host [cmd...]: the bayrak node by its alias, with the model
     of a `claude -p --model M` it runs; another host by the worker its
-    remote command runs, else by its name."""
+    remote command runs, else plain "ssh". Never another host's name or
+    address: antlara-prod-db.internal or 10.1.2.3 say where a client's data
+    lives."""
     i = 1
     while i < len(w):
         t = w[i]
@@ -260,18 +372,18 @@ def classify_ssh(w, depth):
     inner = classify_string(remote, depth + 1) if remote else ''
     if host in ('bayrak', 'bayrak-vcn'):
         return 'bayrak/' + inner[7:] if inner.startswith('claude/') else 'bayrak'
-    if inner:
-        return inner
-    return with_model('ssh', host) if safe(host) else 'ssh'
+    return inner or 'ssh'
 
 def classify_string(s, depth=0):
+    if depth > MAX_DEPTH:
+        return ''
     for w in split_cmds(s)[:32]:
         lab = classify_words(w, depth)
         if lab:
             return lab
     return ''
 
-def program_words(w):
+def program_words(w, depth=0):
     """A program name for a command that is no known worker: its basename,
     or the script an interpreter runs (x.py, for a python running x.py)."""
     w = unwrap(w)
@@ -281,7 +393,7 @@ def program_words(w):
     if p in TRIVIAL:
         return ''
     if p in SHELLS and len(w) > 2 and re.fullmatch(r'-[a-z]*c[a-z]*', w[1]):
-        return program_string(w[2]) or safe(p)
+        return program_string(w[2], depth + 1) or safe(p)
     if p in INTERP:
         for t in w[1:]:
             if t.startswith('-'):
@@ -293,9 +405,11 @@ def program_words(w):
             break
     return safe(p)
 
-def program_string(s):
+def program_string(s, depth=0):
+    if depth > MAX_DEPTH:
+        return ''
     for w in split_cmds(s)[:32]:
-        p = program_words(w)
+        p = program_words(w, depth)
         if p:
             return p
     return ''

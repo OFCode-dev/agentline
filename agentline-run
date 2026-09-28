@@ -89,11 +89,16 @@ if [ -z "$label" ]; then
     [ -f "$cls" ] && break
   done
   [ -n "$cls" ] && label=$(bash "$cls" --classify -- "$@" 2>/dev/null)
-  [ -n "$label" ] || label="${1##*/}"
+  # Nothing the classifier would show (its rules refuse a program name that
+  # looks like a key or a path): a fixed word, never the raw argv[0].
+  [ -n "$label" ] || label=run
 fi
 # One registry line per row, so no newline or control character may reach
 # it; agentline.sh cleans what it prints, this keeps the file well-formed.
+# A --label is the caller's own words and is kept, but no longer than a row
+# has room for.
 label="${label//[[:cntrl:]]/ }"
+label="${label:0:40}"
 
 # Nested under an agentline-run that already shows this very label (a
 # wrapper script that wraps again): the outer row is this work, and a second

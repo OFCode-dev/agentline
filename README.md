@@ -339,16 +339,18 @@ The activity names the tool and its target without ever showing input text: `Rea
 | `codex exec … -m <model>` | `codex/<model>` (no `-m`: `codex`) |
 | `agy … --model <m>` | `agy/<m>` |
 | `ssh … bayrak 'claude -p … --model <m>'` | `bayrak/<m>` (other commands on `bayrak`: `bayrak`) |
-| `ssh <host> …` | the worker its remote command runs, else `ssh/<host>` |
+| `ssh <host> …` | the worker its remote command runs, else `ssh` (never the host's name or address) |
 | `127.0.0.1:18080`, model `arb-coder` | `arb/qwen3.6` |
 | `arbctl.py` | `arb/ctl` |
 | `127.0.0.1:18081`, `run_jev.py`, `jev_eval` | `jev/jevk5` |
-| `inference.hetzner.com`, `$HETZNER_INFERENCE_BASE_URL` | `hetzner/<model>` (`qwen3.6-fp8`, `qwen3.8-27b`, …) |
+| `inference.hetzner.com`, `$HETZNER_INFERENCE_BASE_URL` | `hetzner/<model>` (`qwen3.6-fp8`, `qwen3.8-27b`, …), the model from the request body's `"model"` |
 | `integrate.api.nvidia.com`, `review-deepseek.py` | `deepseek` |
 | `claude -p … --model <m>` | `claude/<m>` |
 | `agentline-run --label X -- …` | `X` |
 
-`timeout`, `env`, `nohup`, `VAR=value` and `bash -c '…'` in front are looked through, and so are `cd … &&` and pipes. A model name is shown only when it is a short, plain token (`[A-Za-z0-9._/-]`, at most 40 characters), so a crafted command cannot put anything else on the row.
+`timeout`, `env`, `nohup`, `VAR=value` and `bash -c '…'` in front are looked through, and so are `cd … &&` and pipes. Heredoc bodies, quoted text and comments are never read as commands. Only the first 4 KB of a command is looked at, and nesting (`ssh` → `bash -c` → …) is followed two levels deep.
+
+A model name is shown only when it has the shape of one of that worker's models: `gpt…`, `o3…` or `codex…` for codex, `gemini…`, `claude…` or `gpt-oss…` for agy, `opus`, `sonnet`, `haiku`, `fable`, `mythos` or `claude-…` for claude, `qwen…` for Hetzner. It must also be a plain token of at most 40 characters that contains no API-key prefix (`sk-`, `ghp_`, `xoxb-`, `AKIA`, `hf_`, `eyJ`, …) and nothing path-like (`/…`, `~…`, `//`, `..`). Anything else leaves the worker unnamed (`codex`). A program name passes the same key and path check. So a crafted command cannot put a secret, a path or a host on the row.
 
 Rows fit the width Claude Code gives them. When a row is too wide, the lowest-priority fields go first: cwd, velocity, the activity's timer, the activity, elapsed, context, effort, model. Then the label is shortened. A field with no data is left out. A task the script cannot make sense of (no id, an unknown shape) keeps Claude Code's own row, and without `python3` every row does. Themes, `NO_COLOR`, `AGENTLINE_GLYPHS=ascii` and the colour overrides apply as on the main line.
 

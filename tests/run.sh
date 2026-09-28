@@ -3555,7 +3555,7 @@ w-nvidia|deepseek
 w-run|nightly eval
 w-run-cls|codex/gpt-6-astra
 w-bashc|agy/gemini-3-flash
-w-ssh|ssh/gpu1
+w-ssh|ssh
 w-plain|Bash git
 w-escape|codex
 EOF
@@ -3571,7 +3571,7 @@ check "classify: hetzner by its base URL's host" \
   [ "$(cls curl https://inf.example.net/v1/chat -d '{"model":"Qwen/Qwen3.6-FP8"}')" = hetzner/qwen3.6-fp8 ]
 SENV=""
 check "classify: argv, no shell" [ "$(cls codex exec -m gpt-6-astra 'a b; c')" = codex/gpt-6-astra ]
-check "classify: timeout + env unwrapped" [ "$(cls timeout -s KILL 60 env -u X A=1 agy --model g3)" = agy/g3 ]
+check "classify: timeout + env unwrapped" [ "$(cls timeout -s KILL 60 env -u X A=1 agy --model gemini-3)" = agy/gemini-3 ]
 check "classify: sh -c unwrapped" [ "$(cls sh -c 'cd /x && codex exec --model o5 y')" = codex/o5 ]
 check "classify: ssh bayrak claude" [ "$(cls ssh -o BatchMode=yes bayrak claude -p x --model sonnet)" = bayrak/sonnet ]
 check "classify: a model that is not a safe token is dropped" [ "$(cls codex exec -m 'gpt 6; rm' x)" = codex ]
@@ -3580,6 +3580,51 @@ check "classify: interpreter script" [ "$(cls python3 -u tools/build.py --fast)"
 check "classify: no argv, no output" [ -z "$(cls)" ]
 "$TEST_BASH" "$SUBS" --bogus 2>/dev/null
 check "classify: bad option exits 2 (got $?)" [ $? = 2 ]
+# Confidential text in a command never reaches a row: heredoc bodies,
+# quoted text and comments are no commands; a model name must have the
+# shape of that worker's models and carry no key prefix or path; another
+# host is never named; curl's -m is no model (review of J9, stage J9b).
+srun "$SPAY/leak.json"
+check "subagents leak: exit 0 (got $src)" [ "$src" = 0 ]
+check "subagents leak: no confidential text on any row" \
+  sh -c "! cut -f2 '$T/srows' | grep -qiE 'Ayse|Antlara|TC1234|revenue|sk-|AKIA|hf_|patients|passw0rd|Hunter|prod-db|10\.1\.2|/30|/home'"
+while IFS='|' read -r sid_ want; do
+  sgot "$sid_" "→ $want ⏳2m"
+done <<'EOF'
+l-heredoc|Bash
+l-colon|Bash
+l-dash|Bash cat
+l-two|Bash cat
+l-quote|Bash
+l-comment|Bash
+l-key1|codex
+l-key2|codex
+l-key3|agy
+l-path|codex
+l-claude|claude
+l-host|ssh
+l-ip|ssh
+l-curl|hetzner
+l-prog|Bash
+EOF
+# The scripts are variables, not literals inside $(...): bash 3.2 looks for
+# heredocs in there.
+hd1=$'cat > f <<EOF\nAyseYilmaz x\nEOF\ncodex exec -m gpt-5 y'
+hd2=$'cat <<-"E" | codex exec -m gpt-5 -\n\tAyseYilmaz\n\tE\n'
+hd3=$'cat <<EOF\ncodex exec -m gpt-5'
+hd4=$'cat <<EOF\ncodex exec -m gpt-5\nEOF\n'
+check "classify: heredoc body is no command" [ "$(cls bash -c "$hd1")" = codex/gpt-5 ]
+check "classify: <<- with a quoted delimiter" [ "$(cls bash -c "$hd2")" = codex/gpt-5 ]
+check "classify: a heredoc without its delimiter hides the rest" [ "$(cls bash -c "$hd3")" = cat ]
+check "classify: a worker in a heredoc body is not run" [ "$(cls bash -c "$hd4")" = cat ]
+check "classify: a model is kept by its shape" \
+  [ "$(cls codex exec -c 'model="o4-mini"' x)" = codex/o4-mini -a "$(cls claude --model claude-opus-5-5 -p x)" = claude/claude-opus-5-5 ]
+for k in 'sk-proj-AAAA' 'ghp_AAAA' 'xoxb-1-2' 'eyJhbGciOi' 'gpt-5-AIzaSyA' 'gpt..x' 'gpt//x'; do
+  check "classify: key or path '$k' is no model" [ "$(cls codex exec -m "$k" x)" = codex ]
+done
+check "classify: a program named like a key is not named" [ -z "$(cls ./sk-live-AntlaraKey)" ]
+check "classify: a command past 4 KB is not looked at" \
+  [ "$(cls bash -c "true $(printf '%05000d' 0); codex exec -m gpt-5")" = bash ]
 
 # --- other tools, and which transcripts may be read ---------------------------
 srun "$SPAY/tools.json"
@@ -3712,6 +3757,14 @@ perf_ms=$(cd "$WORK" && run_env python3 -I "$T/perf.py" "$TEST_BASH" "$SUBS" "$S
 perf_max=100; [ "$(uname -s)" = Darwin ] && perf_max=250
 perf_max="${AGENTLINE_TEST_PERF_MS:-$perf_max}"
 check "subagents perf: 16 tasks x 1 MB in ${perf_ms}ms (< $perf_max)" [ "${perf_ms:-9999}" -lt "$perf_max" ]
+# 32 pending commands of ~120 KB (heredocs, ssh + bash -c, a long argument):
+# only the first 4 KB of each is lexed, so this costs what the small ones do.
+perf_ms=$(cd "$WORK" && run_env python3 -I "$T/perf.py" "$TEST_BASH" "$SUBS" "$SPAY/heavy.json")
+check "subagents perf: 32 x 120 KB commands in ${perf_ms}ms (< $perf_max)" [ "${perf_ms:-9999}" -lt "$perf_max" ]
+srun "$SPAY/heavy.json"
+sgot h-00 "→ codex/gpt-6-astra ⏳2m"
+sgot h-01 "→ ssh ⏳2m"
+check "subagents heavy: nothing of the bodies on a row" sh -c "! grep -qE 'Ayse|Antlara|TC1' '$T/srows'"
 # The renderer and the classifier run isolated, like every python here.
 rm -f "$PWNED"
 erun "$SPAY/workers.json" "$TEST_BASH" "$SUBS"
@@ -3767,8 +3820,8 @@ check "run: bad --heartbeat is a usage error" [ "$arc" = 2 ]
 # Through a symlink on PATH (install.sh --link-bin): the helpers are found
 # beside the link's target.
 ln -s "$ARUN" "$RBIN/agentline-run"
-( cd "$WORK" && run_env AGENTLINE_TMP="$RSIDE" PATH="$RBIN:$PATH_F" "$TEST_BASH" "$RBIN/agentline-run" -- codex exec -m m2 > "$T/rout" 2>&1 )
-check "run: via a symlink" grep -qE '^[0-9]+ codex/m2$' "$T/rout"
+( cd "$WORK" && run_env AGENTLINE_TMP="$RSIDE" PATH="$RBIN:$PATH_F" "$TEST_BASH" "$RBIN/agentline-run" -- codex exec -m gpt-5.2 > "$T/rout" 2>&1 )
+check "run: via a symlink" grep -qE '^[0-9]+ codex/gpt-5\.2$' "$T/rout"
 rm -f "$RBIN/agentline-run"
 # Signals. exec, so $! is agentline-run itself.
 arun_bg() {

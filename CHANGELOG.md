@@ -12,7 +12,12 @@
   Workers recognised: codex, agy, a `claude -p` over ssh on the bayrak node,
   the local arb and JEV model servers, Hetzner-hosted Qwen and DeepSeek
   (see the README table). No command text, prompt or URL path is ever
-  shown. Rows fit the width Claude Code gives them and shed their least
+  shown. Heredoc bodies, quoted text and comments are never taken for
+  commands. A model name must have the shape of that worker's models and
+  carry no key prefix or path, or the worker is shown without one. Another
+  ssh host is plain `ssh`, never its name. Only a command's first 4 KB is
+  lexed, so 32 subagents running 120 KB commands still render in one tick
+  (they took 23 s). Rows fit the width Claude Code gives them and shed their least
   important fields first. A task it does not understand keeps Claude Code's
   own row. One python3 run renders every task: 16 subagents with 1 MB
   transcripts take about 60 ms. `bash install.sh --with-subagents` sets it,

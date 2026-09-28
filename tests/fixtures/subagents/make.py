@@ -194,6 +194,41 @@ for i in range(16):
 payload('perf', [task('p-%02d' % i) for i in range(16)])
 running('big', 'Bash', {'command': 'ssh bayrak claude -p x --model sonnet'}, pad=10 << 20)
 payload('big', [task('big')])
+# 32 pending commands of ~120 KB each (the most a 128 KB tail can hold): a
+# heredoc, an ssh + bash -c around one, and one long quoted argument. Only
+# their first few KB may cost anything.
+body = ('AyseYilmaz TC12345678901 Antlara_Q3 ' * 3400)[:118000]
+heavy = [
+    "cat > /w/notes.txt <<'EOF'\n" + body.replace(' ', '\n') + "\nEOF\ncodex exec -m gpt-6-astra x",
+    "ssh gpu1 bash -c 'cat <<EOF\n" + body + "\nEOF\n'",
+    'codex exec -m gpt-6-astra "' + body + '"',
+]
+for i in range(32):
+    running('h-%02d' % i, 'Bash', {'command': heavy[i % 3]})
+payload('heavy', [task('h-%02d' % i) for i in range(32)])
+
+# --- confidential text in a command: never on a row ---------------------------
+LEAK = {
+    'l-heredoc': "read -r -d '' V <<EOF\nAyseYilmaz-TC12345678901 x\nEOF\necho \"$V\"",
+    'l-colon': ": <<'X'\nAntlara_Q3_revenue_4.2M\ncodex exec -m gpt-6-astra\nX\ntrue",
+    'l-dash': 'cat <<-EOF >/w/f\n\tAyseYilmaz x\n\tEOF\n',
+    'l-two': 'cat <<A <<"B"\nAyseYilmaz\nA\nAntlara_Q3\nB\n',
+    'l-quote': "printf '%s\\n' 'x; AyseYilmaz; y' \"z && Antlara_Q3\"",
+    'l-open': "echo 'x; AyseYilmaz y",
+    'l-comment': 'true # x; AyseYilmaz y',
+    'l-key1': 'codex exec -m sk-ant-api03-AAAAAAAA x',
+    'l-key2': 'codex exec -m AKIAIOSFODNN7EXAMPLE x',
+    'l-key3': 'agy --model hf_AntlaraSecret x',
+    'l-path': 'codex exec -m /home/w/antlara/patients x',
+    'l-claude': 'claude -p x --model passw0rd-Hunter2',
+    'l-host': 'ssh antlara-prod-db.internal uptime',
+    'l-ip': 'ssh 10.1.2.3 uptime',
+    'l-curl': 'curl -m 30 https://inference.hetzner.com/v1/chat',
+    'l-prog': './sk-live-AntlaraKey --x',
+}
+for k, c in LEAK.items():
+    running(k, 'Bash', {'command': c})
+payload('leak', [task(k) for k in LEAK])
 
 # --- hostile session id / transcript path: nothing is read ---------------------
 payload('badsid', [task('w-codex')], session_id='../' + sid)
