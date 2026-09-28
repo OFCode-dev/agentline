@@ -52,6 +52,8 @@
 # parallel dispatch cannot lose entries, and an external agent that
 # registered its own run keeps its row past the end of the assistant's turn.
 
+# Its session state sits beside the registry, private like it (0600).
+umask 077
 HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)"
 # shellcheck source=./agentline-agent.sh
 . "$HOOK_DIR/agentline-agent.sh" 2>/dev/null || exit 0

@@ -167,7 +167,7 @@ Everything is optional — agentline works with zero configuration.
 | `AGENTLINE_USAGE_API` | unset | Set to `1` to fetch the Fable weekly share (`F:`) from `https://api.anthropic.com/api/oauth/usage` when the payload carries no per-model bucket. This is the **only** network call agentline can make, and only when you opt in. Uses the OAuth token from `.credentials.json` in your profile directory (`$CLAUDE_CONFIG_DIR`, default `~/.claude`); the token never leaves the python helper. The result is cached per profile, so two profiles never show each other's figure. Once the cache expires, only one of your open sessions makes the request, in the background so the render never waits on the network (the previous figure stays up meanwhile, for at most a minute past the TTL); it gives up after 20 s. On macOS the token lives in the Keychain rather than in `.credentials.json`, so `F:` stays hidden there |
 | `AGENTLINE_USAGE_TTL` | `300` | Seconds a fetched `/usage` result is reused before the endpoint is asked again |
 | `AGENTLINE_LOCAL` | `~/.claude/agentline/local.sh` | Your override file, sourced on every full render if it exists (see [FAQ](#faq)) |
-| `AGENTLINE_TMP` | `/tmp` | Directory for the files the optional hooks write (`claude_wordcount.txt`, `claude_agents.txt`). agentline and the hooks read the same variable, so set it for both — e.g. a per-user directory on a shared host |
+| `AGENTLINE_TMP` | private, see note | Directory for the files the optional hooks and `agentline-run` write (`claude_wordcount.txt`, `claude_agents.txt`). By default it belongs to you alone: `$XDG_RUNTIME_DIR/agentline` when that directory exists and is yours, else `${TMPDIR:-/tmp}/agentline-<uid>`. It is created mode 700 and used only when it is a real directory you own, and every file in it is mode 600. agentline and the writers resolve it by the same rule. If they run with different environments (a shell with another `TMPDIR`), set this for both |
 
 Set them in the `env` block of `~/.claude/settings.json` so Claude Code passes them to every render:
 
@@ -245,7 +245,7 @@ run on another host — and those used to be invisible: the bar showed the
 subagents and nothing else, so a run that took ten minutes looked like a hang.
 
 Any process can take a row. The contract is one file,
-`claude_agents.txt` in `$AGENTLINE_TMP` (default `/tmp`), one entry per line, `<epoch> <label>`; agentline
+`claude_agents.txt` in `$AGENTLINE_TMP` (default: your private directory, see [Configuration](#configuration)), mode 600, one entry per line, `<epoch> <label>`; agentline
 renders entries younger than five minutes. Write through the helper rather
 than appending by hand — it takes a lock, so parallel dispatch cannot lose an
 entry, and it replaces a row that already carries the same label instead of

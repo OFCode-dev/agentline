@@ -1227,15 +1227,43 @@ active_mcps=$(python3 -I -c "$_AL_PY" "$cwd")
 fi  # end of throttled host probes (part 1)
 [ -n "$_AL_DOCTOR" ] && _dt_mark probes:cpu,mem,git,mcp
 
-# Side files written by the optional hooks (hooks/*.sh) live in one shared
-# directory, /tmp unless $AGENTLINE_TMP names another. The hooks resolve the
-# same variable, so reader and writers always agree; a per-user or per-test
-# directory keeps two users on one host — or a test run — from reading each
-# other's counters. The agent registry also honours CLAUDE_AGENTS_FILE, the
-# override agentline-agent.sh has always accepted: the reader used to ignore
-# it, so a relocated registry silently emptied the 🤖 segment.
-AGENTLINE_TMP="${AGENTLINE_TMP:-/tmp}"
+# Side files written by the optional hooks (hooks/*.sh) live in one
+# directory, $AGENTLINE_TMP when set. The hooks resolve it by the same rule,
+# so reader and writers always agree. The agent registry also honours
+# CLAUDE_AGENTS_FILE, the override agentline-agent.sh has always accepted.
+#
+# The default is private to the user: $XDG_RUNTIME_DIR/agentline when that
+# directory is a real one of ours, else ${TMPDIR:-/tmp}/agentline-$EUID (the
+# cache directory, made 0700 above). It used to be /tmp itself, where
+# anyone on the host could read the registry — whose labels are Claude
+# subagent descriptions and the names of external work — and the word
+# counts. A default directory that fails the owner/symlink check is not
+# read at all. The files the previous release wrote, /tmp/claude_*.txt, are
+# still read for one release when they are ours, so an upgrade never blanks
+# the bar while an older hook is still running; the writers remove them.
+# All of it is tests and parameter expansion: no fork.
+_side_legacy=""
+if [ -z "${AGENTLINE_TMP-}" ]; then
+  if [ -n "${XDG_RUNTIME_DIR-}" ] && [ -d "$XDG_RUNTIME_DIR" ] && [ ! -L "$XDG_RUNTIME_DIR" ] && [ -O "$XDG_RUNTIME_DIR" ]; then
+    AGENTLINE_TMP="$XDG_RUNTIME_DIR/agentline"
+  else
+    AGENTLINE_TMP="${TMPDIR:-/tmp}/agentline-${EUID:-0}"
+  fi
+  [ -d "$AGENTLINE_TMP" ] && [ ! -L "$AGENTLINE_TMP" ] && [ -O "$AGENTLINE_TMP" ] || AGENTLINE_TMP=/nonexistent/agentline
+  _side_legacy="${_AGENTLINE_LEGACY_TMP:-/tmp}"
+fi
 AGENTS_FILE="${CLAUDE_AGENTS_FILE:-$AGENTLINE_TMP/claude_agents.txt}"
+# The legacy registry, only when no override is set and it is ours.
+_agents_legacy=""
+if [ -n "$_side_legacy" ] && [ -z "${CLAUDE_AGENTS_FILE-}" ] && [ -f "$_side_legacy/claude_agents.txt" ] \
+   && [ ! -L "$_side_legacy/claude_agents.txt" ] && [ -O "$_side_legacy/claude_agents.txt" ]; then
+  _agents_legacy="$_side_legacy/claude_agents.txt"
+fi
+WC_FILE="$AGENTLINE_TMP/claude_wordcount.txt"
+if [ ! -f "$WC_FILE" ] && [ -n "$_side_legacy" ] && [ -f "$_side_legacy/claude_wordcount.txt" ] \
+   && [ ! -L "$_side_legacy/claude_wordcount.txt" ] && [ -O "$_side_legacy/claude_wordcount.txt" ]; then
+  WC_FILE="$_side_legacy/claude_wordcount.txt"
+fi
 
 # Active agents (from hook-written file) — never throttled, see PROBE_VARS.
 # One awk does all of it, in the order the rows were registered (oldest
@@ -1257,7 +1285,10 @@ AGENTS_FILE="${CLAUDE_AGENTS_FILE:-$AGENTLINE_TMP/claude_agents.txt}"
 active_agents=""
 agents_done=""
 case "${AGENTLINE_AGENT_SHOW-}" in ''|*[!0-9]*|???*) _ag_show=4 ;; *) _ag_show=$(( 10#$AGENTLINE_AGENT_SHOW )) ;; esac
-if [ -f "$AGENTS_FILE" ]; then
+_ag_files=()
+[ -f "$AGENTS_FILE" ] && _ag_files=("$AGENTS_FILE")
+[ -n "$_agents_legacy" ] && _ag_files[${#_ag_files[@]}]="$_agents_legacy"
+if [ "${#_ag_files[@]}" -gt 0 ]; then
   active_agents=$(awk -v now="$_now_epoch" -v show="$_ag_show" -v us="$_US" '
     function cut(s) { if (length(s) > 25) s = substr(s, 1, 22) "..."; return s }
     {
@@ -1276,7 +1307,7 @@ if [ -f "$AGENTS_FILE" ]; then
       out = ""
       for (i = (nd > 2 ? nd - 2 : 0); i < nd; i++) out = out (out == "" ? "" : " · ") done[i]
       printf "%s%s%s", live, us, out
-    }' "$AGENTS_FILE")
+    }' "${_ag_files[@]}")
   agents_done="${active_agents#*"$_US"}"
   active_agents="${active_agents%%"$_US"*}"
 fi
@@ -2135,11 +2166,11 @@ _words_fmt() {  # _words_fmt <count> <var>: "%.1fk" from 1000, else "%d", as awk
   fi
   printf -v "$2" '%s' "$_v"
 }
-if [ -f "$AGENTLINE_TMP/claude_wordcount.txt" ]; then
+if [ -f "$WC_FILE" ]; then
   wi=""; wo=""; _wx=""
-  { IFS=$' \t' read -r wi wo _; IFS= read -r _wx && _wx=1; } 2>/dev/null < "$AGENTLINE_TMP/claude_wordcount.txt"
+  { IFS=$' \t' read -r wi wo _; IFS= read -r _wx && _wx=1; } 2>/dev/null < "$WC_FILE"
   if [ -n "$_wx" ]; then
-    wc_line=$(cat "$AGENTLINE_TMP/claude_wordcount.txt")
+    wc_line=$(cat "$WC_FILE")
     wi=$(echo "$wc_line" | awk '{print $1}')
     wo=$(echo "$wc_line" | awk '{print $2}')
   fi
@@ -3149,7 +3180,7 @@ _dt_why() {  # _dt_why <segment> — where its data comes from
     dur)      echo "payload cost.total_duration_ms" ;;
     tok_in)   echo "payload context_window.total_input_tokens" ;;
     tok_out)  echo "payload context_window.total_output_tokens" ;;
-    words)    echo "wordcount hook: $AGENTLINE_TMP/claude_wordcount.txt$([ -f "$AGENTLINE_TMP/claude_wordcount.txt" ] || echo ' (missing)')" ;;
+    words)    echo "wordcount hook: $WC_FILE$([ -f "$WC_FILE" ] || echo ' (missing)')" ;;
     lines)    echo "payload cost.total_lines_added / total_lines_removed" ;;
     cpu)      echo "probe: top" ;;
     mem)      [ "$OS" = Darwin ] && echo "probe: vm_stat + sysctl" || echo "probe: /proc/meminfo" ;;

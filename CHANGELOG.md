@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- The hook side files are private. `claude_agents.txt` and
+  `claude_wordcount.txt` used to sit in `/tmp`, readable by every user on
+  the host, and the registry's labels are Claude subagent descriptions and
+  the names of external work. The default directory is now
+  `$XDG_RUNTIME_DIR/agentline` when that is a directory of yours, else
+  `${TMPDIR:-/tmp}/agentline-<uid>`. It is created mode 700 and used only
+  when it is a real directory you own, and every file in it is written 600.
+  `AGENTLINE_TMP` and `CLAUDE_AGENTS_FILE` still override it. For this
+  release agentline also reads the old `/tmp/claude_*.txt`, when they are
+  yours, so an upgrade does not blank the bar. The writers move the old
+  registry's rows into the new file and remove the old files. If agentline
+  and a writer run with different environments (another `TMPDIR`), set
+  `AGENTLINE_TMP` for both.
 - Subagent rows. `agentline-subagents.sh` is a `subagentStatusLine`
   command: Claude Code's subagent panel gets one agentline row per
   subagent, with a status spinner or ✓/✗, the description, the model as

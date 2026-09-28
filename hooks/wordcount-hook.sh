@@ -8,8 +8,27 @@
 # the totals. Called by PostToolUse and Stop hooks via stdin JSON. Wire it up
 # with `bash install.sh --with-hooks` (see README).
 
-# Same directory agentline.sh reads from: /tmp unless $AGENTLINE_TMP is set.
-WCFILE="${AGENTLINE_TMP:-/tmp}/claude_wordcount.txt"
+# Same directory agentline.sh reads from, by the same rule: $AGENTLINE_TMP,
+# else one private to the user — $XDG_RUNTIME_DIR/agentline when that is a
+# real directory of ours, else ${TMPDIR:-/tmp}/agentline-$EUID — created
+# 0700 and written only when it is a directory we own, not a symlink. It
+# used to be /tmp, readable by everyone on the host. The file is 0600
+# (umask 077), and the one the previous release left in /tmp goes.
+umask 077
+legacy=""
+if [ -n "${AGENTLINE_TMP-}" ]; then
+  WCDIR="$AGENTLINE_TMP"
+else
+  if [ -n "${XDG_RUNTIME_DIR-}" ] && [ -d "$XDG_RUNTIME_DIR" ] && [ ! -L "$XDG_RUNTIME_DIR" ] && [ -O "$XDG_RUNTIME_DIR" ]; then
+    WCDIR="$XDG_RUNTIME_DIR/agentline"
+  else
+    WCDIR="${TMPDIR:-/tmp}/agentline-${EUID:-0}"
+  fi
+  [ -d "$WCDIR" ] || mkdir -m 700 "$WCDIR" 2>/dev/null
+  { [ -d "$WCDIR" ] && [ ! -L "$WCDIR" ] && [ -O "$WCDIR" ]; } || exit 0
+  legacy="${_AGENTLINE_LEGACY_TMP:-/tmp}/claude_wordcount.txt"
+fi
+WCFILE="$WCDIR/claude_wordcount.txt"
 
 input=$(cat)
 # Read into a variable and run with -c rather than written as a heredoc
@@ -51,3 +70,8 @@ counts=$(PAYLOAD="$input" python3 -I -c "$_WC_PY")
 
 # Write totals (overwrite each time — reflects the full session transcript)
 echo "${counts:-0 0}" > "$WCFILE"
+# A file an earlier release wrote at 0644 keeps its mode through `>`.
+chmod 600 "$WCFILE" 2>/dev/null
+if [ -n "$legacy" ] && [ -f "$legacy" ] && [ ! -L "$legacy" ] && [ -O "$legacy" ]; then
+  rm -f "$legacy"
+fi

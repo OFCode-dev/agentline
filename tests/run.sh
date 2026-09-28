@@ -2428,6 +2428,60 @@ prepare minimal "$PAY/minimal.json"
 render "$PAY/minimal.json" 120 AGENTLINE_NOW= CLAUDE_AGENTS_FILE="$T/custom-agents.txt"
 check "reader honours CLAUDE_AGENTS_FILE" grep -q 'relocated' "$T/out"
 
+# --- The default side-file directory is the user's own (review of J9, J9b) ---
+# Not /tmp: $XDG_RUNTIME_DIR/agentline, else ${TMPDIR}/agentline-$EUID, 0700,
+# files 0600. The previous release's /tmp files (here $LEG) are still read
+# while they are ours, and the writers fold them in and remove them.
+DTMP="$T/dtmp"; XDG="$T/xdg"; LEG="$T/legacy"
+mkdir -p "$DTMP" "$LEG"; mkdir -m 700 "$XDG"
+DDIR="$DTMP/agentline-${EUID:-0}"
+side_env() { env -i PATH="$PATH_F" HOME="$HOME_F" TMPDIR="$DTMP" _AGENTLINE_LEGACY_TMP="$LEG" "$@"; }
+mode_of() { ls -ld "$1" 2>/dev/null | cut -c1-10; }
+side_env "$TEST_BASH" "$AGENT" add "private run"
+check "default registry: under \$TMPDIR/agentline-\$EUID" grep -q 'private run' "$DDIR/claude_agents.txt"
+check "default registry: dir 0700 ($(mode_of "$DDIR"))" [ "$(mode_of "$DDIR")" = drwx------ ]
+check "default registry: file 0600 ($(mode_of "$DDIR/claude_agents.txt"))" [ "$(mode_of "$DDIR/claude_agents.txt")" = -rw------- ]
+check "default registry: lock 0600" [ "$(mode_of "$DDIR/claude_agents.txt.lock")" = -rw------- ]
+check "default registry: nothing in /tmp's place" [ ! -e "$LEG/claude_agents.txt" ]
+side_env XDG_RUNTIME_DIR="$XDG" "$TEST_BASH" "$AGENT" add "xdg run"
+check "default registry: \$XDG_RUNTIME_DIR/agentline first" grep -q 'xdg run' "$XDG/agentline/claude_agents.txt"
+check "default registry: xdg dir 0700" [ "$(mode_of "$XDG/agentline")" = drwx------ ]
+echo "{\"transcript_path\":\"$T/transcript.jsonl\"}" | side_env "$TEST_BASH" "$ROOT/hooks/wordcount-hook.sh"
+check "default wordcount: private dir, 0600" [ "$(cat "$DDIR/claude_wordcount.txt" 2>/dev/null)" = "3 2" -a "$(mode_of "$DDIR/claude_wordcount.txt")" = -rw------- ]
+# A directory at the default name that is a symlink is not written through.
+rm -rf "$DDIR"; mkdir -p "$T/elsewhere"; ln -s "$T/elsewhere" "$DDIR"
+side_env "$TEST_BASH" "$AGENT" add "via link" 2> "$T/serr"
+check "default registry: a symlinked dir is refused" [ ! -e "$T/elsewhere/claude_agents.txt" ]
+check "default registry: and said so" grep -q 'not a directory of yours' "$T/serr"
+echo '{}' | side_env "$TEST_BASH" "$ROOT/hooks/wordcount-hook.sh"
+check "default wordcount: a symlinked dir is refused" [ ! -e "$T/elsewhere/claude_wordcount.txt" ]
+rm -f "$DDIR"
+# The upgrade: rows in the legacy file are shown, then moved and removed.
+printf '%s legacy run\n' "$(date +%s)" > "$LEG/claude_agents.txt"; chmod 644 "$LEG/claude_agents.txt"
+printf '7123 9456\n' > "$LEG/claude_wordcount.txt"
+prepare minimal "$PAY/minimal.json"
+DREN="AGENTLINE_NOW= AGENTLINE_TMP= AGENTLINE_CACHE_TTL=0 TMPDIR=$DTMP _AGENTLINE_LEGACY_TMP=$LEG"
+# shellcheck disable=SC2086
+render "$PAY/minimal.json" 300 $DREN
+check "reader: the legacy registry is still shown" grep -q 'legacy run' "$T/out"
+# shellcheck disable=SC2086
+render "$PAY/minimal.json" 300 $DREN AGENTLINE_LAYOUT=words
+check "reader: the legacy word count is still shown" grep -qF '9.5k' "$T/out"
+mkdir -m 700 "$DDIR"
+side_env "$TEST_BASH" "$AGENT" add "new run"
+check "writer: legacy rows moved" sh -c "grep -q 'legacy run' '$DDIR/claude_agents.txt' && grep -q 'new run' '$DDIR/claude_agents.txt'"
+check "writer: legacy registry removed" [ ! -e "$LEG/claude_agents.txt" ]
+echo "{\"transcript_path\":\"$T/transcript.jsonl\"}" | side_env "$TEST_BASH" "$ROOT/hooks/wordcount-hook.sh"
+check "writer: legacy word count removed" [ ! -e "$LEG/claude_wordcount.txt" ]
+# shellcheck disable=SC2086
+render "$PAY/minimal.json" 300 $DREN
+check "reader: the private registry is shown" grep -q 'new run' "$T/out"
+# An override still wins, and is not treated as legacy.
+printf '%s mine\n' "$(date +%s)" > "$LEG/claude_agents.txt"
+env -i PATH="$PATH_F" HOME="$HOME_F" AGENTLINE_TMP="$LEG" _AGENTLINE_LEGACY_TMP="$LEG" "$TEST_BASH" "$AGENT" add "also mine"
+check "AGENTLINE_TMP=/tmp-like dir: its file is kept" sh -c "grep -q ' mine\$' '$LEG/claude_agents.txt' && grep -q 'also mine' '$LEG/claude_agents.txt'"
+rm -rf "$DTMP" "$LEG" "$XDG"
+
 # --- Subagent lifecycle (hook_event_name dispatch) ---------------------------
 # PreToolUse queues the dispatch's description, SubagentStart binds it to the
 # agent id, SubagentStop removes that agent alone and leaves a ✓ row, Stop

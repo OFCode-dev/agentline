@@ -50,7 +50,30 @@
 # pruned after a minute, and it is the first to go when the cap is reached,
 # so a burst of finished agents can never push a running one out.
 
-AGENTLINE_AGENT_FILE="${CLAUDE_AGENTS_FILE:-${AGENTLINE_TMP:-/tmp}/claude_agents.txt}"
+# The side-file directory, by agentline.sh's rule. The default used to be
+# /tmp itself, where every user on the host could read the labels — Claude
+# subagent descriptions, the names of external work. Now it is the user's
+# own: $XDG_RUNTIME_DIR/agentline when that is a real directory of ours,
+# else ${TMPDIR:-/tmp}/agentline-$EUID, created 0700 and used only when it
+# is a directory (not a symlink) we own — the trusted cache-dir rule of
+# agentline.sh; anything else and nothing is written. Every file is written
+# 0600 under umask 077. The registry the previous release left in /tmp is
+# merged into the new one on the first write, then removed (only our own).
+AGENTLINE_AGENT_DIR=""     # set: the private default, created and checked
+AGENTLINE_AGENT_LEGACY=""  # set: the previous release's /tmp registry
+if [ -n "${CLAUDE_AGENTS_FILE-}" ]; then
+  AGENTLINE_AGENT_FILE="$CLAUDE_AGENTS_FILE"
+elif [ -n "${AGENTLINE_TMP-}" ]; then
+  AGENTLINE_AGENT_FILE="$AGENTLINE_TMP/claude_agents.txt"
+else
+  if [ -n "${XDG_RUNTIME_DIR-}" ] && [ -d "$XDG_RUNTIME_DIR" ] && [ ! -L "$XDG_RUNTIME_DIR" ] && [ -O "$XDG_RUNTIME_DIR" ]; then
+    AGENTLINE_AGENT_DIR="$XDG_RUNTIME_DIR/agentline"
+  else
+    AGENTLINE_AGENT_DIR="${TMPDIR:-/tmp}/agentline-${EUID:-0}"
+  fi
+  AGENTLINE_AGENT_FILE="$AGENTLINE_AGENT_DIR/claude_agents.txt"
+  AGENTLINE_AGENT_LEGACY="${_AGENTLINE_LEGACY_TMP:-/tmp}/claude_agents.txt"
+fi
 AGENTLINE_AGENT_WINDOW="${AGENTLINE_AGENT_WINDOW:-300}"
 AGENTLINE_AGENT_CAP="${AGENTLINE_AGENT_CAP:-32}"
 
@@ -89,7 +112,17 @@ agentline_agent_edit() {
   [ $# -gt 0 ] || return 1
 
   local file="$AGENTLINE_AGENT_FILE"
-  mkdir -p "$(dirname "$file")" 2>/dev/null || return 1
+  if [ -n "$AGENTLINE_AGENT_DIR" ]; then
+    # Not -p: the parent ($XDG_RUNTIME_DIR, the temp dir) exists, and -m
+    # sets the mode at creation, with no window where it is wider.
+    [ -d "$AGENTLINE_AGENT_DIR" ] || mkdir -m 700 "$AGENTLINE_AGENT_DIR" 2>/dev/null
+    if [ ! -d "$AGENTLINE_AGENT_DIR" ] || [ -L "$AGENTLINE_AGENT_DIR" ] || [ ! -O "$AGENTLINE_AGENT_DIR" ]; then
+      echo "agentline-agent: $AGENTLINE_AGENT_DIR is not a directory of yours, skipped" >&2
+      return 0
+    fi
+  else
+    mkdir -p "$(dirname "$file")" 2>/dev/null || return 1
+  fi
 
   # The whole read-modify-write is one python3 run holding flock(2) on
   # <file>.lock. It replaced a mkdir lock whose stale-lock breaking could not
@@ -112,14 +145,17 @@ agentline_agent_edit() {
   # -I (isolated): this runs in whatever directory the caller is in (a hook:
   # the project), and plain `python3 -` would import an os.py or json.py
   # sitting there instead of the standard one.
-  python3 -I - "$file" "$AGENTLINE_AGENT_WINDOW" "$AGENTLINE_AGENT_CAP" "$ttl" "$@" <<'PYEOF'
+  # umask 077 in a subshell: the caller's umask is not ours to change (the
+  # tracker hook sources this file).
+  ( umask 077
+  python3 -I - "$file" "$AGENTLINE_AGENT_WINDOW" "$AGENTLINE_AGENT_CAP" "$ttl" "$AGENTLINE_AGENT_LEGACY" "$@" <<'PYEOF'
 # Only what every write needs is imported up front: this runs on every
 # subagent start and stop and every heartbeat, and glob, shutil and tempfile
 # together were most of its start-up (a write took 44 ms against 25 ms for
 # the mkdir lock). The sweep imports its own modules when it has work.
 import errno, fcntl, os, re, sys, time
 
-path, win, cap, ttl = sys.argv[1:5]
+path, win, cap, ttl, legacy = sys.argv[1:6]
 win = int(win) if win.isdigit() else 300
 cap = int(cap) if cap.isdigit() else 32
 ttl = int(ttl) if ttl.isdigit() else 0
@@ -127,7 +163,7 @@ DONE, DONE_WIN = '✓', 60  # a finished agent's row, and how long it is kept
 READER_WIN = 300          # the window agentline.sh shows rows for
 # One row per line, so a label can never smuggle in a second one. An op is
 # its sign and a label; one without a label means nothing.
-ops = [(o[0], re.sub(r'[\r\n]+', ' ', o[1:])) for o in sys.argv[5:]
+ops = [(o[0], re.sub(r'[\r\n]+', ' ', o[1:])) for o in sys.argv[6:]
        if len(o) > 1 and o[0] in '+-']
 
 def skip(why):
@@ -144,7 +180,7 @@ if not ops:
 # O_NOFOLLOW: a symlink planted at the lock's name in a shared /tmp is refused
 # rather than followed.
 try:
-    fd = os.open(path + '.lock', os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o644)
+    fd = os.open(path + '.lock', os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
 except OSError as e:
     skip(f"cannot open the lock ({e.strerror})")
 
@@ -166,11 +202,37 @@ while True:
 
 now = int(time.time())
 rows = []
-try:
-    with open(path, 'rb') as f:
-        data = f.read().decode('utf-8', 'surrogateescape')
-except OSError:
-    data = ''
+def read_rows(p):
+    try:
+        rfd = os.open(p, os.O_RDONLY | os.O_NOFOLLOW)
+    except OSError:
+        return ''
+    with os.fdopen(rfd, 'rb') as f:
+        return f.read().decode('utf-8', 'surrogateescape')
+data = read_rows(path)
+# The previous release's registry in /tmp: its live rows move here, and the
+# file goes — ours only (a regular file, not a link), and only while no
+# writer of that release holds its lock. The lock file itself stays: it
+# holds nothing, and unlinking a flock file lets the next writer lock a new
+# inode and walk past a holder of the old one.
+moved = False
+if legacy and legacy != path:
+    try:
+        st = os.lstat(legacy)
+        if st.st_uid == os.getuid() and (st.st_mode & 0o170000) == 0o100000:
+            try:
+                lfd = os.open(legacy + '.lock', os.O_RDWR | os.O_NOFOLLOW)
+            except FileNotFoundError:
+                lfd = None  # no lock file: no writer of that release can hold it
+            try:
+                if lfd is not None:
+                    fcntl.flock(lfd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                data = read_rows(legacy) + '\n' + data
+                moved = True
+            except OSError:
+                pass  # busy: moved on a later write
+    except OSError:
+        pass
 for line in data.split('\n'):
     m = re.match(r'([0-9]+)[ \t]+(.*)$', line)
     if not m:
@@ -181,6 +243,10 @@ for line in data.split('\n'):
     if rest.startswith(DONE) and now - ts >= DONE_WIN:
         continue
     rows.append((rest, line))
+if moved:
+    # A label in both files: the newer file's row wins (it comes later).
+    last = {r[0]: i for i, r in enumerate(rows)}
+    rows = [r for i, r in enumerate(rows) if last[r[0]] == i]
 # The back-date is taken against the shorter of the two windows, so a row
 # with a ttl leaves the reader's view and this file's pruning alike after ttl
 # seconds, whatever AGENTLINE_AGENT_WINDOW says.
@@ -206,13 +272,20 @@ while len(rows) > max(cap, 0):
 tmp = None
 try:
     name = f"{path}.{os.getpid()}.{os.urandom(4).hex()}"
-    tfd = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
+    tfd = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
     tmp = name
     with os.fdopen(tfd, 'wb') as f:
         f.write(''.join(r + '\n' for r in rows).encode('utf-8', 'surrogateescape'))
-    os.chmod(tmp, 0o644)
+    # 0600 whatever the umask was: the labels are nobody else's business. A
+    # registry an earlier release left at 0644 is replaced by this one.
+    os.chmod(tmp, 0o600)
     os.replace(tmp, path)
     tmp = None
+    if moved:
+        try:
+            os.unlink(legacy)
+        except OSError:
+            pass
 except OSError as e:
     skip(f"cannot write the registry ({e.strerror})")
 finally:
@@ -257,6 +330,7 @@ if os.path.lexists(path + '.d') or os.fstat(fd).st_size == 0:
         except OSError:
             pass
 PYEOF
+  )
 }
 
 # Run as a command when executed directly; stay quiet when sourced.
