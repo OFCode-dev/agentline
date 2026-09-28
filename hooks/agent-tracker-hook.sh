@@ -81,6 +81,33 @@ def one_line(s, n):
     # description starting with one would show as done while running.
     return re.sub(r'^[\s✓]+', '', s)[:n]
 
+# The secret heuristic of agentline-subagents.sh, the same definition (the
+# test suite compares the copies; see the reasoning there). A description
+# is Claude Code's own UI text, and it is shown — but on line 3 as well as
+# in Claude Code's panel, so one that looks like it holds a secret is shown
+# as "agent", and a subagent type as "*" (it is matched, never shown). The
+# registry helper checks again: it is the boundary for every writer. The
+# whole description is checked, before it is cut to the row's 28 cells.
+SECRET_KEY = re.compile(r'(?:^|[^A-Za-z0-9])(?:sk-|sk_|rk_|gh[pousr]_|github_pat_|glpat-|xox[a-z]-|hf_'
+                        r'|nvapi-|aiza|ya29\.|npm_|pypi-)|(?:akia|asia)[a-z0-9]{12}|eyj[a-z0-9_-]{8}'
+                        r'|bearer|basic |token|secret|passw|apikey|api_key|[=:]\S{8}|[A-Za-z0-9_-]{24}', re.I)
+SECRET_PART = re.compile(r'[-._/]')
+
+def secretish(s):
+    if not isinstance(s, str) or SECRET_KEY.search(s):
+        return True
+    for t in s.split():
+        if len(t) >= 16 and re.search('[A-Za-z]', t) and re.search('[0-9]', t) and \
+                any(len(p) > 5 and re.search('[A-Za-z]', p) and re.search('[0-9]', p)
+                    for p in SECRET_PART.split(t)):
+            return True
+    return False
+# (end of the secret heuristic)
+
+def shown(s, generic, n):
+    s = one_line(s, 4096)
+    return (s[:n] if not secretish(s) else generic) if s else ''
+
 def session(path, edit):
     # edit(queue, ids) -> the registry edit; the state is saved when changed.
     # The lock is a separate file, never unlinked: removing a flock file that
@@ -169,14 +196,14 @@ try:
         # 'Task' in earlier ones. No subagent_type means the general-purpose
         # agent, which is the agent_type its SubagentStart then reports.
         inp = d.get('tool_input') if isinstance(d.get('tool_input'), dict) else {}
-        label = one_line(inp.get('description') or inp.get('subagent_type') or '', 28)
-        atype = one_line(inp.get('subagent_type') or '', 64) or 'general-purpose'
+        label = shown(inp.get('description') or inp.get('subagent_type') or '', 'agent', 28)
+        atype = shown(inp.get('subagent_type') or '', '*', 64) or 'general-purpose'
         if tool in ('Agent', 'Task') and label:
             def edit(queue, ids):
                 queue.append([atype, label, now])
                 return [str(QUEUE_TTL), '+' + label]
     elif event == 'SubagentStart':
-        atype = one_line(d.get('agent_type') or '', 64)
+        atype = shown(d.get('agent_type') or '', '*', 64)
         if atype and aid:
             def edit(queue, ids):
                 # The oldest dispatch of this type; a case-only difference in

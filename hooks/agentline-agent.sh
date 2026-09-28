@@ -138,13 +138,10 @@ agentline_agent_edit() {
   # — and python3 is already what the tracker hook parses its payload with.
   # flock(1) takes the same flock(2) lock, so the flock-based writers of
   # earlier releases (they used this very file) exclude and are excluded.
+  # Without python3 the labels are not named in the note: the secret check
+  # that would clear them for a diagnostic is python3's.
   if ! command -v python3 >/dev/null 2>&1; then
-    local what="" o
-    for o in "$@"; do
-      o="${o//[[:cntrl:]]/?}"  # a label's ESC must not reach the terminal
-      case "$o" in +*) what="${what:+$what, }add '${o#+}'" ;; *) what="${what:+$what, }remove '${o#-}'" ;; esac
-    done
-    echo "agentline-agent: python3 not found, skipped $what" >&2
+    printf '%s\n' "agentline-agent: python3 not found, skipped $# registry edit(s)" >&2
     return 0
   fi
   # -I (isolated): this runs in whatever directory the caller is in (a hook:
@@ -182,8 +179,47 @@ CTRL = re.compile('[\x00-\x08\x0b\x0c\x0e-\x1e\x7f-\x9f‎‏‪-‮⁦-⁩]')
 def clean(s):
     return CTRL.sub('', re.sub(r'[\t\r\n]+', ' ', s)).strip()
 
+# The secret heuristic of agentline-subagents.sh, the same definition (the
+# test suite compares the copies; see the reasoning there). It is applied
+# here, at the registry boundary, because anything may call this helper —
+# agentline-run and the tracker hook check first, a script calling it
+# directly does not.
+SECRET_KEY = re.compile(r'(?:^|[^A-Za-z0-9])(?:sk-|sk_|rk_|gh[pousr]_|github_pat_|glpat-|xox[a-z]-|hf_'
+                        r'|nvapi-|aiza|ya29\.|npm_|pypi-)|(?:akia|asia)[a-z0-9]{12}|eyj[a-z0-9_-]{8}'
+                        r'|bearer|basic |token|secret|passw|apikey|api_key|[=:]\S{8}|[A-Za-z0-9_-]{24}', re.I)
+SECRET_PART = re.compile(r'[-._/]')
+
+def secretish(s):
+    if not isinstance(s, str) or SECRET_KEY.search(s):
+        return True
+    for t in s.split():
+        if len(t) >= 16 and re.search('[A-Za-z]', t) and re.search('[0-9]', t) and \
+                any(len(p) > 5 and re.search('[A-Za-z]', p) and re.search('[0-9]', p)
+                    for p in SECRET_PART.split(t)):
+            return True
+    return False
+# (end of the secret heuristic)
+
+# A stored label is [✓]TEXT[ #ID][\x1fPID]: the finished mark, the text a
+# reader shows, the tracker's agent id (six of [A-Za-z0-9_-]) and
+# agentline-run's run id. TEXT that looks like a secret is stored as the
+# generic word — "run" for a run, "agent" for anything else — and the rest
+# is kept, so the rows of two such runs stay two rows, and a remove finds
+# the row its add wrote (the same label maps the same way). A \x1f not
+# followed by a plain pid is TEXT too, and checked with it: nothing past a
+# separator is kept unchecked. TEXT is cut to 40 characters.
+KEY = re.compile(r'(.*?)((?: #[A-Za-z0-9_-]{1,6})?)((?:\x1f[0-9]{1,10})?)', re.S)
+
+def guard(label):
+    done = label.startswith(DONE)
+    m = KEY.fullmatch(label[1:] if done else label)
+    text, tag, run = m.group(1).replace('\x1f', ' ').strip(), m.group(2), m.group(3)
+    if not text or secretish(text):
+        text = 'run' if run else 'agent'
+    return (DONE if done else '') + text[:40].rstrip() + tag + run
+
 ops = [(o[0], clean(o[1:])) for o in sys.argv[8:] if len(o) > 1 and o[0] in '+-']
-ops = [(s, l) for s, l in ops if l]
+ops = [(s, guard(l)) for s, l in ops if l]
 
 def esc(s):
     # Untrusted text in a diagnostic (a label, a path from the environment)
@@ -309,7 +345,11 @@ for line in lines:
         continue
     if rest.startswith(DONE) and now - ts >= DONE_WIN:
         continue
-    rows.append((rest, line))
+    # A row already stored goes through the same boundary: one an earlier
+    # release wrote (here, or in the /tmp registry being merged) is
+    # rewritten as this release would have written it.
+    rest = guard(clean(rest))
+    rows.append((rest, f"{ts} {rest}"))
 if moved:
     # A label in both files: the newer file's row wins (it comes later).
     last = {r[0]: i for i, r in enumerate(rows)}
@@ -430,16 +470,20 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
   op="${1:-}"
   [ $# -gt 0 ] && shift
   label="$*"
+  # printf, never echo: under xpg_echo echo would turn a \033 spelled out
+  # in the script's own name into an ESC.
+  me="${0##*/}"
+  me="${me//[[:cntrl:]]/?}"
   case "$op" in
     add|remove)
       if [ -z "$label" ]; then
-        echo "usage: ${0##*/} $op <label>" >&2
+        printf '%s\n' "usage: $me $op <label>" >&2
         exit 2
       fi
       agentline_agent "$op" "$label"
       ;;
     *)
-      echo "usage: ${0##*/} add|remove <label>" >&2
+      printf '%s\n' "usage: $me add|remove <label>" >&2
       exit 2
       ;;
   esac

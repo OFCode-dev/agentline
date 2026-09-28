@@ -131,8 +131,15 @@ running('t-grep', 'Grep', {'pattern': 'SECRETPAT'})
 running('t-agent', 'Agent', {'subagent_type': 'Explore', 'prompt': 'SECRETPROMPT'})
 running('t-mcp', 'mcp__github__create_issue', {'title': 'SECRETTITLE'})
 running('t-multi', 'Bash', {'command': 'agy --model gemini-3-pro x'}, extra=[('Read', {'file_path': '/w/a.py'})])
-running('t-esc', 'Read', {'file_path': '/w/\x1b[31mred\u009b2J\\evil.py'})
+running('t-esc', 'Read', {'file_path': '/w/\x1b[31mr\u009b2J\\e.py'})
 running('t-wf', 'Bash', {'command': 'codex exec -m gpt-6-astra x'}, where=wf)
+# Identifiers that look like secrets (J9d): the tool's generic word, never
+# the value.
+running('t-agent-secret', 'Agent', {'subagent_type': 'hunter2xyzabc1234567'})
+running('t-mcp-secret', 'mcp__sk-ant-api03-xxxx__query', {})
+running('t-tool-secret', 'hunter2xyzabc1234567', {})
+running('t-read-secret', 'Read', {'file_path': '/w/ghp_abcdefgh1234.txt'})
+running('t-bash-secret', 'Bash', {'command': 'PASSWORD=${X:-x;python3 Alice.py;}'})
 finished('t-done')
 # A symlink at the transcript's name — to a real transcript — is not read.
 running('t-symtarget', 'Bash', {'command': 'codex exec -m gpt-6-astra x'})
@@ -141,7 +148,9 @@ os.symlink(os.path.join(sub, 'agent-t-symtarget.jsonl'), os.path.join(sub, 'agen
 os.mkfifo(os.path.join(sub, 'agent-t-fifo.jsonl'))
 payload('tools', [task(a) for a in ('t-read', 't-edit', 't-webfetch', 't-websearch', 't-grep',
                                     't-agent', 't-mcp', 't-multi', 't-esc', 't-wf', 't-done',
-                                    't-sym', 't-fifo', 't-missing')])
+                                    't-sym', 't-fifo', 't-missing', 't-agent-secret',
+                                    't-mcp-secret', 't-tool-secret', 't-read-secret',
+                                    't-bash-secret')])
 
 # --- task shapes ----------------------------------------------------------
 finished('s-completed', end_ago=40)

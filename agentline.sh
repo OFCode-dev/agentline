@@ -1271,10 +1271,15 @@ if [ -z "${AGENTLINE_TMP-}" ]; then
   _side_legacy="${_AGENTLINE_LEGACY_TMP:-/tmp}"
 fi
 AGENTS_FILE="${CLAUDE_AGENTS_FILE:-$AGENTLINE_TMP/claude_agents.txt}"
-# The legacy registry, only when no override is set and it is ours.
+# The legacy registry, only when no override is set and it is ours — and
+# only from a directory where nobody else can swap it between this test and
+# the read: one of ours, or a sticky one (/tmp), where a file of ours can be
+# renamed or replaced by us alone. A world-writable /tmp without the sticky
+# bit is skipped whole.
 _agents_legacy=""
 if [ -n "$_side_legacy" ] && [ -z "${CLAUDE_AGENTS_FILE-}" ] && [ -f "$_side_legacy/claude_agents.txt" ] \
-   && [ ! -L "$_side_legacy/claude_agents.txt" ] && [ -O "$_side_legacy/claude_agents.txt" ]; then
+   && [ ! -L "$_side_legacy/claude_agents.txt" ] && [ -O "$_side_legacy/claude_agents.txt" ] \
+   && { [ -O "$_side_legacy" ] || [ -k "$_side_legacy" ]; }; then
   _agents_legacy="$_side_legacy/claude_agents.txt"
 fi
 WC_FILE="$AGENTLINE_TMP/claude_wordcount.txt"
@@ -1303,12 +1308,19 @@ fi
 active_agents=""
 agents_done=""
 case "${AGENTLINE_AGENT_SHOW-}" in ''|*[!0-9]*|???*) _ag_show=4 ;; *) _ag_show=$(( 10#$AGENTLINE_AGENT_SHOW )) ;; esac
+# Only a regular file of ours, not a symlink, like the legacy one: -f alone
+# refuses a FIFO (which would hang awk's open, and so the render, every
+# second) but follows a link to anyone's file, and a CLAUDE_AGENTS_FILE may
+# sit in a directory others write to. The tests are builtins (no fork). awk
+# reads at most 512 rows (the writers keep 32): a registry grown by someone
+# else's hand costs no more than that.
 _ag_files=()
-[ -f "$AGENTS_FILE" ] && _ag_files=("$AGENTS_FILE")
+[ -f "$AGENTS_FILE" ] && [ ! -L "$AGENTS_FILE" ] && [ -O "$AGENTS_FILE" ] && _ag_files=("$AGENTS_FILE")
 [ -n "$_agents_legacy" ] && _ag_files[${#_ag_files[@]}]="$_agents_legacy"
 if [ "${#_ag_files[@]}" -gt 0 ]; then
   active_agents=$(awk -v now="$_now_epoch" -v show="$_ag_show" -v us="$_US" '
     function cut(s) { if (length(s) > 25) s = substr(s, 1, 22) "..."; return s }
+    NR > 512 { exit }
     {
       age = now - $1
       if ($1 !~ /^[0-9]+$/ || age < 0) next

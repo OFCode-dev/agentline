@@ -2782,6 +2782,71 @@ render "$PAY/minimal.json" 200 AGENTLINE_AGENT_SHOW=junk
 normalize "$T/out" "$T/got"
 check "reader: bad AGENTLINE_AGENT_SHOW falls back to 4" grep -qF '· +2 ·' "$T/got"
 rm -f "$AF"
+# The reader reads a regular file of ours only, never through a symlink, and
+# at most 512 rows of it (review of J9c, stage J9d).
+prepare minimal "$PAY/minimal.json"
+printf '%s linked row\n' "$TNOW" > "$T/linked_agents.txt"; ln -s "$T/linked_agents.txt" "$AF"
+render "$PAY/minimal.json" 200
+check "reader: a symlinked registry is not read" sh -c "! grep -q 'linked row' '$T/out'"
+rm -f "$AF"
+prepare minimal "$PAY/minimal.json"
+i=0; while [ "$i" -lt 600 ]; do printf '%s r%s\n' "$TNOW" "$i"; i=$((i + 1)); done > "$AF"
+render "$PAY/minimal.json" 200; normalize "$T/out" "$T/got"
+check "reader: at most 512 rows are read (+508 of 596 more)" grep -qF 'r3 · +508' "$T/got"
+rm -f "$AF"
+
+# --- The secret heuristic at the registry boundary (J9d) ----------------------
+# One definition, in three programs: agentline-subagents.sh, the registry
+# helper and the tracker hook. The copies must not drift.
+heur() { sed -n '/^SECRET_KEY = /,/^# (end of the secret heuristic)/p' "$1"; }
+heur "$ROOT/agentline-subagents.sh" > "$T/heur.subs"
+check "heuristic: the classifier has it" [ -s "$T/heur.subs" ]
+check "heuristic: the registry helper's copy is the same" sh -c "sed -n '/^SECRET_KEY = /,/^# (end of the secret heuristic)/p' '$AGENT' | cmp -s - '$T/heur.subs'"
+check "heuristic: the tracker hook's copy is the same" sh -c "sed -n '/^SECRET_KEY = /,/^# (end of the secret heuristic)/p' '$ROOT/hooks/agent-tracker-hook.sh' | cmp -s - '$T/heur.subs'"
+# The helper applies it itself: a direct call cannot store a secret. The
+# text is replaced whole by "agent" ("run" for an agentline-run key); the
+# finished mark, the tracker's #id and the run's pid are kept, so a remove
+# still finds its row.
+rm -f "$SIDE"/claude_*
+hook_env "$TEST_BASH" "$AGENT" add 'Bearer abcdefghijklmnopqrstuvwxyz'
+check "helper: a Bearer label is stored as 'agent'" row_is agent
+check "helper: ... and the credential nowhere" sh -c "! grep -q abcdefghij '$AF'"
+hook_env "$TEST_BASH" "$AGENT" add "$(printf 'hunter2xyzabc1234567\0374242')"
+check "helper: a secret run key keeps its pid" sh -c "sed 's/^[0-9]* //' '$AF' | grep -qx \"\$(printf 'run\\0374242')\""
+hook_env "$TEST_BASH" "$AGENT" add "$(printf 'plain\037sk-live-abcdefgh')"
+check "helper: text past a separator is checked as text" sh -c "! grep -q 'sk-live' '$AF' && sed 's/^[0-9]* //' '$AF' | grep -qx agent"
+hook_env "$TEST_BASH" "$AGENT" add 'password=hunter2 #abc123'
+check "helper: a tracker #id is kept" row_is 'agent #abc123'
+hook_env "$TEST_BASH" "$AGENT" add '✓token sk-abc'
+check "helper: a finished row keeps its mark" row_is '✓agent'
+hook_env "$TEST_BASH" "$AGENT" remove 'Bearer abcdefghijklmnopqrstuvwxyz'
+check "helper: remove finds the row its add wrote" sh -c "! sed 's/^[0-9]* //' '$AF' | grep -qx agent"
+hook_env "$TEST_BASH" "$AGENT" add 'nightly eval'
+check "helper: a plain label is kept" row_is 'nightly eval'
+hook_env "$TEST_BASH" "$AGENT" add "$(printf 'word %.0s' $(seq 1 12))"
+check "helper: a label is cut to 40" sh -c "sed 's/^[0-9]* //' '$AF' | awk 'length(\$0) > 40 { bad = 1 } END { exit bad }'"
+# A row already in the file (an earlier release wrote it) is rewritten.
+printf '%s api_key: abcdefghijkl\n' "$(date +%s)" >> "$AF"
+hook_env "$TEST_BASH" "$AGENT" add 'another'
+check "helper: a stored secret row is rewritten" sh -c "! grep -q abcdefghijkl '$AF'"
+# The diagnostics carry the cleaned labels only (here: no python3).
+mkdir -p "$T/nopy"; for b in bash sh env cat sed mkdir; do ln -sf "$(command -v "$b")" "$T/nopy/$b"; done
+env -i PATH="$T/nopy" CLAUDE_AGENTS_FILE="$T/nopy/a.txt" "$TEST_BASH" "$AGENT" add 'Bearer abcdefghijklmnopqrstuvwxyz' 2> "$T/nerr"
+check "helper: no python3, the note names no label" sh -c "grep -q 'skipped 1 registry edit' '$T/nerr' && ! grep -q abcdefghij '$T/nerr'"
+rm -rf "$T/nopy"
+# The tracker hook: a description that looks like a secret is "agent".
+rm -f "$SIDE"/claude_*
+hook '{"hook_event_name":"PreToolUse","tool_name":"Agent","session_id":"s9","tool_input":{"description":"use token ghp_abcdefgh123","subagent_type":"Explore"}}'
+check "tracker: a secret-looking description is 'agent'" row_is agent
+check "tracker: ... and the credential nowhere" sh -c "! grep -rq ghp_abc '$SIDE'"
+hook '{"hook_event_name":"SubagentStart","session_id":"s9","agent_id":"q1w2e3r4","agent_type":"Explore"}'
+check "tracker: the started row is 'agent #id'" row_is 'agent #q1w2e3'
+hook '{"hook_event_name":"PreToolUse","tool_name":"Agent","session_id":"s9","tool_input":{"subagent_type":"hunter2xyzabc1234567"}}'
+check "tracker: a secret-looking subagent_type is neither label nor state" sh -c "! grep -rq hunter2xyz '$SIDE'"
+hook '{"hook_event_name":"SubagentStart","session_id":"s9","agent_id":"t5y6u7i8","agent_type":"hunter2xyzabc1234567"}'
+check "tracker: ... and still pairs with its start" row_is 'agent #t5y6u7'
+hook '{"hook_event_name":"Stop","session_id":"s9"}'
+rm -f "$SIDE"/claude_*
 
 # --- Registry lock -----------------------------------------------------------
 # flock(2) on <file>.lock, taken by python3. The holder below is a separate
@@ -3922,12 +3987,69 @@ done
 # and cut to 40; otherwise the run is named as if it had none.
 lab() { run_env "$TEST_BASH" "$SUBS" --classify --label "$1" -- sleep 1 2>&1; }
 check "label: plain text kept" [ "$(lab 'nightly eval')" = 'nightly eval' ]
-check "label: cut to 40" [ "$(lab "$(printf 'a%.0s' $(seq 1 60))")" = "$(printf 'a%.0s' $(seq 1 40))" ]
+# Words, not one run of 60 letters: that is secret-shaped (J9d) and refused.
+check "label: cut to 40" [ "$(lab "$(printf 'ab %.0s' $(seq 1 30))")" = 'ab ab ab ab ab ab ab ab ab ab ab ab ab a' ]
+check "label: one run of 60 letters is refused" [ "$(lab "$(printf 'a%.0s' $(seq 1 60))")" = sleep ]
 check "label: controls go" [ "$(lab "$(printf 'a\033[2Jb')")" = 'a[2Jb' ]
 for l in 'password=hunter2' 'token: abc' 'API_KEY=x' 'sk-live-abc' 'run ghp_abc' 'deploy /home/x' '~/x' \
          'aGVsbG8gd29ybGQgc2VjcmV0MTIz' 'user@host' 'job 10.1.2.3' 'see https://x.y' 'AKIAIOSFODNN7EXAMPLE' 'eyJhbGciOiJIUzI1'; do
   check "label: '$l' is not shown" [ "$(lab "$l")" = sleep ]
 done
+# The secret heuristic (J9d): the Astra inputs, and names it must keep.
+for l in 'Bearer abcdefghijklmnopqrstuvwxyz' 'Basic dXNlcjpwYXNz' 'hunter2xyzabc1234567' 'my secret job' \
+         'x:abcdefghij' '0123456789abcdef0123456789' 'passwd reset'; do
+  check "label: '$l' is not shown (J9d)" [ "$(lab "$l")" = sleep ]
+done
+for l in 'gpt-5.1-codex-max run' 'claude-sonnet-4-5' 'qwen3-coder-30b-a3b' 'eval round 3'; do
+  check "label: '$l' is kept" [ "$(lab "$l")" = "$l" ]
+done
+# The lexer fails closed where bash reads differently (review of J9c, stage
+# J9d): a ${...} it does not follow, a line continuation (no word boundary),
+# an unquoted heredoc whose body joins lines, a substitution in double quotes.
+while IFS='|' read -r want hs; do
+  hs=$(printf '%b' "$hs")
+  check "classify: $(printf '%q' "$hs") -> ${want:-(bash)}" [ "$(cls bash -c "$hs")" = "${want:-bash}" ]
+done <<'EOF'
+|PASSWORD=${X:-x;python3 Alice.py;}
+|PASSWORD=${X/;/} Alice.py
+|PASSWORD=\\\nAlice.py
+|cat <<EOF\nx\\\nEOF\ncodex --model gpt-hunter2\nEOF
+cat|cat <<'EOF'\nx\\\nEOF\npython3 after.py
+cat|cat <<EOF\nplain\nEOF\npython3 after.py
+|A="$(echo "; python3 Alice.py; ")"
+|A="`echo "; python3 Alice.py; "`"
+|echo "${X:-;}"; python3 Alice.py
+ok.py|echo ${HOME} "${USER}" && python3 ok.py
+codex/gpt-5|codex exec -m gpt-5 "${X:-;}" && python3 Alice.py
+EOF
+# Interpreter options by their own arity: an option's value is no script,
+# and an option this does not know names the interpreter only.
+while IFS='|' read -r want cmd; do
+  # shellcheck disable=SC2086
+  check "classify: '$cmd' -> $want" [ "$(cls $cmd)" = "$want" ]
+done <<'EOF'
+real.py|python3 -X hunter2.py real.py
+real.py|python3 -W ignore real.py
+real.py|python3 -Xdev -u real.py
+python3|python3 -c hunter2.py real.py
+python3|python3 -m hunter2.py
+python3|python3 --hunter2 real.py
+real.py|python3 -- real.py
+app.js|node -r hunter2.js app.js
+app.js|node --require hunter2.js app.js
+node|node -e hunter2.js
+node|node --inspect hunter2.js
+run.sh|bash -x run.sh
+bash|bash --rcfile hunter2.sh run.sh
+bash|bash -o hunter2.sh
+ruby|ruby -I hunter2.rb app.rb
+app.rb|ruby app.rb
+EOF
+check "classify: bash -cx STRING names the string's program" [ "$(cls bash -cx 'python3 a.py')" = a.py ]
+check "classify: bash -o posix -c STRING too" [ "$(cls bash -o posix -c 'python3 a.py')" = a.py ]
+check "classify: a secret-shaped script name is not shown" [ "$(cls python3 hunter2xyzabc1234567.py)" = python3 ]
+check "classify: a secret-shaped model leaves the worker bare" [ "$(cls codex exec -m gpt-hunter2xyzabc1234567 x)" = codex ]
+check "classify: a real long model name is kept" [ "$(cls codex exec -m gpt-5.1-codex-max x)" = codex/gpt-5.1-codex-max ]
 
 # --- other tools, and which transcripts may be read ---------------------------
 srun "$SPAY/tools.json"
@@ -3940,7 +4062,13 @@ sgot t-grep "→ search ⏳2m"
 sgot t-agent "→ agent/Explore ⏳2m"
 sgot t-mcp "→ mcp:github ⏳2m"
 sgot t-multi "→ Read a.py ⏳1m +1"
-sgot t-esc "→ Read [31mred2Jevil.py ⏳2m"
+sgot t-esc "→ Read [31mr2Je.py ⏳2m"
+sgot t-agent-secret "→ agent ⏳2m"
+sgot t-mcp-secret "→ mcp ⏳2m"
+sgot t-read-secret "→ Read ⏳2m"
+sgot t-bash-secret "→ Bash ⏳2m"
+snot t-tool-secret "→"
+check "subagents tools: no secret-shaped identifier on any row" sh -c "! grep -qE 'hunter2|sk-ant|ghp_|Alice' '$T/sout'"
 sgot t-wf "→ codex/gpt-6-astra ⏳2m"
 snot t-done "→"
 snot t-sym "→"
@@ -4149,8 +4277,16 @@ check "run: --heartbeat 0003600 is 3600" [ "$arc" = 0 -a "$(cat "$T/rout")" = ra
 arun --label 'password=hunter2' -- sh -c 'cat "$AGENTLINE_TMP/claude_agents.txt"'
 check "run: a secret-looking --label is not stored" sh -c "! grep -q hunter2 '$T/rout'"
 check "run: ... the default label instead" grep -qE "^[0-9]+ cat$RK\$" "$T/rout"
-arun --label "$(printf 'a%.0s' $(seq 1 60))" -- sh -c 'cat "$AGENTLINE_TMP/claude_agents.txt"'
-check "run: --label cut to 40" grep -qE "^[0-9]+ a{40}$RK\$" "$T/rout"
+arun --label "$(printf 'ab %.0s' $(seq 1 30))" -- sh -c 'cat "$AGENTLINE_TMP/claude_agents.txt"'
+check "run: --label cut to 40" grep -qE "^[0-9]+ (ab ){13}a$RK\$" "$T/rout"
+# The Astra input (J9d): no = or :, no digit, and still a credential.
+arun --label 'Bearer abcdefghijklmnopqrstuvwxyz' -- sh -c 'cat "$AGENTLINE_TMP/claude_agents.txt"'
+check "run: a Bearer --label is not stored" sh -c "! grep -q abcdefghij '$T/rout'"
+check "run: ... the default label instead" grep -qE "^[0-9]+ cat$RK\$" "$T/rout"
+# Diagnostics are printf, not echo: under xpg_echo a \033 spelled out in an
+# argument became an ESC on the terminal.
+( cd "$WORK" && run_env "$TEST_BASH" -O xpg_echo "$ARUN" '--\033[31m' > /dev/null 2> "$T/rerr" )
+check "run: a spelled-out \\033 stays text in the diagnostic" sh -c "grep -qF '\\033[31m' '$T/rerr' && ! grep -q \"\$(printf '\\033')\" '$T/rerr'"
 arun "$(printf -- '--x\033[2J')" -- true
 check "run: an unknown option's ESC is not echoed" sh -c "! grep -q '$ESC' '$T/rerr'"
 # A helper that hangs holds nothing up: each call gets 3 s, then its group

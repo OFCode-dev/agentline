@@ -2,6 +2,50 @@
 
 ## Unreleased
 
+- One secret check for everything agentline shows that it did not write
+  itself. Claude Code already shows its subagents' descriptions, tools and
+  commands, and agentline must not add a secret to them. A worker's model,
+  a program or script name, a tool name, a `subagent_type`, an MCP server,
+  a file name, a host, an `agentline-run` label and every registry label
+  now pass the same test, in `agentline-subagents.sh`, in the registry
+  helper and in the tracker hook (the suite checks that the three copies
+  match). It refuses a key prefix, `Bearer`, `Basic `, `token`, `secret`,
+  `passw…` and `apikey`, an `=` or `:` followed by 8 or more characters, a
+  run of 24 or more key characters, and a word of 16 or more characters
+  that mixes letters and digits, unless that word is made of the short or
+  single-kind parts of a version-numbered name (`gpt-5.1-codex-max`). A
+  refused value is replaced whole by a generic word (`Bash`, `agent`,
+  `mcp`, `run`), never shown in part. So `agentline-run --label 'Bearer
+  abc…xyz'`, a pending Agent call with `subagent_type` `hunter2xyzabc1234567`
+  and a tool `mcp__sk-ant-api03-…__query` no longer put their values on the
+  bar. The registry helper applies it at its own boundary, so a direct call
+  cannot store a secret either, and rows already stored are rewritten on
+  the next write. Its no-`python3` note no longer names the labels. (J9d)
+- The worker classifier fails closed in more places where bash reads a
+  command differently from a simple lexer. `PASSWORD=${X:-x;python3
+  Alice.py;}` showed `Bash Alice.py`: bash reads those semicolons as part
+  of the expansion. Any `${…}` other than a plain `${NAME}` now ends the
+  walk, and so do `$(…)` and backquotes inside double quotes. A
+  backslash-newline outside quotes is a line continuation, not a word
+  break, so `PASSWORD=\` + newline + `Alice.py` is one assignment. An
+  unquoted heredoc with a body line ending in `\` ends the walk, because
+  bash joins that line to the next and the first line reading `EOF` may not
+  close the body. Interpreters are read with their own options: `python3
+  -X hunter2.py real.py` showed `hunter2.py`, the value of `-X`, and now
+  shows `real.py`. An option it does not know shows the interpreter alone.
+  (J9d)
+- `agentline-run` and the registry helper print their diagnostics with
+  `printf '%s\n'`, never `echo`. Under `bash -O xpg_echo` an argument that
+  spelled out `\033` reached the terminal as an ESC. The script name in the
+  message is cleaned too. (J9d)
+- agentline's registry reader follows the writers' rules. It reads only a
+  regular file you own that is not a symlink, and at most 512 rows of it.
+  It reads the previous release's `/tmp` registry only from a directory you
+  own or a sticky one, where nobody else can swap the file. All of it is
+  shell tests, so the render gains no fork. (J9d)
+- Documented: from a terminal, a `TERM` sent to `agentline-run` alone
+  reaches CMD's pid and not the processes CMD put in the background. (J9d)
+
 - The hook side files are private. `claude_agents.txt` and
   `claude_wordcount.txt` used to sit in `/tmp`, readable by every user on
   the host, and the registry's labels are Claude subagent descriptions and

@@ -22,7 +22,8 @@
 #                      The label is DISPLAYED, on a line anyone near the
 #                      screen reads: control characters go, it is cut to 40
 #                      characters, and one that looks like it holds a secret
-#                      (a key, a password=..., a path, a URL, an address) is
+#                      (a key, Bearer ..., a password=..., a long mix of
+#                      letters and digits, a path, a URL, an address) is
 #                      not shown at all — the default is used instead.
 #   --heartbeat SECS   re-register every SECS seconds (default 60; 0: never;
 #                      at most 3600). The registry forgets a row after 300 s,
@@ -43,7 +44,13 @@
 #     removed. INT and QUIT are not passed on: Ctrl-C already reaches CMD
 #     from the terminal, and a second INT would cut short a CMD's own
 #     clean-up (codex, a python script). A `kill -INT` of this process alone
-#     therefore stops nothing until CMD ends.
+#     therefore stops nothing until CMD ends. And a TERM or HUP sent to this
+#     process alone reaches CMD's own pid, not processes CMD started in the
+#     background: after `agentline-run -- bash -c 'job & wait'` gets a
+#     TERM, the bash dies and the row goes, but `job` can live on. Giving
+#     CMD a group of its own here would take the terminal's job control
+#     from it; signal the foreground group instead (Ctrl-C, `kill -TERM
+#     -PGID`), or run it with stdin not a terminal.
 #   stdin not a terminal (a background job, an orchestrator, a pipe): CMD
 #     gets a process group of its own, and TERM, HUP, INT and QUIT are
 #     passed on to that whole group — a `bash -c 'job & wait'` is stopped
@@ -55,8 +62,15 @@
 #                           next to this script, or in hooks/ of a checkout)
 #   plus the helper's own: AGENTLINE_TMP, CLAUDE_AGENTS_FILE, ...
 
+# Diagnostics go out with printf '%s\n', never echo: under `bash -O
+# xpg_echo` echo expands a \033 spelled out in its argument into an ESC, so
+# an option of four plain characters reached the terminal as a control
+# sequence. The script's own name is cleaned too: it is how it was called.
+me="${0##*/}"
+me="${me//[[:cntrl:]]/?}"
+say() { printf '%s\n' "$me: $*" >&2; }
 usage() {
-  echo "usage: ${0##*/} [--label TEXT] [--heartbeat SECONDS|0] -- CMD [ARGS...]" >&2
+  printf '%s\n' "usage: $me [--label TEXT] [--heartbeat SECONDS|0] -- CMD [ARGS...]" >&2
   exit 2
 }
 
@@ -69,8 +83,8 @@ while [ $# -gt 0 ]; do
     --label=*) label="${1#--label=}"; shift ;;
     --heartbeat) [ $# -ge 2 ] || usage; beat="$2"; shift 2 ;;
     --heartbeat=*) beat="${1#--heartbeat=}"; shift ;;
-    -h|--help) sed -n '2,56p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
-    -*) echo "${0##*/}: unknown option: ${1//[[:cntrl:]]/?}" >&2; usage ;;
+    -h|--help) sed -n '2,63p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -*) say "unknown option: ${1//[[:cntrl:]]/?}"; usage ;;
     *) break ;;
   esac
 done
@@ -80,10 +94,10 @@ done
 # killed the supervisor and left CMD orphaned. Leading zeros go first, so
 # the length test sees the value, and the number test never sees a number
 # too big for the shell.
-case "$beat" in ''|*[!0-9]*) echo "${0##*/}: --heartbeat needs a number of seconds" >&2; usage ;; esac
+case "$beat" in ''|*[!0-9]*) say "--heartbeat needs a number of seconds"; usage ;; esac
 beat="${beat#"${beat%%[!0]*}"}"
 if [ "${#beat}" -gt 4 ] || [ "${beat:-0}" -gt 3600 ]; then
-  echo "${0##*/}: --heartbeat is at most 3600 seconds" >&2; usage
+  say "--heartbeat is at most 3600 seconds"; usage
 fi
 beat="${beat:-0}"
 

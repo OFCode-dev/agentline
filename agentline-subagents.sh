@@ -116,8 +116,52 @@ SCRIPT = re.compile(r'[A-Za-z0-9._-]{1,32}\.(?:py|sh|js|ts|rb)')
 SSH_ARG = set('BbcDEeFIiJLlmOoPpQRSWw')  # ssh options that take a value
 LOCAL = r'(?:127\.0\.0\.1|localhost):'
 
+# === The secret heuristic (review of J9c, stage J9d) ===
+# ONE test for everything the row, the registry or a diagnostic may show
+# that is not a fixed word of this script's: a worker's model, a program or
+# script name, a tool name, a subagent type, an MCP server, a label. Claude
+# Code already shows its own subagent descriptions, tools and commands; what
+# this script must never do is add a secret to them. So a value that merely
+# looks like one is not shown at all: the caller puts its generic word
+# (Bash, agent, mcp, run) in its place, never a part of the value. It is a
+# heuristic, and it errs towards refusing — `fix token refresh` is shown as
+# "agent" — because a status line that shows less is still right.
+#
+# Secret-shaped: a key prefix at the start of a word (sk-, ghp_, AKIA…, a
+# JWT's eyJ…); a word of credential vocabulary (Bearer, Basic, token,
+# secret, passw…, apikey); an = or : followed by 8 or more characters; a
+# run of 24 or more of [A-Za-z0-9_-] (a UUID, a base64 key); or a word of
+# 16 or more characters that mixes letters and digits (hunter2xyzabc1234567)
+# — unless it is made of pieces a version-numbered name has: the -._/
+# separated parts of gpt-5.1-codex-max, claude-sonnet-4-5 or qwen3-coder
+# are each all letters, all digits, or at most five characters.
+#
+# The same definition sits in hooks/agentline-agent.sh and
+# hooks/agent-tracker-hook.sh (separate programs, no shared import); the
+# test suite checks that the three copies are identical.
+SECRET_KEY = re.compile(r'(?:^|[^A-Za-z0-9])(?:sk-|sk_|rk_|gh[pousr]_|github_pat_|glpat-|xox[a-z]-|hf_'
+                        r'|nvapi-|aiza|ya29\.|npm_|pypi-)|(?:akia|asia)[a-z0-9]{12}|eyj[a-z0-9_-]{8}'
+                        r'|bearer|basic |token|secret|passw|apikey|api_key|[=:]\S{8}|[A-Za-z0-9_-]{24}', re.I)
+SECRET_PART = re.compile(r'[-._/]')
+
+def secretish(s):
+    if not isinstance(s, str) or SECRET_KEY.search(s):
+        return True
+    for t in s.split():
+        if len(t) >= 16 and re.search('[A-Za-z]', t) and re.search('[0-9]', t) and \
+                any(len(p) > 5 and re.search('[A-Za-z]', p) and re.search('[0-9]', p)
+                    for p in SECRET_PART.split(t)):
+            return True
+    return False
+# (end of the secret heuristic)
+
+def shown(s, generic=''):
+    """s when it passes the secret heuristic, else the generic word."""
+    return s if s and not secretish(s) else generic
+
 def safe(tok):
-    return tok if isinstance(tok, str) and SAFE.fullmatch(tok) and not DENY.search(tok) else ''
+    return tok if isinstance(tok, str) and SAFE.fullmatch(tok) and not DENY.search(tok) \
+        and not secretish(tok) else ''
 
 def base(w):
     return w.rsplit('/', 1)[-1]
@@ -130,7 +174,7 @@ def base(w):
 # first word of every body line became a "program" on the row (a name, a
 # figure, a line of a file being written).
 LEX = re.compile(r'''
-    (?P<ws>(?:[^\S\n]|\\\n)+)
+    (?P<ws>[^\S\n]+)
   | (?P<nl>\n)
   | (?P<op>&&|\|\||;;&?|;&|<<<|<<-|<<|>>|>&|<&|&>>?|>\||<>|[;&|()<>`])
   | (?P<sub>\$\()
@@ -142,7 +186,19 @@ LEX = re.compile(r'''
   | (?P<lit>[^\s'"\\;&|()<>`#$]+|\$)
 ''', re.X | re.S)
 REDIR = {'<', '>', '>>', '>&', '<&', '&>', '&>>', '>|', '<>', '<<<'}
+# In double quotes a backslash escapes these; before a newline it is a line
+# continuation, and both go.
 DQ_ESC = re.compile(r'\\([$`"\\\n])')
+def dq_unescape(m):
+    return '' if m.group(1) == '\n' else m.group(1)
+# The one ${...} the lexer follows exactly: a plain name or special
+# parameter, then the brace. Any other (${X:-a;b}, ${X/;/}, ${X#\}}, ...)
+# holds text whose end only a full parser knows — bash reads its ; as part
+# of the word, a lexer that stops at the ; as a separator — and ends the walk.
+PARAM = re.compile(r'\{(?:[A-Za-z_][A-Za-z0-9_]*|[0-9]+|[#?$!@*-])\}')
+# What a double-quoted word may not hold: a substitution with quoting of its
+# own ("$(echo "; x; ")" is one word) or a ${ this does not follow.
+DQ_SUB = re.compile(r'\$\(|`|\$\{(?![A-Za-z_][A-Za-z0-9_]*\}|[0-9]+\}|[#?$!@*-]\})')
 # Bounds on the work one command may cost, whatever its size: this many
 # characters of it are lexed (heredoc bodies, skipped by a search, do not
 # count), into at most this many tokens, and a command inside a command
@@ -150,10 +206,17 @@ DQ_ESC = re.compile(r'\\([$`"\\\n])')
 # is named in the first few words of a command, never 4 KB into it.
 LEX_CHARS, LEX_TOKENS, MAX_DEPTH = 4096, 256, 2
 
-def heredoc_end(s, pos, delim, dash):
+def heredoc_end(s, pos, delim, dash, quoted):
     """Where the heredoc body starting at pos ends: past its delimiter line,
-    or the end of s when the delimiter never comes (bash reads to EOF)."""
+    or the end of s when the delimiter never comes (bash reads to EOF) —
+    or None when that cannot be told. With an unquoted delimiter a body line
+    ending in a backslash is joined to the next (x\\ then EOF is the line
+    xEOF, no delimiter), so the first line that reads EOF may not end the
+    body; rather than model the joins, such a body ends the walk."""
     m = re.compile('^' + ('\t*' if dash else '') + re.escape(delim) + '$', re.M).search(s, pos)
+    stop = m.start() if m else len(s)
+    if not quoted and s.find('\\\n', pos, stop) >= 0:
+        return None
     if not m:
         return len(s)
     return m.end() + 1 if s.startswith('\n', m.end()) else m.end()
@@ -172,9 +235,11 @@ def split_cmds(s):
     one word: neither is ever read as a command.
 
     It fails closed. At the first construct it does not model exactly —
-    $'…' or $"…" quoting, $( or a backquote, <( or >(, a here-string, eval,
-    an unterminated quote, a heredoc delimiter that is quoted with $ or \\ in
-    it or missing — the walk stops, exact is False, and what comes back is
+    $'…' or $"…" quoting, $( or a backquote (bare or in double quotes), a
+    ${…} other than ${NAME}, <( or >(, a here-string, eval, an unterminated
+    quote, a heredoc delimiter that is quoted with $ or \\ in it or missing,
+    an unquoted heredoc with a body line ending in a backslash — the walk
+    stops, exact is False, and what comes back is
     what came before it: the commands already complete and the whole words
     of the one in progress (the word being built is dropped: the PASSWORD=
     of PASSWORD=$(true)hunter2). Past the lexing budget the command that was
@@ -188,6 +253,8 @@ def split_cmds(s):
     n = len(s)
     exact = True
 
+    hquoted = False           # the delimiter being read has quoting in it
+
     def flush():
         nonlocal have, target, heredoc, exact
         if not have:
@@ -195,7 +262,7 @@ def split_cmds(s):
         word, have = ''.join(buf), False
         del buf[:]
         if heredoc is not None:
-            pending.append((word, heredoc))
+            pending.append((word, heredoc, hquoted))
             heredoc = None
         elif target:
             target = None
@@ -222,11 +289,23 @@ def split_cmds(s):
         kind, tok = m.lastgroup, m.group()
         used += len(tok)
         pos = m.end()
+        if tok == '\\\n':
+            # A line continuation: bash removes it, and the word goes on —
+            # PASSWORD=\<newline>x.py is one word, an assignment, not a
+            # PASSWORD= and a program x.py. Nothing starts or ends here.
+            continue
+        if tok == '$' and s.startswith('{', pos):
+            p = PARAM.match(s, pos)
+            if not p:
+                exact = False  # a ${...} whose end this cannot pin down
+                break
+            tok, pos = tok + p.group(), p.end()
+            used += len(p.group())
         if kind == 'ansi' or kind == 'sub' or tok in ('`', '<<<') \
                 or (tok in ('<', '>') and s.startswith('(', pos)) \
                 or (tok == '$' and s.startswith('"', pos)) \
                 or (kind == 'sq' and (len(tok) < 2 or not tok.endswith("'"))) \
-                or (kind == 'dq' and not DQ_END.fullmatch(tok)):
+                or (kind == 'dq' and (not DQ_END.fullmatch(tok) or DQ_SUB.search(tok))):
             exact = False
             break
         if heredoc is not None and not have and kind in ('op', 'nl'):
@@ -235,14 +314,21 @@ def split_cmds(s):
         if heredoc is not None and ('$' in tok or '`' in tok or (kind == 'dq' and '\\' in tok)):
             exact = False  # a delimiter this would have to expand
             break
+        if heredoc is not None and kind in ('sq', 'dq', 'esc'):
+            hquoted = True
         if kind == 'ws':
             flush()
         elif kind == 'nl':
             end()
             ntok += 1
-            for delim, dash in pending:
-                pos = heredoc_end(s, pos, delim, dash)
+            for delim, dash, quoted in pending:
+                pos = heredoc_end(s, pos, delim, dash, quoted)
+                if pos is None:
+                    exact = False  # a body whose end cannot be told
+                    break
             del pending[:]
+            if not exact:
+                break
         elif kind == 'op':
             ntok += 1
             if tok in REDIR or tok in ('<<', '<<-'):
@@ -251,7 +337,7 @@ def split_cmds(s):
                     have = False
                 flush()
                 if tok in ('<<', '<<-'):
-                    heredoc = tok == '<<-'
+                    heredoc, hquoted = tok == '<<-', False
                 else:
                     target = True
             else:
@@ -266,7 +352,7 @@ def split_cmds(s):
             if kind == 'sq':
                 buf.append(tok[1:-1])
             elif kind == 'dq':
-                buf.append(DQ_ESC.sub(r'\1', tok[1:-1]))
+                buf.append(DQ_ESC.sub(dq_unescape, tok[1:-1]))
             elif kind == 'esc':
                 buf.append(tok[1:])
             else:
@@ -501,6 +587,65 @@ def script_name(t):
     t = base(t)
     return t if SCRIPT.fullmatch(t) and safe(t) else ''
 
+# The options of the interpreters whose script a row names, by their own
+# syntax (review of J9c, stage J9d): (short options that take a value, short
+# flags, short options whose value is the program text, long options that
+# take a value, long ones whose value is the program text). Skipping every
+# -word showed `python3 -X hunter2.py real.py` as hunter2.py, the value of
+# -X. An option not listed here ends the look: the row names the
+# interpreter only. An interpreter with no entry is named alone whenever an
+# option follows it.
+_SH_OPTS = ('o', 'abefhknptuvxBCEHPT', 'c', set(), set())
+IOPTS = {
+    'python': ('XW', 'bBdEhiIOPqsSuvVxR', 'cm', {'check-hash-based-pycs'}, set()),
+    'node': ('r', '', 'ep', {'require'}, {'eval', 'print'}),
+}
+IOPTS['python3'] = IOPTS['python']
+for _s in SHELLS:
+    IOPTS[_s] = _SH_OPTS
+
+def interp_script(w, p, depth):
+    """What interpreter p, run as w, shows beside its own name: the script
+    it runs, the program of a shell's -c, else just p."""
+    spec = IOPTS.get(p)
+    sv, sf, se, lv, le = spec or ('', '', '', set(), set())
+    i = 1
+    while i < len(w):
+        t = w[i]
+        if t == '--':
+            i += 1
+            break
+        if t == '-' or not (t.startswith('-') or (spec is _SH_OPTS and t == '+o')):
+            break
+        if spec is None:
+            return p
+        if t in ('-o', '+o') and spec is _SH_OPTS:
+            i += 2
+            continue
+        if t.startswith('--'):
+            name, eq, _ = t[2:].partition('=')
+            if name in lv:
+                i += 1 if eq else 2
+                continue
+            return p  # a program text (--eval), or an option this does not know
+        for j, c in enumerate(t[1:], 1):
+            if c in se:
+                # The program is text, not a script: a shell's is followed
+                # (bash -c '...'), any other interpreter's is not shown.
+                if spec is _SH_OPTS and all(x in sf for x in t[j + 1:]) and i + 1 < len(w):
+                    return program_string(w[i + 1], depth + 1) or p
+                return p
+            if c in sv:
+                if j + 1 == len(t):
+                    i += 1  # the value is the next word
+                break
+            if c not in sf:
+                return p
+        i += 1
+    if i < len(w) and SCRIPT.fullmatch(base(w[i])):
+        return script_name(w[i]) or p
+    return p
+
 def program_words(w, depth=0):
     """A program name for a command that is no known worker: its basename
     when that is on PROGRAMS, or the script it is or an interpreter runs
@@ -511,17 +656,8 @@ def program_words(w, depth=0):
     p = base(w[0])
     if p in TRIVIAL:
         return ''
-    if p in SHELLS and len(w) > 2 and re.fullmatch(r'-[a-z]*c[a-z]*', w[1]):
-        return program_string(w[2], depth + 1) or p
-    if p in INTERP:
-        for t in w[1:]:
-            if t.startswith('-'):
-                if t in ('-c', '-m', '-e'):
-                    break
-                continue
-            if SCRIPT.fullmatch(base(t)):
-                return script_name(t) or p
-            break
+    if p in INTERP or p in SHELLS:
+        return interp_script(w, p, depth)
     return p if p in PROGRAMS else script_name(p)
 
 def program_string(s, depth=0):
@@ -569,8 +705,11 @@ LABEL_DENY = re.compile(
     r'|(?:^|\s)[/~]|\.\.|//|@|\b[0-9]{1,3}(?:\.[0-9]{1,3}){3}\b', re.I)
 
 def run_label(s):
+    # Both: LABEL_DENY for what a label must not name (a path, a host), the
+    # secret heuristic for what it must not hold. `Bearer abc…xyz` passed
+    # the first alone (no = or :, no digit in the long word).
     s = label_text(s)
-    return s if s and not LABEL_DENY.search(s) else ''
+    return s if s and not LABEL_DENY.search(s) and not secretish(s) else ''
 
 if MODE == 'classify':
     # classify LABEL CMD...: LABEL is agentline-run's --label ('' for none).
@@ -581,6 +720,7 @@ if MODE == 'classify':
         # still that run's name when it is on PROGRAMS.
         p = base(argv[0])
         lab = classify_words(argv) or program_words(argv) or (p if p in PROGRAMS else '')
+    lab = shown(lab)  # agentline-run shows "run" for nothing
     if lab:
         sys.stdout.write(lab + '\n')
     sys.exit(0)
@@ -853,7 +993,10 @@ def scan(text):
     return list(pending.values()), last
 
 def tool_text(name, inp):
-    """(text, is_worker) for one running tool call — never its raw input."""
+    """(text, is_worker) for one running tool call — never its raw input.
+    Every name in it passed the secret heuristic (safe() and shown()); one
+    that did not leaves the tool's generic word: Bash, agent, mcp, or the
+    tool alone."""
     if not isinstance(name, str):
         return '', False
     inp = inp if isinstance(inp, dict) else {}
@@ -861,20 +1004,20 @@ def tool_text(name, inp):
         cmd = inp.get('command')
         if not isinstance(cmd, str):
             return 'Bash', False
-        w = classify_string(cmd)
+        w = shown(classify_string(cmd))
         if w:
             return w, True
-        p = program_string(cmd)
+        p = shown(program_string(cmd))
         return ('Bash ' + p) if p else 'Bash', False
     if name in ('Read', 'Edit', 'Write', 'MultiEdit', 'NotebookEdit', 'NotebookRead'):
         f = inp.get('file_path') or inp.get('notebook_path')
-        f = label_text(base(f), 32) if isinstance(f, str) else ''
+        f = shown(label_text(base(f), 32)) if isinstance(f, str) else ''
         return (name + ' ' + f) if f else name, False
     if name == 'WebFetch':
         u = inp.get('url')
         m = re.match(r'[A-Za-z][A-Za-z0-9+.-]*://(?:[^/?#@]*@)?([^/?#:]+)', u) if isinstance(u, str) else None
         host = m.group(1).lower() if m else ''
-        host = host if re.fullmatch(r'[a-z0-9.-]{1,60}', host) else ''
+        host = shown(host) if re.fullmatch(r'[a-z0-9.-]{1,60}', host) else ''
         return (name + ' ' + host) if host else name, False
     if name in ('WebSearch', 'Grep', 'Glob', 'ToolSearch'):
         return 'search', False
@@ -972,7 +1115,7 @@ def row(task, width, ctx):
     tcwd = task.get('cwd')
     if isinstance(tcwd, str) and tcwd and ctx['cwd'] and \
             os.path.normpath(tcwd) != os.path.normpath(ctx['cwd']):
-        b = label_text(base(os.path.normpath(tcwd)), 24)
+        b = shown(label_text(base(os.path.normpath(tcwd)), 24))
         f['cwd'] = (DIM + G['cwd'] + b + RESET) if b else ''
 
     def build(lab):
@@ -1071,6 +1214,7 @@ case "${1-}" in
     command -v python3 >/dev/null 2>&1 || exit 0
     exec python3 -I -c "$_AL_SUB_PY" render ;;
   *)
-    echo "usage: ${0##*/} [--classify [--label TEXT] -- CMD [ARGS...]]" >&2
+    _al_me="${0##*/}"  # printf, and a cleaned name: see agentline-run
+    printf '%s\n' "usage: ${_al_me//[[:cntrl:]]/?} [--classify [--label TEXT] -- CMD [ARGS...]]" >&2
     exit 2 ;;
 esac
