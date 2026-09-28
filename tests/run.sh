@@ -3735,6 +3735,16 @@ check "subagents: '../' session id still renders" grep -q "^w-codex$TAB" "$T/sro
 snot w-codex "→"
 srun "$SPAY/relpath.json"
 snot w-codex "→"
+# A transcript with a second name (a planted hard link) is not read.
+SUBD="$SPROJ/$SSID/subagents"
+cp "$SUBD/agent-w-codex.jsonl" "$SUBD/agent-hl-a.jsonl"
+ln "$SUBD/agent-hl-a.jsonl" "$SUBD/agent-hl-b.jsonl"
+python3 -c 'import json, sys; d = json.load(open(sys.argv[1])); t = [x for x in d["tasks"] if x["id"] == "w-codex"][0]; d["tasks"] = [dict(t, id="hl-a"), dict(t, id="w-codex")]; json.dump(d, open(sys.argv[2], "w"))' \
+  "$SPAY/workers.json" "$T/hl.json"
+srun "$T/hl.json"
+snot hl-a "→"
+sgot w-codex "→ codex/gpt-6-astra"
+rm -f "$SUBD/agent-hl-a.jsonl" "$SUBD/agent-hl-b.jsonl"
 # A 10 MB transcript: only its tail is read.
 srun "$SPAY/big.json"
 sgot big "→ bayrak/sonnet ⏳2m"

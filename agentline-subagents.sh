@@ -614,8 +614,11 @@ def read_tail(path, root):
     """The last TAIL bytes of path, from its first whole line on — or None.
     Only a regular file of this user's, not a symlink itself, and resolving
     inside root: the path is assembled from payload fields, and a planted
-    link must not turn a row into a reader of some other file. O_NONBLOCK so
-    a FIFO at that name cannot hang the tick before fstat refuses it."""
+    link must not turn a row into a reader of some other file. Nor a file
+    with a second name: a hard link planted there (the realpath check cannot
+    see one) would do the same. Claude Code never links its transcripts.
+    O_NONBLOCK so a FIFO at that name cannot hang the tick before fstat
+    refuses it."""
     try:
         if not os.path.realpath(path).startswith(root + os.sep):
             return None
@@ -624,7 +627,7 @@ def read_tail(path, root):
         return None
     try:
         st = os.fstat(fd)
-        if not stat.S_ISREG(st.st_mode) or st.st_uid != UID:
+        if not stat.S_ISREG(st.st_mode) or st.st_uid != UID or st.st_nlink != 1:
             return None
         off = max(st.st_size - TAIL, 0)
         data = os.pread(fd, TAIL, off)

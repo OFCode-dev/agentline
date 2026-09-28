@@ -354,7 +354,7 @@ A model name is shown only when it has the shape of one of that worker's models:
 
 Rows fit the width Claude Code gives them. When a row is too wide, the lowest-priority fields go first: cwd, velocity, the activity's timer, the activity, elapsed, context, effort, model. Then the label is shortened. A field with no data is left out. A task the script cannot make sense of (no id, an unknown shape) keeps Claude Code's own row, and without `python3` every row does. Themes, `NO_COLOR`, `AGENTLINE_GLYPHS=ascii` and the colour overrides apply as on the main line.
 
-The activity comes from the subagent's own transcript, `<project>/<session>/subagents/agent-<id>.jsonl` (or `…/subagents/workflows/wf_*/` for a workflow's agents). At most its last 128 KB is read, and only when the file is regular, yours, not a symlink, and inside the session's project directory. Every string taken from it is stripped of control characters, as the main line does. All tasks are rendered in one `python3` run: 16 subagents with 1 MB transcripts take about 60 ms.
+The activity comes from the subagent's own transcript, `<project>/<session>/subagents/agent-<id>.jsonl` (or `…/subagents/workflows/wf_*/` for a workflow's agents). At most its last 128 KB is read, and only when the file is regular, yours, not a symlink, has no second name (hard link), and is inside the session's project directory. Every string taken from it is stripped of control characters, as the main line does. All tasks are rendered in one `python3` run: 16 subagents with 1 MB transcripts take about 60 ms.
 
 ## Manual install
 
