@@ -48,6 +48,15 @@
   still goes to awk. On bash ≥ 4.2 a full render execs `cat` and the two
   `python3` only. A `color_pct` replaced in local.sh is still called for
   every colour.
+- Custom segments. `local.sh` can call `agentline_seg <name> <content>` to
+  add a segment of its own, `local:<name>` for `AGENTLINE_LAYOUT` and
+  `AGENTLINE_DROP`. By default these segments close line 4, in call order.
+  They are width-measured, wrapped, dropped and cached like the built-in
+  segments, and a cached tick costs nothing: local.sh only runs on a full
+  render. Names outside `[a-z0-9_-]{1,24}` are ignored. The content keeps
+  its colour (removed by `mono`/`NO_COLOR`), and every other control
+  character and backslash sequence is stripped, so content read from a
+  file cannot inject an escape. `--doctor` lists them.
 
 ## 2.0.0 — 2026-09-28
 

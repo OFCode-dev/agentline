@@ -1374,6 +1374,89 @@ printf '%s\n' 'color_pct() { printf "\033[1;35m"; }' > "$T/local-cp.sh"
 nb '"context_window":{"used_percentage":12}' ctx AGENTLINE_LOCAL="$T/local-cp.sh"
 check "color_pct override from local.sh still used" grep -qF "${ESC}[1;35m" "$T/out"
 
+# Custom segments from local.sh (J10): agentline_seg <name> <content> adds
+# local:<name>, placed at the end of line 4 by default, in call order.
+LS="$T/local-seg.sh"
+cat > "$LS" <<'EOF'
+echo x >> "$AGENTLINE_TMP/local-runs"
+agentline_seg vpn "VPN up"
+agentline_seg build "${GREEN}build ok${RESET}"
+agentline_seg vpn "second call ignored"
+agentline_seg empty ""
+EOF
+nb '"model":{"id":"claude-opus-5"}' "" AGENTLINE_LOCAL="$LS"
+check "local seg: exit 0 (got $rc)" [ "$rc" = 0 ]
+check "local seg: stderr empty" [ ! -s "$T/err" ]
+check "local seg: default placement closes the last line, in call order" sh -c "tail -n 1 '$T/nb' | grep -qE '(^| │ )VPN up │ build ok\$'"
+check "local seg: a repeated name keeps the first content" sh -c "! grep -q 'second call' '$T/nb'"
+check "local seg: colour kept" grep -qF "${ESC}[1;32mbuild ok" "$T/out"
+# Part of the render cache: a tick replays it without running local.sh.
+rm -f "$SIDE/local-runs"
+render "$T/nb.json" 300 AGENTLINE_LAYOUT= AGENTLINE_LOCAL="$LS"
+normalize "$T/out" "$T/nb2"
+check "local seg: a cached tick still shows it" grep -qF 'VPN up │ build ok' "$T/nb2"
+check "local seg: a cached tick does not run local.sh" [ ! -e "$SIDE/local-runs" ]
+nb '"model":{"id":"claude-opus-5"}' "model/local:build,local:vpn" AGENTLINE_LOCAL="$LS"
+check "local seg: explicit layout placement" [ "$(sed -n 2p "$T/nb")" = "build ok │ VPN up" ]
+nb '"model":{"id":"claude-opus-5"}' "model,local:nothing" AGENTLINE_LOCAL="$LS"
+check "local seg: a local name with no content hides only itself" [ "$(cat "$T/nb")" = "Opus 5" ]
+# Drop order: fit mode drops them in AGENTLINE_DROP order like any segment.
+nb '"model":{"id":"claude-opus-5"}' "model,local:vpn,local:build" AGENTLINE_LOCAL="$LS" AGENTLINE_WIDTH=20 AGENTLINE_DROP="local:vpn,local:build"
+check "local seg: dropped in AGENTLINE_DROP order (got: $(cat "$T/nb"))" [ "$(cat "$T/nb")" = "Opus 5 │ build ok" ]
+nb '"model":{"id":"claude-opus-5"}' "model,local:vpn,local:build" AGENTLINE_LOCAL="$LS" AGENTLINE_WIDTH=20 AGENTLINE_DROP="local:build,local:vpn"
+check "local seg: ... the other order drops the other (got: $(cat "$T/nb"))" [ "$(cat "$T/nb")" = "Opus 5 │ VPN up" ]
+# Width-measured: at 12 columns without a drop list a third line wraps at
+# the segment boundary instead of overflowing (line 2 collapses, empty).
+nb '"model":{"id":"claude-opus-5"}' "model//local:vpn,local:build" AGENTLINE_LOCAL="$LS" AGENTLINE_WIDTH=12
+check "local seg: wraps by its measured width" [ "$(sed -n 2p "$T/nb")|$(sed -n 3p "$T/nb")" = "VPN up|build ok" ]
+# mono: its colours go with every other colour, in any spelling.
+cat > "$T/local-mono.sh" <<'EOF'
+agentline_seg a "${RED}red${RESET}"
+agentline_seg b "$(printf '\033[33m')raw\e[0m"
+agentline_seg c "\x1b[1;35mhex\x1B[0m"
+EOF
+nb '"model":{"id":"claude-opus-5"}' "model,local:a,local:b,local:c" AGENTLINE_LOCAL="$T/local-mono.sh"
+check "local seg: a colour variable kept" grep -qF "${ESC}[1;31mred${ESC}[0m" "$T/out"
+check "local seg: a real ESC and \\e kept" grep -qF "${ESC}[33mraw${ESC}[0m" "$T/out"
+check "local seg: \\x1b and \\x1B kept" grep -qF "${ESC}[1;35mhex${ESC}[0m" "$T/out"
+check "local seg: text intact" grep -qF 'red │ raw │ hex' "$T/nb"
+nb '"model":{"id":"claude-opus-5"}' "model,local:a,local:b,local:c" AGENTLINE_LOCAL="$T/local-mono.sh" NO_COLOR=1
+check "local seg: NO_COLOR strips its colour" sh -c "! grep -q '$ESC' '$T/out'"
+check "local seg: NO_COLOR keeps its text" grep -qF 'Opus 5 │ red │ raw │ hex' "$T/out"
+# Invalid names are ignored, whatever the content.
+cat > "$T/local-bad.sh" <<'EOF'
+agentline_seg Bad "BADNAME1"
+agentline_seg "a b" "BADNAME2"
+agentline_seg "x/y" "BADNAME3"
+agentline_seg "a,b" "BADNAME4"
+agentline_seg "abcdefghijklmnopqrstuvwxy" "BADNAME5"
+agentline_seg "" "BADNAME6"
+agentline_seg "ş" "BADNAME7"
+agentline_seg "ok-name_1" "GOODNAME"
+agentline_seg "abcdefghijklmnopqrstuvwx" "LONGEST"
+EOF
+nb '"model":{"id":"claude-opus-5"}' "" AGENTLINE_LOCAL="$T/local-bad.sh"
+check "local seg: invalid names ignored" sh -c "! grep -q BADNAME '$T/nb'"
+check "local seg: valid names shown (24 chars is the limit)" sh -c "grep -qF 'GOODNAME │ LONGEST' '$T/nb'"
+# Hostile content (a status file someone else writes): no control byte, no
+# OSC, no CSI other than colour, no extra row, no layout separator.
+cat > "$T/local-evil.sh" <<'EOF'
+agentline_seg evil "$(printf 'A\033]0;owned\007B\033[2JC\nD\x1f\x1eE\302\233F')\\033]8;;http://x\\a G \\e[2J H \\n I \\x1b[5;1H J"
+EOF
+nb '"model":{"id":"claude-opus-5"}' "model,local:evil" AGENTLINE_LOCAL="$T/local-evil.sh"
+nobytes() {  # nobytes <file> <printf-format> — the bytes it makes are nowhere in <file>
+  printf "$2" > "$T/pat"
+  ! LC_ALL=C grep -qF -f "$T/pat" "$1"
+}
+check "local seg: hostile content renders one row" [ "$(wc -l < "$T/nb" | tr -d ' ')" = 1 ]
+check "local seg: no BEL" nobytes "$T/out" '\007'
+check "local seg: no OSC" nobytes "$T/out" '\033]'
+check "local seg: no raw C1" nobytes "$T/out" '\302\233'
+check "local seg: no \\x1f/\\x1e" nobytes "$T/out" '\037'
+check "local seg: no CSI but SGR" sh -c "! LC_ALL=C grep -qE '${ESC}\\[[0-9;]*[^0-9;m]' '$T/out'"
+check "local seg: the text survives as text ($(cat "$T/nb"))" \
+  grep -qF 'Opus 5 │ A]0;ownedB2JCDEF033]8;;http://xa G 2J H n I 5;1H J' "$T/nb"
+
 # Breadcrumb (C14): project_dir differing from cwd leads the path, dim.
 printf '{"session_id":"crumb-0001","cwd":"%s","workspace":{"project_dir":"/src/launch/"}}\n' "$WORK" > "$T/crumb.json"
 prepare minimal "$T/crumb.json"
@@ -2750,6 +2833,9 @@ doctor "$T/doc2.json" TMPDIR="$T/dtmp"
 check "doctor: untrusted cache dir reported" dhas 'FAILED the owner/symlink check'
 check "doctor: nothing written into it" [ -z "$(ls -A "$T/dtmp/real")" ]
 rm -rf "$T/dtmp"
+# A local.sh segment (J10) is listed with its source.
+doctor "$T/doc2.json" AGENTLINE_LOCAL="$T/local-seg.sh"
+check "doctor: local segment listed" dhas '^  local:vpn +shown +local\.sh: agentline_seg vpn$'
 # Missing git counts are explained (J10): every way out of the status gate
 # names itself on the "counts" row. The repositories are the C14 ones.
 if [ -n "${GR-}" ] && [ -d "$GR" ]; then

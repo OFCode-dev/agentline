@@ -201,6 +201,7 @@ model,effort,fast,ctx,compact,5h,week,cache,cost,dur,tok_in,tok_out,words,lines,
 | `lines` | 📝 lines changed | `ssh` / `cron` / `ports` | 🔐 / ⏰ / 🌐 |
 | `cpu` / `mem` / `disk` | 🔥 / 💾 / 💽 | `pr` | 🔀 pull / merge request |
 | `compact` | 🔄 compactions | `worktree` | 🌳 linked worktree |
+| `local:<name>` | your own, from `local.sh` ([FAQ](#faq)) | | |
 
 A compact two-line bar, for example:
 
@@ -474,6 +475,22 @@ G_CPU="CPU "        # any icon of the glyph table (G_*), with its trailing space
 ```
 
 Editing `agentline.sh` directly still works — sections are marked with `# ===` comments — but an upgrade replaces it. The previous copy is kept as `agentline.sh.bak-<timestamp>`.
+
+**Can I add a segment of my own?**
+Yes. In `local.sh`, call `agentline_seg <name> <content>`. It adds a segment named `local:<name>` (the name is 1–24 of `a-z 0-9 _ -`; any other name is ignored, and so is a second call with the same name). In the default layout these segments close line 4, the system layer, in the order you call them. Anywhere else, name them in `AGENTLINE_LAYOUT` or `AGENTLINE_DROP` like any other segment. They are measured, wrapped and cached like the built-in ones, and empty content shows nothing. The content may carry colour (`${GREEN}`, `\e[32m`, a real ESC); `mono` and `NO_COLOR` strip it. Any other control character or backslash sequence is removed, so a status file someone else writes cannot move the cursor or retitle the window:
+
+```bash
+# ~/.claude/agentline/local.sh
+[ -d /proc/sys/net/ipv4/conf/wg0 ] && agentline_seg vpn "${GREEN}🔒 wg0${RESET}"
+if IFS= read -r st 2>/dev/null < "$HOME/.cache/build-status"; then
+  case "$st" in
+    ok*) agentline_seg build "${GREEN}build ✓${RESET}" ;;
+    *)   agentline_seg build "${RED}build ✗ ${st}${RESET}" ;;
+  esac
+fi
+```
+
+`local.sh` runs on every full render (about once a second during a turn, never on a cached tick), so it must be cheap: read a file or test a path, as above, and prefer builtins to commands. Do not make network calls in it. Have a cron job, a hook or your build write the answer to a file, and read that file here.
 
 **How do I uninstall?**
 Remove the `statusLine` entry from `~/.claude/settings.json` and delete `~/.claude/agentline/` (plus `~/.claude/agentline-services.conf` if you no longer want the service list).

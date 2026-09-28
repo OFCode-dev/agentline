@@ -1673,6 +1673,64 @@ _color_pct() {
 # one `[ -f ]` per full render and nothing per second; an edit shows up within
 # AGENTLINE_CACHE_TTL.
 AGENTLINE_LOCAL="${AGENTLINE_LOCAL:-$HOME/.claude/agentline/local.sh}"
+
+# Custom segments. local.sh calls `agentline_seg <name> <content>` to add
+# one: a segment named local:<name> for AGENTLINE_LAYOUT and AGENTLINE_DROP,
+# placed at the end of line 4 (the system layer) in the default layout, in
+# call order. The name is 1-24 of a-z 0-9 _ - (anything else is ignored,
+# so a typo cannot inject a layout separator); a second call with a name
+# already given is ignored, as is empty content. It is laid out, measured
+# and cached like every segment, and costs nothing per second: local.sh only
+# runs on a full render.
+#
+# The content is often read from a file (a VPN state, a build status) that
+# something else writes, and it goes through printf %b like the rest of the
+# line. So colour is the one thing kept: an SGR sequence ESC [ digits ; m,
+# in any spelling printf %b would turn into one (the _mono_strip list), is
+# rewritten as "\033[...m"; every other control character, C1 byte and
+# backslash goes, as _clean does to host strings. An OSC or a cursor move
+# is left as harmless text at worst. mono strips the kept SGR later, with
+# every other colour.
+_LSEGS=""; _LNAMES=""
+_lseg_clean() {  # _lseg_clean <text> -> $_lseg_out
+  local rest="$1" o="" e best pre bpre after par t
+  while :; do
+    best=""; bpre=""
+    for e in '\033[' '\0033[' '\e[' '\E[' '\x1b[' '\x1B[' '\u001b[' '\u001B[' $'\033['; do
+      case "$rest" in *"$e"*) ;; *) continue ;; esac
+      pre="${rest%%"$e"*}"
+      if [ -z "$best" ] || [ ${#pre} -lt ${#bpre} ]; then best="$e"; bpre="$pre"; fi
+    done
+    [ -z "$best" ] && break
+    t="$bpre"; _clean t; o="${o}${t}"
+    after="${rest:$(( ${#bpre} + ${#best} ))}"
+    # Kept only when an m ends it and all before the m is digits and ";"
+    # (32 at most); otherwise the escape spelling is dropped, the rest kept.
+    par="${after%%m*}"
+    rest="$after"
+    case "$after" in
+      *m*) case "$par" in
+             *[!0123456789\;]*) ;;
+             *) [ ${#par} -le 32 ] && { o="${o}\\033[${par}m"; rest="${after#*m}"; } ;;
+           esac ;;
+    esac
+  done
+  t="$rest"; _clean t
+  _lseg_out="${o}${t}"
+}
+agentline_seg() {  # agentline_seg <name> <content> — for local.sh
+  case "${1-}" in
+    ''|*[!abcdefghijklmnopqrstuvwxyz0123456789_-]*) return 0 ;;
+  esac
+  [ ${#1} -le 24 ] || return 0
+  case ",$_LNAMES," in *",local:$1,"*) return 0 ;; esac
+  _lseg_clean "${2-}"
+  [ -n "$_lseg_out" ] || return 0
+  _LNAMES="${_LNAMES:+${_LNAMES},}local:$1"
+  _LSEGS="${_LSEGS}local:$1${_US}${_lseg_out}${_RS}"
+  return 0
+}
+
 [ -f "$AGENTLINE_LOCAL" ] && . "$AGENTLINE_LOCAL"
 # Is color_pct still the built-in? Only it sets _cp_builtin; a replacement
 # from local.sh does not, and then every colour is asked of it (see
@@ -2633,6 +2691,8 @@ if [ -n "$cron_count" ] && [ "$cron_count" -gt 0 ]; then
   _seg cron "${G_CRON}${DIM}cron:${cron_count}${RESET}"
 fi
 [ -n "$dev_ports" ] && _seg ports "${G_PORTS}${DIM}${dev_ports}${RESET}"
+# local.sh's own segments (agentline_seg), already cleaned, in call order.
+SEGS="${SEGS}${_LSEGS}"
 
 [ -n "$_AL_DOCTOR" ] && _dt_mark segments
 # === Layout ===
@@ -2678,6 +2738,12 @@ AGENTLINE_LAYOUT_DEFAULT="model,effort,fast,ctx,compact,5h,week,cache,cost,dur,t
 # cache (the prompt-cache warning) goes last of all: it only shows when it
 # is about to cost something, and then it outranks any host reading.
 AGENTLINE_DROP_DEFAULT="tok_in,tok_out,words,compact,dur,date,version,email,lines,cpu,mem,disk,cache"
+# The default layout this render: local.sh's segments close line 4 (its
+# last line), in call order. They are not on the default drop list — asked
+# for by name, they wrap with line 4 rather than vanish; AGENTLINE_DROP can
+# name them. Any local:<name> is a known name to a custom layout, so a
+# segment that has no content this render hides nothing but itself.
+_lay_def="${AGENTLINE_LAYOUT_DEFAULT}${_LNAMES:+,${_LNAMES}}"
 # Leading zeros and absurd lengths are refused: bash arithmetic reads "08" as
 # bad octal, and a width is never six digits.
 _cols="${COLUMNS-}"
@@ -2742,6 +2808,8 @@ for rec in segs.split('\x1e'):
     if text and name not in seg:
         seg[name] = grad_re.sub(gradient, text)
 
+# local.sh's segments (agentline_seg): any well-formed name is known.
+LOCAL_RE = re.compile(r'local:[a-z0-9_-]{1,24}')
 def parse(spec):
     # "/" starts a line, "," separates names; unknown names and repeats are
     # ignored, so a typo hides nothing but itself.
@@ -2751,7 +2819,7 @@ def parse(spec):
         names = []
         for n in part.split(','):
             n = n.strip()
-            if n in known and n not in seen:
+            if (n in known or LOCAL_RE.fullmatch(n)) and n not in seen:
                 seen.add(n)
                 names.append(n)
         lines.append(names)
@@ -2865,8 +2933,8 @@ PYEOF
 # (128 KB on Linux, E2BIG past it), and when this python failed for any
 # reason — that, or no python3 at all — $out came back empty and all four
 # lines vanished. A here-string costs no fork.
-out=$(python3 -I -c "$_AL_PY" "$STATUSLINE_WIDTH" "$P" "${AGENTLINE_LAYOUT:-$AGENTLINE_LAYOUT_DEFAULT}" \
-  "$AGENTLINE_LAYOUT_DEFAULT" "$_fit" "${AGENTLINE_DROP-$AGENTLINE_DROP_DEFAULT}" \
+out=$(python3 -I -c "$_AL_PY" "$STATUSLINE_WIDTH" "$P" "${AGENTLINE_LAYOUT:-$_lay_def}" \
+  "$_lay_def" "$_fit" "${AGENTLINE_DROP-$AGENTLINE_DROP_DEFAULT}" \
   "$CLOCK_TOKEN" "$ANIM_MAX_TOKEN" "$ANIM_ULTRA_TOKEN" "$GRAD_OPEN" "$GRAD_CLOSE" "$PCEXP_TOKEN" "$_WARNED" "$pc_meas" \
   "$FABLE_FROM" "$FABLE_TO" <<< "$SEGS")
 _layout_rc=$?
@@ -2880,13 +2948,14 @@ _layout_rc=$?
 # layout that names nothing known is the default, as in the python pass.
 if [ "$_layout_rc" != 0 ] && [ -z "$out" ] && [ -n "$SEGS" ]; then
   _all="${_RS}${SEGS}"
-  _lay="${AGENTLINE_LAYOUT:-$AGENTLINE_LAYOUT_DEFAULT}"; _lay="${_lay// /}"
+  _lay="${AGENTLINE_LAYOUT:-$_lay_def}"; _lay="${_lay// /}"
   _known=0; _names="${_lay//\//,},"
   while [ -n "$_names" ]; do
     _n="${_names%%,*}"; _names="${_names#*,}"
-    case ",${AGENTLINE_LAYOUT_DEFAULT//[\/ ]/,}," in *",${_n},"*) [ -n "$_n" ] && _known=1 ;; esac
+    case ",${_lay_def//[\/ ]/,}," in *",${_n},"*) [ -n "$_n" ] && _known=1 ;; esac
+    case "$_n" in local:?*) _known=1 ;; esac
   done
-  [ "$_known" = 1 ] || _lay="$AGENTLINE_LAYOUT_DEFAULT"
+  [ "$_known" = 1 ] || _lay="$_lay_def"
   _lay="warn,${_lay// /}/"
   while [ -n "$_lay" ]; do
     _names="${_lay%%/*},"; _lay="${_lay#*/}"; _row=""
@@ -3104,6 +3173,7 @@ _dt_why() {  # _dt_why <segment> — where its data comes from
     ssh)      echo "probe: who (remote logins)" ;;
     cron)     echo "probe: crontab -l" ;;
     ports)    [ "$OS" = Darwin ] && echo "probe: lsof, listeners on 3000-9999" || echo "probe: ss, listeners on 3000-9999" ;;
+    local:*)  echo "local.sh: agentline_seg ${1#local:}" ;;
     *)        echo "" ;;
   esac
 }
@@ -3179,8 +3249,8 @@ if [ -n "$_AL_DOCTOR" ]; then
   done
   echo
   echo "segments (shown = emitted; at a narrow width the layout may still drop it, see AGENTLINE_DROP)"
-  _dt_lay=",${AGENTLINE_LAYOUT:-$AGENTLINE_LAYOUT_DEFAULT},"; _dt_lay="${_dt_lay//[\/ ]/,}"
-  for _n in ${AGENTLINE_LAYOUT_DEFAULT//[\/,]/ }; do
+  _dt_lay=",${AGENTLINE_LAYOUT:-$_lay_def},"; _dt_lay="${_dt_lay//[\/ ]/,}"
+  for _n in ${_lay_def//[\/,]/ }; do
     _dt_s=hidden; _dt_have "$_n" && _dt_s=shown
     _dt_note=""
     case "$_dt_lay" in *",$_n,"*) ;; *) _dt_note=" [not in AGENTLINE_LAYOUT]" ;; esac
