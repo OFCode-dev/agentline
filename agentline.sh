@@ -1759,7 +1759,7 @@ _lseg_clean() {  # _lseg_clean <text> -> $_lseg_out
     [ ${#pre} -eq ${#rest} ] && break
     rest="${rest:${#pre}}"
     hit=""
-    for e in '\033[' '\0033[' '\e[' '\E[' '\x1b[' '\x1B[' '\u001b[' '\u001B[' $'\033['; do
+    for e in '\033[' '\0033[' '\33[' '\e[' '\E[' '\x1b[' '\x1B[' '\u001b[' '\u001B[' $'\033['; do
       case "$rest" in "$e"*) hit="$e"; break ;; esac
     done
     # A backslash or ESC that starts no spelling is dropped, as _clean drops
@@ -1785,7 +1785,17 @@ agentline_seg() {  # agentline_seg <name> <content> — for local.sh
   [ ${#1} -le 24 ] || return 0
   case ",$_LNAMES," in *",local:$1,"*) return 0 ;; esac
   _lseg_clean "${2-}"
-  [ -n "$_lseg_out" ] || return 0
+  # Colour alone is no segment: "\e[8m" made a blank one whose colour ran
+  # on into the separator. Some text must be left once the SGR is gone, and
+  # a coloured segment ends with a reset, closed or not. Every SGR kept is
+  # the canonical \033[...m by now, so taking them out is simple.
+  local t="$_lseg_out"
+  while :; do
+    case "$t" in *'\033['*) ;; *) break ;; esac
+    t="${t%%'\033['*}${t#*'\033['*m}"
+  done
+  case "$t" in *[![:space:]]*) ;; *) return 0 ;; esac
+  case "$_lseg_out" in *'\033['*) _lseg_out="${_lseg_out}\\033[0m" ;; esac
   _LNAMES="${_LNAMES:+${_LNAMES},}local:$1"
   _LSEGS="${_LSEGS}local:$1${_US}${_lseg_out}${_RS}"
   return 0
@@ -2874,11 +2884,17 @@ def gradient(m):
         out.append(f'\033[1;38;2;{r};{g};{b}m{ch}')
     return ''.join(out)
 
+# A raw lone 0x80-0x9F byte reaches here as a surrogate (\udc80-\udc9f, the
+# surrogateescape decoding of an invalid byte) and would be written back as
+# that byte: a bare 0x9B is the 8-bit CSI. _clean cannot take it without
+# decoding (it could be part of a character there), but here a surrogate is
+# never part of one. A local.sh segment is the way such a byte arrives.
+C1_RAW = re.compile('[\udc80-\udc9f]')
 seg = {}
 for rec in segs.split('\x1e'):
     name, _, text = rec.partition('\x1f')
     if text and name not in seg:
-        seg[name] = grad_re.sub(gradient, text)
+        seg[name] = grad_re.sub(gradient, C1_RAW.sub('', text))
 
 # local.sh's segments (agentline_seg): any well-formed name is known.
 LOCAL_RE = re.compile(r'local:[a-z0-9_-]{1,24}')
@@ -3060,7 +3076,7 @@ fi
 # A function, because --doctor strips its host-probe lines the same way.
 _mono_strip() {  # _mono_strip <text> -> $_mono_out
   local _esc _rest _par _o="$1"
-  for _esc in '\033[' '\0033[' '\e[' '\E[' '\x1b[' '\x1B[' '\u001b[' '\u001B[' $'\033['; do
+  for _esc in '\033[' '\0033[' '\33[' '\e[' '\E[' '\x1b[' '\x1B[' '\u001b[' '\u001B[' $'\033['; do
     case "$_o" in *"$_esc"*) ;; *) continue ;; esac
     _rest="$_o"; _o=""
     while :; do

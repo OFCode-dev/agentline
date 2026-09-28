@@ -87,7 +87,10 @@
   character and backslash sequence is stripped, so content read from a
   file cannot inject an escape. Only the first 512 characters count, and
   they are cleaned in one pass: before, 27 KB of `\033[2J` in a UTF-8
-  locale took 152 s a render. `--doctor` lists them.
+  locale took 152 s a render. Content that is only colour (`\e[8m`) is no
+  segment, and a coloured one ends with a reset, so its colour cannot run
+  into the separator. `\33[` counts as an escape spelling, and a raw lone
+  0x9B byte (the 8-bit CSI) is removed. `--doctor` lists them.
 
 ## 2.0.0 — 2026-09-28
 

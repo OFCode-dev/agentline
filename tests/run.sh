@@ -1532,6 +1532,22 @@ check "local seg: coloured text kept" grep -qF "${ESC}[1;31mşey " "$T/out"
 check "local seg: 4000 clear-screens, no CSI but SGR" sh -c "! LC_ALL=C grep -qE '${ESC}\\[[0-9;]*[^0-9;m]' '$T/out'"
 check "local seg: ... and cut before their tail" sh -c "! grep -q 'tail' '$T/nb'"
 check "local seg: cut at 512 characters" sh -c "grep -q '0000' '$T/nb' && ! grep -q 'END' '$T/nb'"
+# Colour alone is no segment; an unclosed colour is closed; \33[ is an ESC
+# spelling too; a raw lone 0x9B byte goes (review of J10, stage J9b).
+cat > "$T/local-sgr.sh" <<'EOF'
+agentline_seg hidden '\e[8m'
+agentline_seg blank "$(printf '\033[31m')   \e[0m"
+agentline_seg open '\e[31mopen'
+agentline_seg oct '\33[32moct\33[0m'
+agentline_seg c1 "$(printf 'A\233B')"
+EOF
+nb '"model":{"id":"claude-opus-5"}' "model,local:hidden,local:blank,local:open,local:oct,local:c1" AGENTLINE_LOCAL="$T/local-sgr.sh"
+check "local seg: SGR-only content is no segment ($(cat "$T/nb"))" [ "$(cat "$T/nb")" = "Opus 5 │ open │ oct │ AB" ]
+check "local seg: an unclosed colour is reset before the separator" grep -qF "${ESC}[31mopen${ESC}[0m" "$T/out"
+check "local seg: \\33[ kept as colour" grep -qF "${ESC}[32moct${ESC}[0m" "$T/out"
+check "local seg: no raw lone 0x9B" nobytes "$T/out" '\233'
+nb '"model":{"id":"claude-opus-5"}' "model,local:oct" AGENTLINE_LOCAL="$T/local-sgr.sh" NO_COLOR=1
+check "local seg: mono strips \\33[ too" sh -c "! grep -q '$ESC' '$T/out'"
 
 # Breadcrumb (C14): project_dir differing from cwd leads the path, dim.
 printf '{"session_id":"crumb-0001","cwd":"%s","workspace":{"project_dir":"/src/launch/"}}\n' "$WORK" > "$T/crumb.json"
