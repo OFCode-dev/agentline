@@ -896,13 +896,14 @@ fi
 # a partial clone would use. fsmonitor and hooksPath are pinned anyway and
 # refused all the same. Section and key names are case-insensitive to git
 # and whitespace inside a line is dropped before matching ("[ Filter
-# "x" ]", "[include]path=..", "fsMonitor = ..."). A word in a comment or a
-# value errs on the safe side: the counts are skipped, the branch stays.
+# "x" ]", "[include]path=..", "fsMonitor = ..."). A section counts by its
+# header, a key by its name only (a URL ending in /fsmonitor is no such
+# key). A refusal skips the counts; the branch stays.
 # Builtins only: `read` and `case`, with nocasematch (bash 3.1+).
 # A refusal leaves its reason in $_git_cfg_why, for --doctor: the key class
 # (filter, include, ...), never the line itself, which may hold a secret.
 _git_cfg_ok() {
-  local f="$1" l total=0 rc=0 nc=0
+  local f="$1" l total=0 rc=0 nc=0 _k
   [ -e "$f" ] || [ -L "$f" ] || return 0
   [ -f "$f" ] && [ -O "$f" ] && [ -r "$f" ] || {
     _git_cfg_why="${f##*/} is not a regular, readable file owned by you"; return 1; }
@@ -913,18 +914,25 @@ _git_cfg_ok() {
     total=$(( total + ${#l} + 1 ))
     [ "$total" -gt 65536 ] && { _git_cfg_why="oversized config: ${f##*/} is past 64 KB"; rc=1; break; }
     l="${l//[[:space:]]/}"
+    # Sections by their header; keys by their name, the part before "=" (a
+    # bare name is a boolean true), after a header on the same line if there
+    # is one. A key name inside a value — a remote URL ending in
+    # /fsmonitor — used to count as that key.
+    _k="${l#\[*\]}"; _k="${_k%%=*}"
     case "$l" in
       \[filter*)      _git_cfg_why=filter ;;
       \[include*)     _git_cfg_why=include ;;
       \[credential*)  _git_cfg_why=credential ;;
-      *fsmonitor*)    _git_cfg_why=fsmonitor ;;
-      *hookspath*)    _git_cfg_why=hooksPath ;;
-      *sshcommand*)   _git_cfg_why=sshCommand ;;
-      *askpass*)      _git_cfg_why=askpass ;;
-      *gitproxy*)     _git_cfg_why=gitProxy ;;
-      *uploadpack*)   _git_cfg_why=uploadpack ;;
-      *receivepack*)  _git_cfg_why=receivepack ;;
-      *) continue ;;
+      *) case "$_k" in
+           fsmonitor)    _git_cfg_why=fsmonitor ;;
+           hookspath)    _git_cfg_why=hooksPath ;;
+           sshcommand)   _git_cfg_why=sshCommand ;;
+           askpass)      _git_cfg_why=askpass ;;
+           gitproxy)     _git_cfg_why=gitProxy ;;
+           uploadpack)   _git_cfg_why=uploadpack ;;
+           receivepack)  _git_cfg_why=receivepack ;;
+           *) continue ;;
+         esac ;;
     esac
     _git_cfg_why="${f##*/} names a key that can run a command ($_git_cfg_why)"
     rc=1; break
@@ -981,10 +989,12 @@ if [ -n "$cwd" ] && [ -d "$cwd" ]; then
       *) _gd=""; _git_ask=1 ;;
     esac
   fi
+  _git_head_why=""  # why there is no branch, when it is not a detached HEAD
   if [ -n "$_gd" ]; then
     _h=""
     if [ -e "$_gd/HEAD" ] && [ ! -f "$_gd/HEAD" ]; then
       _h="-"  # not a file: no branch, and no git asked to open it either
+      _git_head_why="HEAD is not a regular file"
     elif [ -L "$_gd/HEAD" ]; then
       # A symlinked HEAD (core.preferSymlinkRefs, old git) reads as the
       # branch file's hash, i.e. detached; git resolves the link itself.
@@ -992,6 +1002,8 @@ if [ -n "$cwd" ] && [ -d "$cwd" ]; then
     elif [ -O "$_gd/HEAD" ]; then
       IFS= read -r -n 1024 _h 2>/dev/null < "$_gd/HEAD"
       [ ${#_h} -ge 1024 ] && _h=""
+    elif [ -e "$_gd/HEAD" ]; then
+      _git_head_why="HEAD not owned by you"
     fi
     # Only the two canonical shapes are settled here: exactly "ref:
     # refs/heads/<name>" (no whitespace: git refuses it in a ref name, so
@@ -1084,7 +1096,7 @@ if [ -n "$cwd" ] && [ -d "$cwd" ]; then
   # assignments: no fork, and it is never cached or shown.
   _git_st_ok=0
   if [ -z "$git_branch" ]; then
-    { [ -n "$_gd" ] || [ "$_git_ask" = 1 ]; } && _git_why="no branch (a detached HEAD): no git segment"
+    { [ -n "$_gd" ] || [ "$_git_ask" = 1 ]; } && _git_why="no branch (${_git_head_why:-a detached HEAD}): no git segment"
   elif [ "${AGENTLINE_GIT_STATUS:-1}" = 0 ]; then
     _git_why="disabled (AGENTLINE_GIT_STATUS=0)"
   elif [ -z "$_TIMEOUT" ]; then
@@ -1183,9 +1195,15 @@ if [ -n "$cwd" ] && [ -d "$cwd" ]; then
       [ "$_chg" -gt 0 ] && git_dirty="±${_chg}"
       [ "$_unt" -gt 0 ] && git_dirty="${git_dirty:+${git_dirty} }?${_unt}"
       [ "$_cfl" -gt 0 ] && git_dirty="${git_dirty:+${git_dirty} }✖${_cfl}"
-      # porcelain v2 prints "# branch.upstream" only when one is set.
+      # porcelain v2 prints "# branch.upstream" when one is set, and
+      # "# branch.ab" only when that upstream's ref exists: an upstream
+      # whose branch was deleted (or never fetched) has the first line
+      # without the second, and is not "in sync" with anything.
       case "$_st" in
-        *"# branch.upstream "*) _git_why="in sync with its upstream" ;;
+        *"# branch.ab "*)
+          if [ -z "$git_ab" ]; then _git_why="in sync with its upstream"
+          else _git_why="ahead/behind its upstream"; fi ;;
+        *"# branch.upstream "*) _git_why="upstream gone (no ahead/behind)" ;;
         *) _git_why="no upstream (no ahead/behind)" ;;
       esac
       [ -z "$git_dirty" ] && _git_why="$_git_why, clean tree"
@@ -3354,7 +3372,10 @@ if [ -n "$_AL_DOCTOR" ]; then
       _dt_s=hidden
       if [ -n "$git_ab$git_dirty" ]; then
         _dt_s=shown; _dt_w="${git_ab}${git_ab:+${git_dirty:+ }}${git_dirty}"
-        case "$_git_why" in "no upstream"*) _dt_w="$_dt_w; no upstream (no ahead/behind)" ;; esac
+        case "$_git_why" in
+          "no upstream"*) _dt_w="$_dt_w; no upstream (no ahead/behind)" ;;
+          "upstream gone"*) _dt_w="$_dt_w; upstream gone (no ahead/behind)" ;;
+        esac
       fi
       printf '  %-9s %-7s %s\n' counts "$_dt_s" "git status: $_dt_w"
     fi

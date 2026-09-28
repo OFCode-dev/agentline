@@ -61,7 +61,9 @@
   named by class (`filter`, `include`, `fsmonitor`, …, never the line
   itself), a git dir or HEAD not owned by you, an oversized config, no
   `timeout`/`gtimeout` binary, a back-off after a slow repo (until when),
-  no upstream, a detached HEAD, or not a repo. Before, all of these looked
+  no upstream or one whose branch is gone, a detached HEAD (or a HEAD that
+  is no regular file of yours), or not a repo. Config keys are matched by
+  name, so a remote URL ending in `/fsmonitor` is not taken for one. Before, all of these looked
   the same: a branch and nothing beside it.
 - A payload-change render no longer forks its formatters. The colour of
   each percentage, the context warning, `8.4m`/`12.3k` tokens and words,

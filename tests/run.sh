@@ -3017,6 +3017,29 @@ if [ -n "${GR-}" ] && [ -d "$GR" ]; then
   gq clone "$GB" "$GM/det"; gq -C "$GM/det" checkout --detach
   dgit "$GM/det"
   check "doctor git: detached HEAD" dhas 'git status: no branch \(a detached HEAD\)'
+  # Review of J10 (stage J9b): an upstream whose ref is gone is not "in
+  # sync"; a HEAD that is no file is not "detached"; a key name inside a
+  # value is no key.
+  gq clone "$GB" "$GM/gone"
+  gq -C "$GM/gone" update-ref -d refs/remotes/origin/main
+  dgit "$GM/gone"
+  check "doctor git: upstream gone" dhas '^  counts +hidden +git status: upstream gone \(no ahead/behind\), clean tree$'
+  : > "$GM/gone/new"
+  dgit "$GM/gone"
+  check "doctor git: upstream gone, dirty" dhas '^  counts +shown +git status: \?1; upstream gone \(no ahead/behind\)$'
+  gq clone "$GB" "$GM/fifo"; rm -f "$GM/fifo/.git/HEAD"; mkfifo "$GM/fifo/.git/HEAD"
+  dgit "$GM/fifo"
+  check "doctor git: a FIFO HEAD is no detached HEAD" dhas 'git status: no branch \(HEAD is not a regular file\)'
+  if [ "${EUID:-1}" = 0 ] && id nobody >/dev/null 2>&1; then
+    gq clone "$GB" "$GM/foreign"; chown nobody "$GM/foreign/.git/HEAD"
+    dgit "$GM/foreign"
+    check "doctor git: a foreign HEAD is no detached HEAD" dhas 'git status: no branch \(HEAD not owned by you\)'
+  else
+    skip "doctor git: a foreign-owned HEAD (needs root)"
+  fi
+  gq clone "$GB" "$GM/urlfs"; gq -C "$GM/urlfs" remote set-url origin https://example.com/team/fsmonitor
+  dgit "$GM/urlfs"
+  check "doctor git: fsmonitor in a URL is no key" dhas '^  counts +hidden +git status: in sync with its upstream, clean tree$'
   dgit "$T"
   check "doctor git: not a repo" dhas '^  counts +hidden +git status: not a repo$'
   # The back-off a real render obeys is read (not written) by the doctor.
