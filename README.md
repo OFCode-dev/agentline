@@ -388,12 +388,12 @@ The status line runs up to once a second in every open session, so the number th
 
 | Path | When | bash 5.2 | bash 3.2 |
 |---|---|---|---|
-| tick | same payload, render cache fresh (the once-a-second path) | 5.8 ms, 1 exec (`cat`) | 10.7 ms, 3 execs (`cat`, 2 × `date`) |
-| payload change | a new payload, probe cache fresh (an active turn, ~1/s) | 111 ms, 2 × `python3` | 126 ms, 2 × `python3` |
-| payload change, Fable | the same with the gradient model name | 109 ms, 2 × `python3` | 126 ms, 2 × `python3` |
-| cold probe | a new payload and every host probe (every 15 s at most) | 233 ms, 3 × `python3` | 250 ms, 3 × `python3` |
+| tick | same payload, render cache fresh (the once-a-second path) | 6.3 ms, 1 exec (`cat`) | 11.2 ms, 3 execs (`cat`, 2 × `date`) |
+| payload change | a new payload, probe cache fresh (an active turn, ~1/s) | 83 ms, 3 execs (`cat`, 2 × `python3`) | 108 ms, 10 execs (2 × `python3`) |
+| payload change, Fable | the same with the gradient model name | 83 ms, 3 execs (2 × `python3`) | 110 ms, 10 execs (2 × `python3`) |
+| cold probe | a new payload and every host probe (every 15 s at most) | 216 ms, 26 execs (3 × `python3`) | 243 ms, 33 execs (3 × `python3`) |
 
-The previous release measured 133 / 153 / 297 ms for the last three rows on the same host (bash 5.2). Its payload-change render booted `python3` three times, four for Fable, and a cold probe booted it five times and called `systemctl` twice per service unit. The floor is honest rather than impressive: one `python3` start costs about 20 ms of CPU, and a full render needs two, one for the JSON payload and one for the width-aware layout. Everything else is bash itself: colours, `12.3k`, `2h13m`, the reset countdowns and the date are arithmetic and `printf`, so on bash ≥ 4.2 a payload-change render execs `cat` and the two `python3` and nothing more (one `awk` more when the subagent registry exists). It used to fork about 18 short `awk`/`date`/`sed` programs besides. bash 3.2 has no `printf '%(…)T'` and keeps `date` for the calendar. Sub-10 ms is only the cached tick.
+Before the formatters stopped forking, a payload change measured 111 ms (bash 5.2) and 126 ms (bash 3.2) on the same host. The release before that measured 133 / 153 / 297 ms for the last three rows (bash 5.2). Its payload-change render booted `python3` three times, four for Fable, and a cold probe booted it five times and called `systemctl` twice per service unit. The floor is honest rather than impressive: one `python3` start costs about 20 ms of CPU, and a full render needs two, one for the JSON payload and one for the width-aware layout. Everything else is bash itself: colours, `12.3k`, `2h13m`, the reset countdowns and the date are arithmetic and `printf`, so on bash ≥ 4.2 a payload-change render execs `cat` and the two `python3` and nothing more (one `awk` more when the subagent registry exists). It used to fork about 18 short `awk`/`date`/`sed` programs besides. bash 3.2 has no `printf '%(…)T'` and keeps `date` for the calendar. Sub-10 ms is only the cached tick.
 
 ## Troubleshooting
 
