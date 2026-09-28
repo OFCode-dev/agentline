@@ -1,0 +1,4 @@
+{"id": "g-codex", "content": "⠋ Review the parser changes │ Haiku 4.5 🟢low │ 📊 12% │ ⏱️ 5m │ → codex/gpt-6-astra ⏳2m │ ▃▅▆▇█▆"}
+{"id": "g-read", "content": "⠋ Survey the install script │ Opus 5.5 🔴xhigh │ 📊 75% │ ⏱️ 5m │ → Read agentline.sh ⏳3s │ ▃▅▆▇█▆ │ 📂 other"}
+{"id": "g-done", "content": "✓ Write the changelog entry │ Sonnet 5 │ 📊 12% │ ⏱️ 3m │ ▃▅▆▇█▆"}
+{"id": "g-fail", "content": "✗ Probe the flaky test │ ✦ Fable 5.1 ⚙️ 32k │ 📊 12% │ ▃▅▆▇█▆"}

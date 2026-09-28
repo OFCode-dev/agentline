@@ -3183,6 +3183,7 @@ check "isolated: install exit 0 (got $rc)" [ "$rc" = 0 ]
 pwned "isolated: install.sh"
 # And no interpreter start in the shipped scripts goes without -I.
 if grep -nE '(^|[^-A-Za-z_])python3( |$)' "$ROOT/agentline.sh" "$ROOT/install.sh" "$ROOT"/hooks/*.sh \
+     "$ROOT/agentline-subagents.sh" \
      | grep -vE ':[0-9]+: *#|command -v python3|python3 -I( |$)|python3 not found' > "$T/nonisolated"; then
   fail "isolated: python3 without -I: $(cat "$T/nonisolated")"
 else
@@ -3221,6 +3222,269 @@ prepare minimal "$T/lc.json"; render "$T/lc.json" 120
 check "locale: long session name cut at 27 characters" grep -qF "🏷️ $(printf '%027d' 0 | sed 's/0/ç/g')..." "$T/out"
 check "locale: long session name output is valid UTF-8" \
   python3 -c 'import sys; open(sys.argv[1], "rb").read().decode("utf-8")' "$T/out"
+
+# ===========================================================================
+# 8. Subagent rows (agentline-subagents.sh)
+# ===========================================================================
+# The fixtures are generated (tests/fixtures/subagents/make.py): transcripts
+# in Claude Code's layout under a fixture project dir, stamped against the
+# fixtures' own pinned clock SNOW, so a spinner frame, a "⏳2m" and a golden
+# row are the same on every run.
+SUBS="$ROOT/agentline-subagents.sh"
+SNOW=1790000000
+SPROJ="$T/sub/proj"; SPAY="$T/sub/pay"; SSID=sess-0001
+TAB=$(printf '\t')
+python3 "$FIX/subagents/make.py" "$SPROJ" "$SSID" "$SNOW" "$SPAY"
+SENV=""  # extra VAR=val words for the next srun (unquoted on purpose)
+srun() {  # srun <payload> -> $T/sout (raw), $T/srows (id<TAB>content, SGR stripped), $T/serr, $src
+  # shellcheck disable=SC2086
+  ( cd "$WORK" && run_env AGENTLINE_NOW="$SNOW" $SENV "$TEST_BASH" "$SUBS" < "$1" > "$T/sout" 2> "$T/serr" )
+  src=$?
+  # Every line must be one JSON object with a string id and content, and the
+  # content may hold no control character but the SGR colour codes, no C1
+  # and no backslash, whatever the fixture put in.
+  python3 - "$T/sout" "$T/srows" <<'PYEOF' || src=99
+import json, re, sys
+rows = []
+for line in open(sys.argv[1], encoding='utf-8'):
+    o = json.loads(line)
+    assert set(o) == {'id', 'content'} and isinstance(o['id'], str) and isinstance(o['content'], str)
+    plain = re.sub(r'\x1b\[[0-9;]*m', '', o['content'])
+    bad = re.search('[\x00-\x1f\x7f-\x9f\\\\\u202a-\u202e]', plain)
+    assert not bad, 'control character in %r' % plain
+    rows.append('%s\t%s' % (o['id'], plain))
+open(sys.argv[2], 'w', encoding='utf-8').write(''.join(r + '\n' for r in rows))
+PYEOF
+}
+srow() { sed -n "s/^$1$TAB//p" "$T/srows"; }       # srow <id> -> its plain row
+shas() { srow "$1" | grep -qF -- "$2"; }            # shas <id> <text>
+sgot() { if shas "$1" "$2"; then pass; else fail "subagents: $1 has '$2' (got: $(srow "$1"))"; fi; }
+snot() { if shas "$1" "$2"; then fail "subagents: $1 has no '$2' (got: $(srow "$1"))"; else pass; fi; }
+sabsent() { if grep -q "^$1$TAB" "$T/srows"; then fail "subagents: $1 must keep the default row"; else pass; fi; }
+with_cols() {  # with_cols <payload> <columns> <out>
+  python3 -c 'import json, sys; d = json.load(open(sys.argv[1])); d["columns"] = int(sys.argv[2]); json.dump(d, open(sys.argv[3], "w"))' "$@"
+}
+swidth_ok() {  # swidth_ok <columns> — no row wider, measured as the script measures
+  python3 - "$T/srows" "$1" <<'PYEOF'
+import sys, unicodedata
+def vis(s):
+    n = prev = 0
+    for c in s:
+        if c == '\ufe0f':
+            n, prev = n + 2 - prev, 2
+        elif unicodedata.category(c) in ('Mn', 'Me', 'Cf'):
+            continue
+        else:
+            prev = 2 if unicodedata.east_asian_width(c) in ('W', 'F') else 1
+            n += prev
+    return n
+w = int(sys.argv[2])
+bad = [l for l in open(sys.argv[1], encoding='utf-8') if vis(l.rstrip('\n').split('\t', 1)[1]) > w]
+sys.exit('rows wider than %d: %r' % (w, bad) if bad else 0)
+PYEOF
+}
+sgold() {  # sgold <name> — $T/sout against tests/golden/subagents/<name>.txt
+  local g="$GOLD/subagents/$1.txt"
+  if [ "$UPDATE" = 1 ]; then
+    mkdir -p "$GOLD/subagents"; cp "$T/sout" "$g"; pass
+  elif [ ! -f "$g" ]; then
+    fail "subagents: no golden file ${g#"$ROOT"/} (run: bash tests/run.sh --update)"
+  elif cmp -s "$T/sout" "$g"; then
+    pass
+  else
+    fail "subagents: $1 differs from ${g#"$ROOT"/}"
+    diff -u "$g" "$T/sout" | head -n 20 | sed 's/^/    /'
+  fi
+}
+
+# --- workers: every pattern of the classifier, from a running Bash call -------
+srun "$SPAY/workers.json"
+check "subagents: exit 0 (got $src)" [ "$src" = 0 ]
+check "subagents: stderr empty" [ ! -s "$T/serr" ]
+while IFS='|' read -r sid_ want; do
+  sgot "$sid_" "→ $want ⏳2m"
+done <<'EOF'
+w-codex|codex/gpt-6-astra
+w-codex-wrapped|codex/o5-mini
+w-codex-nomodel|codex
+w-agy|agy/gemini-3-pro
+w-bayrak|bayrak/opus
+w-bayrak-plain|bayrak
+w-arb|arb/qwen3.6
+w-arbctl|arb/ctl
+w-jev|jev/jevk5
+w-jev-port|jev/jevk5
+w-hetzner|hetzner/qwen3.6-fp8
+w-hetzner-env|hetzner/qwen3.8-27b
+w-deepseek|deepseek
+w-nvidia|deepseek
+w-run|nightly eval
+w-run-cls|codex/gpt-6-astra
+w-bashc|agy/gemini-3-flash
+w-ssh|ssh/gpu1
+w-plain|Bash git
+w-escape|codex
+EOF
+check "subagents: the rest of a running row" \
+  grep -qxF "w-codex$TAB⠋ task w-codex │ Haiku 4.5 │ 📊 12% │ ⏱️ 5m │ → codex/gpt-6-astra ⏳2m │ ▃▅▆▇█▆" "$T/srows"
+# No command text, prompt, description, query or key ever reaches a row.
+check "subagents: no raw command text" sh -c "! grep -qE 'SECRET|review the diff|owned|prompt|messages' '$T/sout'"
+check "subagents: workers in the worker colour" grep -qF '\u001b[1;38;5;208m→ codex/gpt-6-astra' "$T/sout"
+# The Hetzner endpoint also counts by the host in HETZNER_INFERENCE_BASE_URL.
+cls() { run_env $SENV "$TEST_BASH" "$SUBS" --classify -- "$@" 2>&1; }
+SENV="HETZNER_INFERENCE_BASE_URL=https://inf.example.net/v1"
+check "classify: hetzner by its base URL's host" \
+  [ "$(cls curl https://inf.example.net/v1/chat -d '{"model":"Qwen/Qwen3.6-FP8"}')" = hetzner/qwen3.6-fp8 ]
+SENV=""
+check "classify: argv, no shell" [ "$(cls codex exec -m gpt-6-astra 'a b; c')" = codex/gpt-6-astra ]
+check "classify: timeout + env unwrapped" [ "$(cls timeout -s KILL 60 env -u X A=1 agy --model g3)" = agy/g3 ]
+check "classify: sh -c unwrapped" [ "$(cls sh -c 'cd /x && codex exec --model o5 y')" = codex/o5 ]
+check "classify: ssh bayrak claude" [ "$(cls ssh -o BatchMode=yes bayrak claude -p x --model sonnet)" = bayrak/sonnet ]
+check "classify: a model that is not a safe token is dropped" [ "$(cls codex exec -m 'gpt 6; rm' x)" = codex ]
+check "classify: program name otherwise" [ "$(cls /usr/bin/make -j4)" = make ]
+check "classify: interpreter script" [ "$(cls python3 -u tools/build.py --fast)" = build.py ]
+check "classify: no argv, no output" [ -z "$(cls)" ]
+"$TEST_BASH" "$SUBS" --bogus 2>/dev/null
+check "classify: bad option exits 2 (got $?)" [ $? = 2 ]
+
+# --- other tools, and which transcripts may be read ---------------------------
+srun "$SPAY/tools.json"
+check "subagents tools: exit 0 (got $src)" [ "$src" = 0 ]
+sgot t-read "→ Read parser.py ⏳2m"
+sgot t-edit "→ Edit README.md ⏳2m"
+sgot t-webfetch "→ WebFetch docs.example.com ⏳2m"
+sgot t-websearch "→ search ⏳2m"
+sgot t-grep "→ search ⏳2m"
+sgot t-agent "→ agent/Explore ⏳2m"
+sgot t-mcp "→ mcp:github ⏳2m"
+sgot t-multi "→ Read a.py ⏳1m +1"
+sgot t-esc "→ Read [31mred2Jevil.py ⏳2m"
+sgot t-wf "→ codex/gpt-6-astra ⏳2m"
+snot t-done "→"
+snot t-sym "→"
+snot t-fifo "→"
+snot t-missing "→"
+sgot t-missing "⠋ task t-missing │ Haiku 4.5"
+check "subagents tools: no URL path, query or credentials" sh -c "! grep -qE 'SECRET|user:pw|8443|/a/b' '$T/sout'"
+# A transcript owned by someone else is not read — testable only as root.
+if [ "${EUID:-1}" = 0 ] && id nobody >/dev/null 2>&1; then
+  chown nobody "$SPROJ/$SSID/subagents/agent-t-read.jsonl"
+  srun "$SPAY/tools.json"
+  snot t-read "→"
+  chown 0 "$SPROJ/$SSID/subagents/agent-t-read.jsonl"
+else
+  skip "subagents: another user's transcript (needs root)"
+fi
+# A hostile session id, or a relative transcript_path, reads nothing.
+srun "$SPAY/badsid.json"
+check "subagents: '../' session id still renders" grep -q "^w-codex$TAB" "$T/srows"
+snot w-codex "→"
+srun "$SPAY/relpath.json"
+snot w-codex "→"
+# A 10 MB transcript: only its tail is read.
+srun "$SPAY/big.json"
+sgot big "→ bayrak/sonnet ⏳2m"
+
+# --- task shapes ------------------------------------------------------------
+srun "$SPAY/shapes.json"
+check "subagents shapes: exit 0 (got $src)" [ "$src" = 0 ]
+check "subagents shapes: 20 rows (unknown shapes keep the default)" [ "$(n_rows "$T/srows")" = 20 ]
+sgot s-completed "✓ task s-completed │"
+sgot s-completed "⏱️ 6m"
+snot s-completed-nolog "⏱️"
+sgot s-failed "✗ task s-failed"
+sgot s-killed "⊘ task s-killed"
+sgot s-unknown "• task s-unknown"
+check "subagents: a bare task is its glyph and name" [ "$(srow s-bare)" = "⠋ bare-name" ]
+sgot s-effort-num "Haiku 4.5 ⚙️ 16k │"
+sgot s-effort-low "Haiku 4.5 🟢low │"
+sgot s-effort-max "Haiku 4.5 max │"
+sgot s-effort-xhigh "Opus 5.5 🔴xhigh │"
+sgot s-fable "✦ Fable 5.1 🟠high │"
+sgot s-sonnet "│ Sonnet 5 │"
+sgot s-legacy "│ Sonnet 3.5 │"
+sgot s-foreign "│ gpt-6-astra │"
+sgot s-badmodel "s-badmodel │ 📊 12%"
+sgot s-ctx-hot "│ ⚠️ 85% │"
+sgot s-ctx-warm "│ 📊 65% │"
+sgot s-cwd "│ 📂 other-repo"
+snot s-effort-low "📂"
+sgot s-esc "⠋ fix [31mred[0m 2J x1b tail │"
+check "subagents: no velocity from flat samples" [ "$(srow s-flat)" = "⠋ task s-flat │ Haiku 4.5 │ 📊 12% │ ⏱️ 5m" ]
+sabsent '\.\./evil'
+sabsent s-nostatus
+sabsent s-numstatus
+check "subagents: fable gradient" grep -qF '\u001b[1;38;2;255;215;90m✦' "$T/sout"
+check "subagents: max is the rainbow, a colour per letter" \
+  [ "$(grep '"s-effort-max"' "$T/sout" | grep -o '\\u001b\[1;38;2;[0-9;]*m[max]' | wc -l | tr -d ' ')" = 3 ]
+check "subagents: hot context is red" grep -qF '\u001b[1;31m⚠️ 85%' "$T/sout"
+
+# --- widths, themes, glyphs: goldens ------------------------------------------
+for c in 160 80 40 20; do
+  with_cols "$SPAY/golden.json" "$c" "$T/g.json"
+  srun "$T/g.json"
+  check "subagents golden @$c: exit 0" [ "$src" = 0 ]
+  if msg=$(swidth_ok "$c" 2>&1); then pass; else fail "subagents @$c: $msg"; fi
+  sgold "rows.c$c"
+done
+# The activity sheds its timer before it goes.
+with_cols "$SPAY/golden.json" 88 "$T/g.json"; srun "$T/g.json"
+sgot g-codex "→ codex/gpt-6-astra"
+snot g-codex "⏳"
+with_cols "$SPAY/golden.json" 120 "$T/g.json"
+SENV="NO_COLOR=1"; srun "$T/g.json"; SENV=""
+check "subagents mono: no colour" sh -c "! grep -q 'u001b' '$T/sout'"
+sgold rows.mono
+SENV="AGENTLINE_GLYPHS=ascii"; srun "$T/g.json"; SENV=""
+check "subagents ascii: nothing above U+007F" all_ascii "$T/sout"
+sgold rows.ascii
+SENV="AGENTLINE_THEME=light"; srun "$T/g.json"; SENV=""
+check "subagents light: darker fable" grep -qF '\u001b[1;38;2;180;110;0m' "$T/sout"
+sgold rows.light
+for c in 40 1; do
+  with_cols "$SPAY/workers.json" "$c" "$T/g.json"; srun "$T/g.json"
+  if msg=$(swidth_ok "$c" 2>&1); then pass; else fail "subagents workers @$c: $msg"; fi
+done
+check "subagents @1: the glyph alone" [ "$(srow w-codex)" = "⠋" ]
+with_cols "$SPAY/workers.json" 0 "$T/g.json"; srun "$T/g.json"
+check "subagents @0: no rows" [ ! -s "$T/sout" ]
+
+# --- scale, bad input, no python3 ----------------------------------------------
+srun "$SPAY/many.json"
+check "subagents: at most 32 rows of 40 tasks" [ "$(n_rows "$T/srows")" = 32 ]
+for bad in 'not json' '' '[1,2]' '{"tasks":"x"}'; do
+  printf '%s' "$bad" > "$T/bad.json"; srun "$T/bad.json"
+  check "subagents: bad payload '$bad' prints nothing, exit 0" [ "$src" = 0 -a ! -s "$T/sout" ]
+done
+mkdir -p "$T/nopy"
+( cd "$WORK" && env -i PATH="$T/nopy" HOME="$HOME_F" "$TEST_BASH" "$SUBS" < "$SPAY/workers.json" > "$T/sout" 2> "$T/serr" )
+nrc=$?
+check "subagents: no python3, no rows, exit 0 (got $nrc)" [ "$nrc" = 0 -a ! -s "$T/sout" -a ! -s "$T/serr" ]
+# Budget: 16 tasks, 1 MB transcripts, one python3. The best of three runs, so
+# one slow interpreter start on a busy CI box does not fail it.
+cat > "$T/perf.py" <<'PYEOF'
+import subprocess, sys, time
+best = None
+for _ in range(3):
+    t = time.monotonic()
+    subprocess.run([sys.argv[1], sys.argv[2]], stdin=open(sys.argv[3]), stdout=subprocess.DEVNULL)
+    ms = (time.monotonic() - t) * 1000
+    best = ms if best is None else min(best, ms)
+print(int(best))
+PYEOF
+perf_ms=$(cd "$WORK" && run_env python3 -I "$T/perf.py" "$TEST_BASH" "$SUBS" "$SPAY/perf.json")
+# 100 ms is the budget; a hosted macOS runner starts python3 alone in about
+# half of that, so it gets more room. AGENTLINE_TEST_PERF_MS overrides both.
+perf_max=100; [ "$(uname -s)" = Darwin ] && perf_max=250
+perf_max="${AGENTLINE_TEST_PERF_MS:-$perf_max}"
+check "subagents perf: 16 tasks x 1 MB in ${perf_ms}ms (< $perf_max)" [ "${perf_ms:-9999}" -lt "$perf_max" ]
+# The renderer and the classifier run isolated, like every python here.
+rm -f "$PWNED"
+erun "$SPAY/workers.json" "$TEST_BASH" "$SUBS"
+check "isolated: subagent rows still render" grep -q 'codex/gpt-6-astra' "$T/out"
+pwned "isolated: agentline-subagents.sh"
+erun /dev/null "$TEST_BASH" "$SUBS" --classify -- codex exec -m m1
+pwned "isolated: agentline-subagents.sh --classify"
 
 # ===========================================================================
 echo "agentline tests (bash $TEST_BASH_MAJOR): $n_pass passed, $n_fail failed, $n_skip skipped"

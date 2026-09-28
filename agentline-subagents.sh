@@ -1,0 +1,807 @@
+#!/bin/bash
+# agentline-subagents — the subagent rows of agentline, for Claude Code's
+# `subagentStatusLine` setting.
+#
+#   "subagentStatusLine": {"type": "command",
+#                          "command": "~/.claude/agentline/agentline-subagents.sh"}
+#
+# Claude Code runs it once per refresh tick while subagents are listed, with
+# one JSON object on stdin: the usual hook fields (session_id, the MAIN
+# session's transcript_path, cwd, ...), `columns` (the width a row may use) and
+# `tasks`, one entry per subagent. For each task it prints one JSON line,
+# {"id": <task id>, "content": <row>}, and Claude Code draws that row instead
+# of its own. A task it prints nothing for keeps the default row, so every
+# case this script does not understand — no python3, a payload that does not
+# parse, a task without a usable id — degrades to exactly what Claude Code
+# shows without agentline.
+#
+# A row, most important field first (at a narrow width the last ones go):
+#   ⠹ fix the parser │ Haiku 4.5 🟢low │ 📊 12% │ ⏱️ 3m │ → codex/gpt-6-astra ⏳2m │ ▁▂▃▅▇ │ 📂 api
+#   status, label, model + effort, context used, elapsed, what the subagent is
+#   doing right now (read from the tail of its own transcript), token
+#   velocity, and its cwd where that is not the session's.
+#
+# The "doing right now" part names external workers, not just tools: a Bash
+# call running `codex exec -m gpt-6-astra …` shows as codex/gpt-6-astra, an
+# `ssh bayrak claude -p --model opus …` as bayrak/opus, a curl to the local
+# model server as arb/qwen3.6. The same classifier labels agentline-run's
+# rows on the main line, through the second mode:
+#
+#   agentline-subagents.sh --classify -- CMD [ARGS...]
+#                           print the worker label for that command line
+#                           (codex/gpt-6-astra, ...), or its program name
+#
+# Honours AGENTLINE_THEME (dark|light|mono), NO_COLOR, AGENTLINE_GLYPHS
+# (emoji|ascii) and the AGENTLINE_COLOR_* overrides, like agentline.sh.
+#
+# Everything runs in ONE python3 per tick, for every task at once: python3 is
+# the one interpreter that parses JSON on both platforms without a
+# dependency, and a process per task would be a dozen interpreter starts a
+# second. The program is embedded here, at the top level of the script
+# rather than inside $(...), where bash 3.2 does not treat heredoc lines as
+# comments; `-I` keeps it from importing a json.py or re.py that happens to
+# sit in the project directory Claude Code runs it in.
+IFS= read -r -d '' _AL_SUB_PY <<'PYEOF'
+import json, os, re, shlex, stat, sys, time
+
+MODE = sys.argv[1] if len(sys.argv) > 1 else 'render'
+
+# === Worker classifier ===
+# Maps a shell command to the external AI worker it runs, as a short label
+# such as codex/gpt-6-astra. Shared by the subagent rows (a Bash tool call
+# read from a transcript) and agentline-run (its own argv), so the table
+# lives in this one place.
+#
+# Nothing it returns is raw command text. A command line can hold a prompt,
+# a token, a file body or a URL with a query string, and it is written by a
+# model; the label is built only from fixed names and from model tokens that
+# pass SAFE, so the worst a hostile command can do is choose which of these
+# short, inert strings appears.
+SAFE = re.compile(r'[A-Za-z0-9._/-]{1,40}')
+ASSIGN = re.compile(r'[A-Za-z_][A-Za-z0-9_]*=')
+MODEL_JSON = re.compile(r'"model"\s*:\s*"([^"\\]{1,80})"')
+OPS = set('();<>|&\n')
+# Commands that set the stage and are never the thing a row should name.
+TRIVIAL = {'cd', 'pushd', 'popd', 'export', 'set', 'unset', 'source', '.', 'echo',
+           'printf', 'true', 'false', ':', 'sleep', 'test', '[', '[[', 'local',
+           'read', 'wait', 'trap', 'mkdir', 'shift', 'then', 'do', 'done', 'fi',
+           'else', 'elif', 'if', 'for', 'while', 'until', 'case', 'esac', '{', '}', '!'}
+INTERP = {'python', 'python3', 'node', 'bun', 'deno', 'ruby', 'perl', 'bash', 'sh', 'zsh'}
+SHELLS = {'bash', 'sh', 'zsh', 'dash', 'ksh'}
+SSH_ARG = set('BbcDEeFIiJLlmOoPpQRSWw')  # ssh options that take a value
+LOCAL = r'(?:127\.0\.0\.1|localhost):'
+
+def safe(tok):
+    return tok if isinstance(tok, str) and SAFE.fullmatch(tok) else ''
+
+def base(w):
+    return w.rsplit('/', 1)[-1]
+
+def split_cmds(s):
+    """The simple commands of a shell string, each a list of words. Newlines,
+    ; && || | & and parentheses separate; a redirection and its target are
+    dropped. Quoting is honoured (shlex), so a URL or a prompt in quotes
+    stays one word. Good enough to find programs, which is all it is for."""
+    try:
+        lex = shlex.shlex(s, posix=True, punctuation_chars='();<>|&\n')
+        lex.whitespace = ' \t\r'
+        lex.whitespace_split = True
+        lex.commenters = ''
+        toks = list(lex)
+    except ValueError:
+        toks = s.split()
+    cmds, cur, target = [], [], False
+    for t in toks:
+        if target:
+            target = False
+            continue
+        if t and all(c in OPS for c in t):
+            if '<' in t or '>' in t:
+                if cur and cur[-1].isdigit():
+                    cur.pop()  # the 2 of 2>&1
+                target = True
+                continue
+            if cur:
+                cmds.append(cur)
+                cur = []
+            continue
+        if t.strip():
+            cur.append(t)
+    if cur:
+        cmds.append(cur)
+    return cmds
+
+def opt_val(w, names):
+    """The value of the first -m X / --model X / --model=X in w."""
+    for i, t in enumerate(w):
+        for n in names:
+            if t == n and i + 1 < len(w):
+                return w[i + 1]
+            if n.startswith('--') and t.startswith(n + '='):
+                return t[len(n) + 1:]
+    return ''
+
+def body_model(w):
+    """A "model": "..." in a request body passed as an argument (curl -d)."""
+    for t in w:
+        m = MODEL_JSON.search(t)
+        if m:
+            return m.group(1)
+    return ''
+
+def with_model(name, model, tail=False):
+    if tail:
+        model = model.rsplit('/', 1)[-1].lower()
+    model = safe(model)
+    return name + '/' + model if model and len(name) + 1 + len(model) <= 40 else name
+
+def unwrap(w):
+    """Strip launchers off the front of w (VAR=x, env, timeout, nohup, time,
+    exec, command, nice, stdbuf): what they start is what counts. Bounded,
+    so a pathological chain cannot spin."""
+    for _ in range(8):
+        if not w:
+            break
+        p = base(w[0])
+        if ASSIGN.match(w[0]):
+            w = w[1:]
+        elif p == 'env':
+            i = 1
+            while i < len(w) and (w[i].startswith('-') or ASSIGN.match(w[i])):
+                i += 2 if w[i] in ('-u', '--unset', '-C', '--chdir') else 1
+            w = w[i:]
+        elif p in ('timeout', 'gtimeout'):
+            i = 1
+            while i < len(w) and w[i].startswith('-'):
+                i += 2 if w[i] in ('-s', '--signal', '-k', '--kill-after') else 1
+            w = w[i + 1:]  # past the duration
+        elif p in ('nohup', 'time', 'exec', 'command', 'nice', 'stdbuf', 'caffeinate'):
+            i = 1
+            while i < len(w) and w[i].startswith('-'):
+                i += 2 if w[i] in ('-n', '-o', '-e', '-i') and p in ('nice', 'stdbuf') else 1
+            w = w[i:]
+        else:
+            break
+    return w
+
+def classify_words(w, depth=0):
+    """The worker label of one simple command, or ''."""
+    w = unwrap(w)
+    if not w or depth > 3:
+        return ''
+    p = base(w[0])
+    if p == 'agentline-run':
+        # Its own --label is the name the user gave that work; without one,
+        # the command after it is classified like any other.
+        i = 1
+        while i < len(w) and w[i] != '--':
+            t = w[i]
+            if t == '--label' and i + 1 < len(w):
+                return label_text(w[i + 1])
+            if t.startswith('--label='):
+                return label_text(t[8:])
+            if t == '--heartbeat':
+                i += 2
+                continue
+            if not t.startswith('-'):
+                break
+            i += 1
+        if i < len(w) and w[i] == '--':
+            i += 1
+        return classify_words(w[i:], depth + 1)
+    if p in SHELLS:
+        # bash -c 'codex exec ...': the string is the command.
+        i = 1
+        while i < len(w):
+            t = w[i]
+            if t in ('-o', '+o'):
+                i += 2
+                continue
+            if t.startswith('-') and not t.startswith('--') and 'c' in t[1:]:
+                return classify_string(w[i + 1], depth + 1) if i + 1 < len(w) else ''
+            if not t.startswith('-'):
+                break
+            i += 1
+        return ''
+    if p == 'codex':
+        m = opt_val(w, ('-m', '--model'))
+        if not m:
+            c = opt_val(w, ('-c', '--config'))
+            if c.startswith('model='):
+                m = c[6:].strip('"\'')
+        return with_model('codex', m)
+    if p == 'agy':
+        return with_model('agy', opt_val(w, ('--model', '-m')))
+    if p == 'claude':
+        return with_model('claude', opt_val(w, ('--model',)))
+    if p == 'ssh':
+        return classify_ssh(w, depth)
+    # Markers anywhere in the command: an endpoint, a model name in a request
+    # body, a helper script. Checked in this order, so arbctl.py is the
+    # controller and not the server it talks to.
+    if any(base(t) == 'arbctl.py' for t in w):
+        return 'arb/ctl'
+    if any(base(t) == 'run_jev.py' or 'jev_eval' in t or re.search(LOCAL + r'18081\b', t) for t in w):
+        return 'jev/jevk5'
+    if any(re.search(LOCAL + r'18080\b', t) or t == 'arb-coder'
+           or re.search(r'"model"\s*:\s*"arb-coder"', t) for t in w):
+        return 'arb/qwen3.6'
+    hz = os.environ.get('HETZNER_INFERENCE_BASE_URL', '')
+    hz = re.sub(r'^[A-Za-z]+://', '', hz).split('/', 1)[0] if hz else ''
+    if any('inference.hetzner.com' in t or 'HETZNER_INFERENCE_BASE_URL' in t
+           or (hz and hz in t) for t in w):
+        return with_model('hetzner', body_model(w) or opt_val(w, ('--model', '-m')), tail=True)
+    if any('integrate.api.nvidia.com' in t or base(t) == 'review-deepseek.py' for t in w):
+        return 'deepseek'
+    return ''
+
+def classify_ssh(w, depth):
+    """ssh [opts] host [cmd...]: the bayrak node by its alias, with the model
+    of a `claude -p --model M` it runs; another host by the worker its
+    remote command runs, else by its name."""
+    i = 1
+    while i < len(w):
+        t = w[i]
+        if t == '--':
+            i += 1
+            break
+        if not (t.startswith('-') and len(t) > 1):
+            break
+        for j, c in enumerate(t[1:], 1):
+            if c in SSH_ARG:
+                if not t[j + 1:]:
+                    i += 1  # the value is the next word
+                break
+        i += 1
+    if i >= len(w):
+        return ''
+    host = w[i].rsplit('@', 1)[-1]
+    remote = ' '.join(w[i + 1:])
+    inner = classify_string(remote, depth + 1) if remote else ''
+    if host in ('bayrak', 'bayrak-vcn'):
+        return 'bayrak/' + inner[7:] if inner.startswith('claude/') else 'bayrak'
+    if inner:
+        return inner
+    return with_model('ssh', host) if safe(host) else 'ssh'
+
+def classify_string(s, depth=0):
+    for w in split_cmds(s)[:32]:
+        lab = classify_words(w, depth)
+        if lab:
+            return lab
+    return ''
+
+def program_words(w):
+    """A program name for a command that is no known worker: its basename,
+    or the script an interpreter runs (x.py, for a python running x.py)."""
+    w = unwrap(w)
+    if not w:
+        return ''
+    p = base(w[0])
+    if p in TRIVIAL:
+        return ''
+    if p in SHELLS and len(w) > 2 and re.fullmatch(r'-[a-z]*c[a-z]*', w[1]):
+        return program_string(w[2]) or safe(p)
+    if p in INTERP:
+        for t in w[1:]:
+            if t.startswith('-'):
+                if t in ('-c', '-m', '-e'):
+                    break
+                continue
+            if re.search(r'\.(py|js|mjs|ts|rb|pl|sh)$', t):
+                return safe(base(t)) or safe(p)
+            break
+    return safe(p)
+
+def program_string(s):
+    for w in split_cmds(s)[:32]:
+        p = program_words(w)
+        if p:
+            return p
+    return ''
+
+# === Display sanitisation ===
+# The same rule as agentline.sh's _clean: no C0, DEL, C1 or backslash. Here
+# the text is decoded, so C1 is its code points, whatever the locale. Bidi
+# overrides go too: they can reorder what follows on the row. Descriptions,
+# labels and every transcript field are model-controlled.
+CTRL = re.compile('[\x00-\x1f\x7f-\x9f\\\\‎‏‪-‮⁦-⁩]')
+
+def clean(s):
+    if not isinstance(s, str):
+        return ''
+    return CTRL.sub('', re.sub(r'[\t\n\r]', ' ', s))
+
+def label_text(s, n=40):
+    return re.sub(r' +', ' ', clean(s)).strip()[:n]
+
+if MODE == 'classify':
+    argv = sys.argv[2:]
+    lab = classify_words(argv) if argv else ''
+    if not lab and argv:
+        lab = program_words(argv) or safe(base(argv[0]))
+    if lab:
+        sys.stdout.write(lab + '\n')
+    sys.exit(0)
+
+# === Rendering ===
+import unicodedata
+
+env = os.environ
+THEME = env.get('AGENTLINE_THEME', '')
+THEME = THEME if THEME in ('light', 'mono') else 'dark'
+if env.get('NO_COLOR'):
+    THEME = 'mono'
+ASCII = env.get('AGENTLINE_GLYPHS') == 'ascii'
+MONO = THEME == 'mono'
+# AGENTLINE_NOW pins the clock, as for agentline.sh (the test suite).
+NOW = float(env['AGENTLINE_NOW']) if env.get('AGENTLINE_NOW', '').isdigit() else time.time()
+
+def rgb_val(v):
+    m = re.fullmatch(r'(\d{1,3}),(\d{1,3}),(\d{1,3})', v or '')
+    if not m or any(int(x) > 255 for x in m.groups()):
+        return None
+    return tuple(int(x) for x in m.groups())
+
+# The palette of agentline.sh: ANSI-16 roles the terminal theme maps, and
+# the few fixed colours the light theme darkens.
+def sgr(code):
+    return '' if MONO else '\033[%sm' % code
+RESET, DIM = sgr('0'), sgr('2')
+GREEN, CYAN, YELLOW, RED, MAGENTA = sgr('1;32'), sgr('1;36'), sgr('1;33'), sgr('1;31'), sgr('1;35')
+ORANGE = sgr('1;38;5;208')
+FABLE = [(255, 215, 90), (255, 125, 25)]
+if THEME == 'light':
+    ORANGE = sgr('1;38;5;166')
+    FABLE = [(180, 110, 0), (190, 70, 0)]
+for key, idx in (('AGENTLINE_COLOR_FABLE_FROM', 0), ('AGENTLINE_COLOR_FABLE_TO', 1)):
+    v = rgb_val(env.get(key))
+    if v:
+        FABLE[idx] = v
+v = rgb_val(env.get('AGENTLINE_COLOR_ORANGE'))
+if v:
+    ORANGE = sgr('1;38;2;%d;%d;%d' % v)
+
+if ASCII:
+    G = dict(sep='|', spin='.oOo', done='ok', fail='x', stop='-', wait='o', other='?',
+             low='', med='', high='', xhigh='', effort='effort:', fable='* ', ctx='ctx:',
+             warn='!', dur='dur:', act='-> ', tool='', cwd='cwd:', ell='...',
+             spark='_.-~=+*#')
+else:
+    G = dict(sep='│', spin='⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏', done='✓', fail='✗', stop='⊘', wait='○', other='•',
+             low='🟢', med='🟡', high='🟠', xhigh='🔴', effort='⚙️ ', fable='✦ ', ctx='📊 ',
+             warn='⚠️ ', dur='⏱️ ', act='→ ', tool='⏳', cwd='📂 ', ell='…',
+             spark='▁▂▃▄▅▆▇█')
+SEP = ' %s%s%s ' % (DIM, G['sep'], RESET)
+
+ANSI = re.compile(r'\x1b\[[0-9;]*m')
+
+def vis(s):
+    """Terminal cells of s, measured as agentline.sh's layout pass does: an
+    emoji + U+FE0F is two cells, other marks and format characters none."""
+    n = prev = 0
+    for c in ANSI.sub('', s):
+        if c == '️':
+            n, prev = n + 2 - prev, 2
+        elif unicodedata.category(c) in ('Mn', 'Me', 'Cf'):
+            continue
+        else:
+            prev = 2 if unicodedata.east_asian_width(c) in ('W', 'F') else 1
+            n += prev
+    return n
+
+def cut(s, cells):
+    """Plain s shortened to at most `cells` cells, with an ellipsis."""
+    if vis(s) <= cells:
+        return s
+    ell = G['ell']
+    room = cells - vis(ell)
+    if room <= 0:
+        return ''
+    out = ''
+    for c in s:
+        if vis(out + c) > room:
+            break
+        out += c
+    out = out.rstrip()
+    return out + ell if out else ''
+
+def fmt_dur(sec):
+    sec = max(int(sec), 0)
+    if sec < 60:
+        return '%ds' % sec
+    if sec < 3600:
+        return '%dm' % (sec // 60)
+    return '%dh%02dm' % (sec // 3600, sec % 3600 // 60)
+
+def fmt_tokens(n):
+    if n >= 1000000:
+        return '%.1fm' % (n / 1000000.0)
+    if n >= 1000:
+        return '%dk' % round(n / 1000.0)
+    return '%d' % n
+
+def num(v):
+    return v if isinstance(v, (int, float)) and not isinstance(v, bool) else None
+
+# --- model -----------------------------------------------------------------
+FAMILY = {'opus': 'Opus', 'sonnet': 'Sonnet', 'haiku': 'Haiku', 'fable': 'Fable', 'mythos': 'Mythos'}
+
+def model_short(mid):
+    """claude-haiku-4-5-20251001 -> ("Haiku 4.5", "haiku"). The task payload
+    carries the resolved id only, not line 1's display name. An id this does
+    not know is shown as its own safe token, or not at all."""
+    m = mid.strip().lower().split('[', 1)[0]
+    m = re.sub(r'^(?:[a-z]{2,4}\.)?anthropic\.', '', m)       # Bedrock
+    m = re.sub(r'(?:@\d{8}|-v\d+(?::\d+)?)$', '', m)            # Vertex, Bedrock
+    r = re.fullmatch(r'claude-([a-z]+)-(\d{1,2})(?:-(\d{1,2}))?(?:-\d{8})?', m)
+    if r and r.group(1) in FAMILY:
+        return FAMILY[r.group(1)] + ' ' + r.group(2) + ('.' + r.group(3) if r.group(3) else ''), r.group(1)
+    r = re.fullmatch(r'claude-(\d)(?:-(\d))?-([a-z]+)(?:-\d{8})?', m)
+    if r and r.group(3) in FAMILY:
+        return FAMILY[r.group(3)] + ' ' + r.group(1) + ('.' + r.group(2) if r.group(2) else ''), r.group(3)
+    if m in FAMILY:
+        return FAMILY[m], m
+    t = safe(mid.strip())
+    return (t[:24], '') if t else ('', '')
+
+def gradient(s):
+    if MONO:
+        return s
+    (r0, g0, b0), (r1, g1, b1) = FABLE
+    n = max(len(s) - 1, 1)
+    return ''.join('\033[1;38;2;%d;%d;%dm%s' % (r0 + (r1 - r0) * i // n, g0 + (g1 - g0) * i // n,
+                                                b0 + (b1 - b0) * i // n, c)
+                   for i, c in enumerate(s)) + RESET
+
+def model_text(mid):
+    name, fam = model_short(mid)
+    if not name:
+        return ''
+    if fam in ('fable', 'mythos'):
+        return gradient(G['fable'] + name)
+    return {'opus': MAGENTA, 'sonnet': CYAN, 'haiku': GREEN}.get(fam, CYAN) + name + RESET
+
+def rainbow(word):
+    # max: the picker's rainbow, a letter of travel per tick as on line 1.
+    if MONO:
+        return word
+    import colorsys
+    light = 0.38 if THEME == 'light' else 0.62
+    out = ''
+    for i, c in enumerate(word):
+        r, g, b = colorsys.hls_to_rgb(((int(NOW) + i) * 12 % 37) / 37.0, light, 1.0)
+        out += '\033[1;38;2;%d;%d;%dm%s' % (r * 255, g * 255, b * 255, c)
+    return out + RESET
+
+def effort_text(e):
+    # Absent when the subagent inherits the session's effort: no pill then.
+    if isinstance(e, dict):
+        e = e.get('level')
+    n = num(e)
+    if n is not None:
+        return G['effort'] + fmt_tokens(n) if n > 0 else ''
+    if not isinstance(e, str):
+        return ''
+    return {'low': G['low'] + DIM + 'low' + RESET,
+            'medium': G['med'] + CYAN + 'med' + RESET,
+            'high': G['high'] + ORANGE + 'high' + RESET,
+            'xhigh': G['xhigh'] + RED + 'xhigh' + RESET,
+            'max': rainbow('max')}.get(e.strip().lower(), '')
+
+# --- the subagent transcript -------------------------------------------------
+TAIL = 128 * 1024
+ID = re.compile(r'[A-Za-z0-9_-]{1,64}')
+WF = re.compile(r'wf_[A-Za-z0-9_-]{1,64}')
+UID = os.getuid()
+NOFOLLOW = getattr(os, 'O_NOFOLLOW', 0)
+
+def read_tail(path, root):
+    """The last TAIL bytes of path, from its first whole line on — or None.
+    Only a regular file of this user's, not a symlink itself, and resolving
+    inside root: the path is assembled from payload fields, and a planted
+    link must not turn a row into a reader of some other file. O_NONBLOCK so
+    a FIFO at that name cannot hang the tick before fstat refuses it."""
+    try:
+        if not os.path.realpath(path).startswith(root + os.sep):
+            return None
+        fd = os.open(path, os.O_RDONLY | NOFOLLOW | os.O_NONBLOCK | getattr(os, 'O_NOCTTY', 0))
+    except OSError:
+        return None
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode) or st.st_uid != UID:
+            return None
+        off = max(st.st_size - TAIL, 0)
+        data = os.pread(fd, TAIL, off)
+    except OSError:
+        return None
+    finally:
+        os.close(fd)
+    if off:
+        data = data[data.find(b'\n') + 1:] if b'\n' in data else b''
+    return data.decode('utf-8', 'replace')
+
+_wf = None
+def wf_dirs(sub):
+    """The workflow run directories, subagents/workflows/wf_*/, listed once
+    per tick and capped: they are searched only for an agent that is not
+    directly under subagents/."""
+    global _wf
+    if _wf is None:
+        _wf = []
+        try:
+            with os.scandir(os.path.join(sub, 'workflows')) as it:
+                for e in it:
+                    if WF.fullmatch(e.name) and e.is_dir(follow_symlinks=False):
+                        _wf.append(e.path)
+                        if len(_wf) >= 64:
+                            break
+        except OSError:
+            pass
+    return _wf
+
+def iso_epoch(ts):
+    # 2026-09-28T00:19:09.715Z -> epoch seconds, or None.
+    if not isinstance(ts, str):
+        return None
+    try:
+        import calendar
+        return calendar.timegm(time.strptime(ts[:19], '%Y-%m-%dT%H:%M:%S'))
+    except (ValueError, OverflowError):
+        return None
+
+def scan(text):
+    """(running tool calls oldest first, the last timestamp) of a transcript
+    tail. A tool_use whose tool_result has not arrived is still running.
+    Only lines that mention a tool are decoded: the rest (text, thinking)
+    are skipped unread, which is most of the cost of a long tail."""
+    pending, last = {}, None
+    lines = text.split('\n')
+    for line in lines:
+        if 'tool_use' not in line:
+            continue
+        try:
+            o = json.loads(line)
+        except ValueError:
+            continue
+        msg = o.get('message') if isinstance(o, dict) else None
+        content = msg.get('content') if isinstance(msg, dict) else None
+        if not isinstance(content, list):
+            continue
+        for b in content:
+            if not isinstance(b, dict):
+                continue
+            if b.get('type') == 'tool_use' and isinstance(b.get('id'), str):
+                pending[b['id']] = (b.get('name'), b.get('input'), o.get('timestamp'))
+            elif b.get('type') == 'tool_result' and isinstance(b.get('tool_use_id'), str):
+                pending.pop(b['tool_use_id'], None)
+    for line in reversed(lines):
+        if '"timestamp"' not in line:
+            continue
+        try:
+            o = json.loads(line)
+        except ValueError:
+            continue
+        last = iso_epoch(o.get('timestamp')) if isinstance(o, dict) else None
+        if last:
+            break
+    return list(pending.values()), last
+
+def tool_text(name, inp):
+    """(text, is_worker) for one running tool call — never its raw input."""
+    if not isinstance(name, str):
+        return '', False
+    inp = inp if isinstance(inp, dict) else {}
+    if name == 'Bash':
+        cmd = inp.get('command')
+        if not isinstance(cmd, str):
+            return 'Bash', False
+        w = classify_string(cmd)
+        if w:
+            return w, True
+        p = program_string(cmd)
+        return ('Bash ' + p) if p else 'Bash', False
+    if name in ('Read', 'Edit', 'Write', 'MultiEdit', 'NotebookEdit', 'NotebookRead'):
+        f = inp.get('file_path') or inp.get('notebook_path')
+        f = label_text(base(f), 32) if isinstance(f, str) else ''
+        return (name + ' ' + f) if f else name, False
+    if name == 'WebFetch':
+        u = inp.get('url')
+        m = re.match(r'[A-Za-z][A-Za-z0-9+.-]*://(?:[^/?#@]*@)?([^/?#:]+)', u) if isinstance(u, str) else None
+        host = m.group(1).lower() if m else ''
+        host = host if re.fullmatch(r'[a-z0-9.-]{1,60}', host) else ''
+        return (name + ' ' + host) if host else name, False
+    if name in ('WebSearch', 'Grep', 'Glob', 'ToolSearch'):
+        return 'search', False
+    if name in ('Agent', 'Task'):
+        t = safe(inp.get('subagent_type') or '')
+        return ('agent/' + t) if t and t != 'general-purpose' else 'agent', False
+    if name.startswith('mcp__'):
+        server = safe(name[5:].split('__', 1)[0])
+        return ('mcp:' + server) if server else 'mcp', False
+    return safe(name), False
+
+def activity(pending):
+    """The row's "doing right now": the newest running tool call, then how
+    long it has run and how many more run beside it — (full, short), the
+    short form without those two for a row that is running out of room."""
+    if not pending:
+        return '', ''
+    name, inp, ts = pending[-1]
+    text, worker = tool_text(name, inp)
+    if not text:
+        return '', ''
+    short = (ORANGE if worker else '') + G['act'] + text + (RESET if worker else '')
+    out = short
+    start = iso_epoch(ts)
+    if start is not None:
+        out += ' ' + DIM + G['tool'] + fmt_dur(NOW - start) + RESET
+    if len(pending) > 1:
+        out += ' ' + DIM + '+%d' % (len(pending) - 1) + RESET
+    return out, short
+
+def sparkline(samples):
+    """Token velocity: the growth between the last seven cumulative samples,
+    as six cells scaled to the fastest of them."""
+    if not isinstance(samples, list) or len(samples) < 3:
+        return ''
+    vals = [num(v) for v in samples[-7:]]
+    if any(v is None for v in vals):
+        return ''
+    deltas = [max(b - a, 0) for a, b in zip(vals, vals[1:])]
+    top = max(deltas)
+    if top <= 0:
+        return ''
+    ramp = G['spark']
+    return DIM + ''.join(ramp[min(int(d * (len(ramp) - 1) / top + 0.5), len(ramp) - 1)]
+                         for d in deltas) + RESET
+
+# --- a row -----------------------------------------------------------------
+def status_glyph(s):
+    s = s.lower()
+    if s == 'running':
+        return YELLOW + G['spin'][int(NOW) % len(G['spin'])] + RESET
+    if s in ('completed', 'complete', 'done', 'succeeded', 'success'):
+        return GREEN + G['done'] + RESET
+    if s in ('failed', 'error', 'errored'):
+        return RED + G['fail'] + RESET
+    if s in ('killed', 'cancelled', 'canceled', 'stopped', 'interrupted', 'aborted'):
+        return DIM + G['stop'] + RESET
+    if s in ('pending', 'queued', 'starting'):
+        return DIM + G['wait'] + RESET
+    return DIM + G['other'] + RESET
+
+def row(task, width, ctx):
+    status = task['status']
+    glyph = status_glyph(status)
+    running = status.lower() == 'running'
+    label = ''
+    for k in ('description', 'label', 'name'):
+        label = label_text(task.get(k), 80)
+        if label:
+            break
+
+    f = {}
+    f['model'] = model_text(task['model']) if isinstance(task.get('model'), str) else ''
+    f['eff'] = effort_text(task.get('effort'))
+    f['ctx'] = ''
+    tc, cw = num(task.get('tokenCount')), num(task.get('contextWindowSize'))
+    if tc is not None and tc >= 0 and cw and cw > 0:
+        # Line 1's thresholds: yellow from 60%, red and ⚠️ from 80%.
+        pct = tc * 100.0 / cw
+        colour = RED if pct >= 80 else YELLOW if pct >= 60 else GREEN
+        f['ctx'] = colour + (G['warn'] if pct >= 80 else G['ctx']) + '%d%%' % round(pct) + RESET
+
+    pending, last = ctx.get('scan') or ([], None)
+    f['elapsed'] = ''
+    start = num(task.get('startTime'))
+    if start and start > 0:
+        # A finished task has no end time in the payload; its transcript's
+        # last line is when it stopped. Without one the segment goes.
+        end = NOW if running else last
+        if end is not None and end * 1000 >= start:
+            f['elapsed'] = DIM + G['dur'] + RESET + fmt_dur(end - start / 1000.0)
+    f['act'], act_short = activity(pending) if running else ('', '')
+    f['spark'] = sparkline(task.get('tokenSamples'))
+    f['cwd'] = ''
+    tcwd = task.get('cwd')
+    if isinstance(tcwd, str) and tcwd and ctx['cwd'] and \
+            os.path.normpath(tcwd) != os.path.normpath(ctx['cwd']):
+        b = label_text(base(os.path.normpath(tcwd)), 24)
+        f['cwd'] = (DIM + G['cwd'] + b + RESET) if b else ''
+
+    def build(lab):
+        mod = ' '.join(x for x in (f['model'], f['eff']) if x)
+        rest = [x for x in (mod, f['ctx'], f['elapsed'], f['act'], f['spark'], f['cwd']) if x]
+        return SEP.join([glyph + (' ' + lab if lab else '')] + rest)
+
+    # Fit: the label keeps up to 32 cells while fields drop, lowest priority
+    # first (the activity sheds its timer before it goes); once they are all
+    # gone the label gets whatever is left. Never wider than `columns`:
+    # Claude Code does not wrap or clip a row for us.
+    lab = cut(label, 32)
+    for key in (None, 'cwd', 'spark', 'act-', 'act', 'elapsed', 'ctx', 'eff', 'model'):
+        if key == 'act-':
+            f['act'] = act_short
+        elif key:
+            f[key] = ''
+        s = build(lab)
+        if vis(s) <= width:
+            return s
+    s = build(cut(label, width - vis(glyph) - 1))
+    return s if vis(s) <= width else (glyph if vis(glyph) <= width else '')
+
+def main():
+    try:
+        d = json.loads(sys.stdin.buffer.read(4 << 20).decode('utf-8', 'replace'))
+    except ValueError:
+        return
+    if not isinstance(d, dict) or not isinstance(d.get('tasks'), list):
+        return
+    width = num(d.get('columns'))
+    if width is None:
+        c = env.get('COLUMNS', '')
+        width = int(c) if c.isdigit() else 80
+    width = int(width)
+    if width < 1:
+        return
+    # The transcripts: <dirname(transcript_path)>/<session_id>/subagents/
+    # agent-<id>.jsonl, or one level down in workflows/wf_*/ for an agent a
+    # workflow started. Both ids are checked before they become path parts.
+    sid, tp = d.get('session_id'), d.get('transcript_path')
+    sub = root = None
+    if isinstance(sid, str) and ID.fullmatch(sid) and isinstance(tp, str) and os.path.isabs(tp):
+        root = os.path.realpath(os.path.dirname(tp))
+        sub = os.path.join(os.path.dirname(tp), sid, 'subagents')
+    main_cwd = d.get('cwd') if isinstance(d.get('cwd'), str) else ''
+    out = []
+    for task in d['tasks'][:32]:
+        # A shape this does not know keeps Claude Code's own row.
+        if not isinstance(task, dict) or not isinstance(task.get('status'), str):
+            continue
+        tid = task.get('id')
+        if not isinstance(tid, str) or not ID.fullmatch(tid):
+            continue
+        ctx = {'cwd': main_cwd}
+        if sub:
+            name = 'agent-%s.jsonl' % tid
+            text = read_tail(os.path.join(sub, name), root)
+            if text is None:
+                for wd in wf_dirs(sub):
+                    text = read_tail(os.path.join(wd, name), root)
+                    if text is not None:
+                        break
+            if text is not None:
+                ctx['scan'] = scan(text)
+        try:
+            content = row(task, width, ctx)
+        except Exception:
+            continue
+        out.append(json.dumps({'id': tid, 'content': content}, ensure_ascii=False))
+    if out:
+        sys.stdout.buffer.write(('\n'.join(out) + '\n').encode('utf-8', 'replace'))
+
+try:
+    main()
+except Exception:
+    pass
+PYEOF
+
+case "${1-}" in
+  --classify)
+    shift
+    [ "${1-}" = -- ] && shift
+    command -v python3 >/dev/null 2>&1 || exit 0
+    exec python3 -I -c "$_AL_SUB_PY" classify "$@" ;;
+  -h|--help)
+    sed -n '2,33p' "$0" | sed 's/^# \{0,1\}//'
+    exit 0 ;;
+  '')
+    # No python3: print nothing, and every row stays Claude Code's own.
+    command -v python3 >/dev/null 2>&1 || exit 0
+    exec python3 -I -c "$_AL_SUB_PY" render ;;
+  *)
+    echo "usage: ${0##*/} [--classify -- CMD [ARGS...]]" >&2
+    exit 2 ;;
+esac

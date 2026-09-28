@@ -1,0 +1,4 @@
+{"id": "g-codex", "content": "\u001b[1;33m⠋\u001b[0m Review the parser…"}
+{"id": "g-read", "content": "\u001b[1;33m⠋\u001b[0m Survey the instal…"}
+{"id": "g-done", "content": "\u001b[1;32m✓\u001b[0m Write the changel…"}
+{"id": "g-fail", "content": "\u001b[1;31m✗\u001b[0m Probe the flaky t…"}
