@@ -1637,12 +1637,24 @@ fi
 #
 # _num_ge <number> <int>: 0 when number >= int, 1 when not, 2 when number is
 # no plain non-negative decimal (the caller then asks awk). For an integer
-# threshold, p >= h exactly when p's integer part is.
+# threshold, p >= h exactly when p's integer part is — for the decimal. awk
+# compares the double nearest it, and a fraction of enough nines rounds up
+# to the next integer there: "79.999999999999999" is 80.0, red and ⚠️. So a
+# fraction starting with 9s whose integer digits and leading 9s reach 13
+# goes to awk too. That is further than a double's ~16 digits need (a 9 in
+# the 13th significant place is the earliest a 15-digit integer part can
+# round up at), so every value where the two could differ takes awk.
 _num_ge() {
-  local i
+  local i f z
   case "$1" in ''|*[!0123456789.]*|*.*.*|.*|*.) return 2 ;; esac
   i="${1%%.*}"
   [ ${#i} -le 15 ] || return 2
+  case "$1" in
+    *.9*)
+      f="${1#*.}"; f="${f%%[!9]*}"
+      z="${i#"${i%%[!0]*}"}"
+      [ $(( ${#z} + ${#f} )) -ge 13 ] && return 2 ;;
+  esac
   [ $(( 10#$i )) -ge "$2" ]
 }
 # _tenths <int> <unit: 1000|1000000> -> $_tenths_out, what awk's
@@ -1844,15 +1856,22 @@ cost_fmt=""
 
 # awk's printf "%d", ms/1000 truncates toward zero, as bash's integer
 # division of the integer part does (12 digits: past that the double awk
-# divides in can no longer hold the fraction, and awk answers).
+# divides in can no longer hold the fraction, and awk answers). The same
+# goes for more than 15 significant digits in all: awk reads the double
+# nearest the string, and "59999.99999999999999" is 60000.0 there, 1m, where
+# the integer part alone says 0m. Such a value is awk's. A negative is
+# negated only once there is a value: a 13-digit one used to negate the
+# empty string into "0" and skip awk (0m where awk said -31m).
 duration_fmt=""
 if [ -n "$duration_ms" ]; then
   total_sec=""
   _i="${duration_ms#-}"; _i="${_i%%.*}"
+  _f=""; case "$duration_ms" in *.*) _f="${duration_ms#*.}" ;; esac
+  _z="${_i#"${_i%%[!0]*}"}"
   case "$duration_ms" in
     *[!0123456789.-]*|?*-*|*.*.*|-|-.*|.*|*.) ;;
-    *) [ -n "$_i" ] && [ ${#_i} -le 12 ] && total_sec=$(( 10#$_i / 1000 ))
-       case "$duration_ms" in -*) total_sec=$(( -total_sec )) ;; esac ;;
+    *) [ -n "$_i" ] && [ ${#_i} -le 12 ] && [ $(( ${#_z} + ${#_f} )) -le 15 ] && total_sec=$(( 10#$_i / 1000 ))
+       [ -n "$total_sec" ] && case "$duration_ms" in -*) total_sec=$(( -total_sec )) ;; esac ;;
   esac
   [ -z "$total_sec" ] && total_sec=$(awk -v ms="$duration_ms" 'BEGIN {printf "%d", ms/1000}')
   h=$((total_sec / 3600))

@@ -1344,18 +1344,29 @@ while [ $# -ge 2 ]; do
   shift 2
 done
 set --
-jnum() {  # jnum <value> — a JSON number, or a string when it has a leading zero
-  case "$1" in 0*[0-9]*) printf '"%s"' "$1" ;; *) printf '%s' "$1" ;; esac
+jnum() {  # jnum <value> — a JSON number, or a string when it has a leading zero or s: before it
+  case "$1" in s:*) printf '"%s"' "${1#s:}" ;; 0*[0-9]*) printf '"%s"' "$1" ;; *) printf '%s' "$1" ;; esac
 }
 awk_dur() { awk -v ms="$1" 'BEGIN { s = sprintf("%d", ms/1000); h = int(s / 3600); m = int((s % 3600) / 60); if (h > 0) printf "%dh%dm", h, m; else printf "%dm", m }'; }
-for d in 0 59999 60000 13320000 13320000.7 3599999 3600000 1e-05 007200000; do
+# Past 15 significant digits awk reads a double that is not the decimal
+# (59999.99999999999999 is 60000.0), and a negative past 12 integer digits
+# is awk's too (review of J10, stage J9b). As JSON strings (s:), which reach
+# the formatter as written; the parser turns such a number into its float.
+for d in 0 59999 60000 13320000 13320000.7 3599999 3600000 1e-05 007200000 \
+         s:59999.99999999999999 s:59999.9999999999 s:3599999.999999999999 -59999 -60000 \
+         -1234567890123 s:-1234567890123 -123456789.5; do
   nb "\"cost\":{\"total_duration_ms\":$(jnum "$d")}" dur
-  e=$(awk_dur "$d")
+  e=$(awk_dur "${d#s:}")
   check "duration: $d ms -> $e" grep -qE -- "(^|[^0-9])$e\$" "$T/nb"
 done
 # The colour thresholds: context 60/80, the icon at 80.
-for p in 59.99 60 79.9 80 80.0 99.5 0012 1e-05; do
+# A fraction of enough nines is the next integer as a double: awk's answer
+# (review of J10, stage J9b). As JSON strings (s:), as for the durations.
+for p in 59.99 60 79.9 80 80.0 99.5 0012 1e-05 \
+         s:79.999999999999999 s:79.9999999999999 s:59.99999999999999999 s:0079.9999999999999999 \
+         s:79.99999999999 s:99.9999999999999999; do
   nb "\"context_window\":{\"used_percentage\":$(jnum "$p")}" ctx
+  p="${p#s:}"
   e=$(awk -v p="$p" 'BEGIN { if (p >= 80) printf "1;31"; else if (p >= 60) printf "1;33"; else printf "1;32" }')
   check "ctx colour: $p -> $e" grep -qF "${ESC}[${e}m" "$T/out"
   if awk -v p="$p" 'BEGIN {exit !(p >= 80)}'; then

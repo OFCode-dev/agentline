@@ -70,7 +70,9 @@
   probe) on every full render. They are bash arithmetic and `printf` now,
   byte for byte the same: a `%.1f` tie such as 1.05 or 1.25 rounds the way
   awk rounds the double, and a number in any unusual spelling (`1e-05`)
-  still goes to awk. On bash ≥ 4.2 a full render execs `cat` and the two
+  still goes to awk. So does a decimal with more digits than a double
+  holds, where awk sees the double and not the decimal (`"79.999999999999999"`
+  is 80, red), and a negative duration past 12 digits. On bash ≥ 4.2 a full render execs `cat` and the two
   `python3` only. A `color_pct` replaced in local.sh is still called for
   every colour.
 - Custom segments. `local.sh` can call `agentline_seg <name> <content>` to
