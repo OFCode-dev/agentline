@@ -242,6 +242,11 @@ if not ops:
 # AGENTLINE_TMP or CLAUDE_AGENTS_FILE directory too (a shared /tmp is no
 # place for it). Every file below is opened relative to this descriptor, so
 # a directory renamed or replaced after the check is not the one written.
+# O_NOFOLLOW refuses a symlink only as the last component, and "link/" or
+# "link/." ends in a component that is the directory the link points to:
+# trailing "/" and "/." go first, so the link itself is what is opened.
+while len(dpath) > 1 and (dpath.endswith('/') or dpath.endswith('/.')):
+    dpath = dpath[:-1] if dpath.endswith('/') else (dpath[:-2] or '/')
 try:
     dfd = os.open(dpath, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
     dst = os.fstat(dfd)

@@ -1,4 +1,4 @@
-✦ Fable 5.1 🧠 │ max │ 📊 61% │ W:64% F:30% ↻24/9 │ 📥 746 │ 📤 1.5k │ 🔥 37% │ 💾 6.2G │ 💽 41%
+✦ Fable 5.1 🧠 │ max │ 📊 61% │ W:64% F:30% │ 📥 746 │ 📤 1.5k │ 🔥 37% │ 💾 6.2G │ 💽 41%
 v3.0.24 │ ~/work │ 🌿 OFCode-dev/agentline@main │ DD/MM/YYYY Day │ HH:MM:SS
 ⚙️ context7 · playwright
 ♻️ claude --resume fable-0001

@@ -15,12 +15,14 @@
 #                                 also set subagentStatusLine to
 #                                 agentline-subagents.sh: rich rows in Claude
 #                                 Code's subagent panel (see README)
-#   bash install.sh --link-bin    also symlink ~/.local/bin/agentline-run, so
-#                                 a shell finds it on PATH
+#   bash install.sh --link-bin    also symlink ~/.local/bin/agentline-run and
+#                                 ~/.local/bin/agentline-meter, so a shell
+#                                 finds them on PATH
 #
-# agentline-subagents.sh, agentline-run and the agent registry helper
-# (agentline-agent.sh) are always copied next to agentline.sh: they do
-# nothing until a setting or a command runs them.
+# agentline-subagents.sh, agentline-run, the agent registry helper
+# (agentline-agent.sh) and the API meter's writer (agentline-meter.sh) are
+# always copied next to agentline.sh: they do nothing until a setting or a
+# command runs them.
 #
 # Exit status: 0 installed and active, 1 settings.json unusable or unwritable
 # (a file that does not parse, or cannot take --with-hooks — a "hooks" that is
@@ -577,19 +579,20 @@ else
 fi
 
 # The companions, always, beside the default install: the subagent rows'
-# script, agentline-run and the registry helper agentline-run writes
-# through. None of them runs until a setting (--with-subagents) or a
-# command (agentline-run ...) asks for it, so copying them changes nothing
-# on its own. A file that is this checkout's own is not copied onto itself.
+# script, agentline-run, the registry helper agentline-run writes through
+# and the API meter's writer. None of them runs until a setting
+# (--with-subagents) or a command (agentline-run ..., agentline-meter.sh
+# add ...) asks for it, so copying them changes nothing on its own. A file
+# that is this checkout's own is not copied onto itself.
 AL_HOME="$HOME/.claude/agentline"
 mkdir -p "$AL_HOME"
-for f in agentline-subagents.sh agentline-run hooks/agentline-agent.sh; do
+for f in agentline-subagents.sh agentline-run hooks/agentline-agent.sh hooks/agentline-meter.sh; do
   to="$AL_HOME/${f##*/}"
   [ "$SCRIPT_DIR/$f" -ef "$to" ] && continue
   cp "$SCRIPT_DIR/$f" "$to"
   chmod +x "$to"
 done
-echo "✓ Installed agentline-subagents.sh, agentline-run and agentline-agent.sh to $AL_HOME"
+echo "✓ Installed agentline-subagents.sh, agentline-run, agentline-agent.sh and agentline-meter.sh to $AL_HOME"
 
 # Machine-local service list. Never overwrite an existing one: it holds this
 # host's unit names and is deliberately not tracked in git. A pre-rename
@@ -667,26 +670,30 @@ if [ "$WITH_SUB" = 1 ]; then
   [ "$SUB_RC" = 3 ] || [ "$SUB_RC" = 0 ] || exit "$SUB_RC"
 fi
 
-# --- agentline-run on PATH ----------------------------------------------------
-# A symlink, so an upgrade (which rewrites the copy in $AL_HOME) is picked up
-# without re-linking, and the script still finds its helpers beside the
-# target. Whatever already sits at that name and is not this link — another
-# tool's agentline-run, a copy of ours — is left alone and reported.
-if [ "$LINK_BIN" = 1 ]; then
-  BIN_DIR="$HOME/.local/bin"
-  BIN="$BIN_DIR/agentline-run"
-  if [ -L "$BIN" ] && [ "$(readlink "$BIN")" = "$AL_HOME/agentline-run" ]; then
-    echo "• $BIN already links to $AL_HOME/agentline-run"
-  elif [ -e "$BIN" ] || [ -L "$BIN" ]; then
-    echo "⚠ $BIN exists and is not a link to $AL_HOME/agentline-run — left alone"
+# --- agentline-run and agentline-meter on PATH ---------------------------------
+# Symlinks, so an upgrade (which rewrites the copies in $AL_HOME) is picked
+# up without re-linking, and the scripts still find their helpers beside
+# the target. Whatever already sits at a name and is not this link —
+# another tool's command, a copy of ours — is left alone and reported.
+link_bin() {  # link_bin <name on PATH> <target in $AL_HOME>
+  local bin="$BIN_DIR/$1" target="$AL_HOME/$2"
+  if [ -L "$bin" ] && [ "$(readlink "$bin")" = "$target" ]; then
+    echo "• $bin already links to $target"
+  elif [ -e "$bin" ] || [ -L "$bin" ]; then
+    echo "⚠ $bin exists and is not a link to $target — left alone"
   else
     mkdir -p "$BIN_DIR"
-    ln -s "$AL_HOME/agentline-run" "$BIN"
-    echo "✓ Linked $BIN -> $AL_HOME/agentline-run"
+    ln -s "$target" "$bin"
+    echo "✓ Linked $bin -> $target"
   fi
+}
+if [ "$LINK_BIN" = 1 ]; then
+  BIN_DIR="$HOME/.local/bin"
+  link_bin agentline-run agentline-run
+  link_bin agentline-meter agentline-meter.sh
   case ":${PATH-}:" in
     *":$BIN_DIR:"*) ;;
-    *) echo "• $BIN_DIR is not on PATH: add it, or run $AL_HOME/agentline-run" ;;
+    *) echo "• $BIN_DIR is not on PATH: add it, or run $AL_HOME/agentline-run and $AL_HOME/agentline-meter.sh" ;;
   esac
 fi
 

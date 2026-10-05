@@ -303,13 +303,14 @@ _tick_now
 # terminal resize — and it is not in the payload, so without it a resize kept
 # serving the old width's render until the TTL ran out. `+set:` tells an
 # empty AGENTLINE_DROP (drop nothing) from an unset one (the default list).
-# The theme, glyph set, colour overrides and the opt-in >200k tag change the
-# render too, and so
+# The theme, glyph set, colour overrides, the opt-in >200k tag and how many
+# agents and API providers are named (AGENTLINE_AGENT_SHOW,
+# AGENTLINE_API_SHOW) change the render too, and so
 # does a multiplexer: under tmux, screen or zellij the OSC-8 links are left
 # out (see "Hyperlinks"), and without their presence in the key a render
 # made outside one was replayed, links and all, inside one for up to
 # $AGENTLINE_CACHE_TTL. Only presence counts, as it does there.
-_cache_key="${input}${_US}${COLUMNS-}|${AGENTLINE_WIDTH-}|${AGENTLINE_LAYOUT-}|${AGENTLINE_DROP+set:}${AGENTLINE_DROP-}|${AGENTLINE_LINKS-}|${_AL_THEME}|${AGENTLINE_GLYPHS-}|${AGENTLINE_COLOR_FABLE_FROM-}|${AGENTLINE_COLOR_FABLE_TO-}|${AGENTLINE_COLOR_GOLD-}|${AGENTLINE_COLOR_ORANGE-}|${TMUX:+t}${STY:+s}${ZELLIJ:+z}|${AGENTLINE_TAG_200K-}"
+_cache_key="${input}${_US}${COLUMNS-}|${AGENTLINE_WIDTH-}|${AGENTLINE_LAYOUT-}|${AGENTLINE_DROP+set:}${AGENTLINE_DROP-}|${AGENTLINE_LINKS-}|${_AL_THEME}|${AGENTLINE_GLYPHS-}|${AGENTLINE_COLOR_FABLE_FROM-}|${AGENTLINE_COLOR_FABLE_TO-}|${AGENTLINE_COLOR_GOLD-}|${AGENTLINE_COLOR_ORANGE-}|${TMUX:+t}${STY:+s}${ZELLIJ:+z}|${AGENTLINE_TAG_200K-}|${AGENTLINE_API_SHOW-}|${AGENTLINE_AGENT_SHOW-}"
 # The cache files are read with the `read` builtin, not `$(<file)`: bash 5
 # serves `$(<file)` in-process, but bash 3.2 (macOS) forks a subshell for
 # each, which cost this path two forks a second.
@@ -1270,6 +1271,20 @@ if [ -z "${AGENTLINE_TMP-}" ]; then
   [ -d "$AGENTLINE_TMP" ] && [ ! -L "$AGENTLINE_TMP" ] && [ -O "$AGENTLINE_TMP" ] || AGENTLINE_TMP=/nonexistent/agentline
   _side_legacy="${_AGENTLINE_LEGACY_TMP:-/tmp}"
 fi
+# A trailing "/" or "/." goes, as the writers drop it: `[ -L link/ ]` is
+# false (the path names the directory the link points to), and the helpers
+# refuse a symlinked directory, so "link/" must read as "link" here too.
+while :; do
+  case "$AGENTLINE_TMP" in
+    ?*/) AGENTLINE_TMP="${AGENTLINE_TMP%/}" ;;
+    ?*/.) AGENTLINE_TMP="${AGENTLINE_TMP%/.}"; AGENTLINE_TMP="${AGENTLINE_TMP:-/}" ;;
+    *) break ;;
+  esac
+done
+# The API ledger is read only from a directory the meter would write to: a
+# real one of ours, not a symlink (the default passed that test above).
+_side_ok=""
+[ -d "$AGENTLINE_TMP" ] && [ ! -L "$AGENTLINE_TMP" ] && [ -O "$AGENTLINE_TMP" ] && _side_ok=1
 AGENTS_FILE="${CLAUDE_AGENTS_FILE:-$AGENTLINE_TMP/claude_agents.txt}"
 # The legacy registry, only when no override is set and it is ours — and
 # only from a directory where nobody else can swap it between this test and
@@ -1626,6 +1641,7 @@ if [ "$_AL_GLYPHS" = ascii ]; then
   G_PR_DRAFT="draft "; G_PR_PENDING="review "; G_PR_CHANGES="changes "; G_PR_OK="approved "
   G_EMAIL="";     G_MCP="mcp:";    G_AGENTS="agents:"; G_DONE="ok:"; G_RESUME=""
   G_SVC="svc:";   G_SSH="";        G_CRON="";      G_PORTS="ports:"
+  G_API="api:"
 else
   G_SEP="│";      G_DOT="·";       G_ALERT="⚠ ";   G_WARN="⚠️ "
   G_LOW="🟢";     G_MED="🟡";      G_HIGH="🟠";    G_XHIGH="🔴";   G_EFFORT="⚙️ "
@@ -1638,6 +1654,7 @@ else
   G_PR_DRAFT="📝 "; G_PR_PENDING="👀 "; G_PR_CHANGES="🔴 "; G_PR_OK="✅ "
   G_EMAIL="🤖 ";  G_MCP="⚙️ ";     G_AGENTS="🤖 "; G_DONE="✓";     G_RESUME="♻️ "
   G_SVC="🛡️ ";    G_SSH="🔐 ";     G_CRON="⏰ ";   G_PORTS="🌐 "
+  G_API="🔌 "
 fi
 # Glyphs inside values the probes built — cached for AGENTLINE_PROBE_TTL, in
 # the emoji spelling whatever the set — and inside the agent list are
@@ -1968,24 +1985,25 @@ fmt_reset() {
   h=$((diff / 3600)); m=$(((diff % 3600) / 60))
   if [ $h -gt 0 ]; then _reset_out="${h}h${m}m"; else _reset_out="${m}m"; fi
 }
-# fmt_reset_week <ts> -> $_reset_out: "5/10", the day and month of <ts>.
-# Zero-padded %d/%m is the only form both GNU and BSD date support (the
-# GNU-only %-d no-pad flag breaks on macOS); the padding is stripped after,
-# as the sed that used to do it did: the first character when it is 0, and
-# the 0 after the slash. printf %()T takes an epoch of up to 11 digits
-# here; any other spelling goes to date as before.
+# fmt_reset_week <ts> -> $_reset_out: "05/10", the day and month the
+# weekly limit resets, zero-padded, for the reset segment (it used to close
+# the week segment, unpadded: "5/10"). Only an epoch in seconds, 1-12
+# digits, still ahead of $_now_epoch is a reset date: a missing value, an
+# ISO string, milliseconds or a reset already past gives nothing, and the
+# segment hides rather than show a date that means nothing. bash >= 4.2
+# formats it with printf %()T in AGENTLINE_TZ, no fork; older bash asks
+# date, as it always did. Anything but DD/MM back from date is dropped.
 fmt_reset_week() {
-  local ts="$1" d
+  local ts="$1" d=""
   _reset_out=""
-  [ -z "$ts" ] && return
-  case "$_ptime:$ts" in
-    1:*[!0-9]*|1:????????????*) d=$(fmt_epoch "$ts" "%d/%m") ;;
-    1:*) printf -v d '%(%d/%m)T' "$(( 10#$ts ))" ;;
-    *)   d=$(fmt_epoch "$ts" "%d/%m") ;;
-  esac
-  d="${d#0}"
-  case "$d" in *"/0"*) d="${d%%/0*}/${d#*/0}" ;; esac
-  _reset_out="$d"
+  case "$ts" in ''|*[!0123456789]*|?????????????*) return ;; esac
+  [ $(( 10#$ts )) -gt "$_now_epoch" ] || return
+  if [ "$_ptime" = 1 ]; then
+    printf -v d '%(%d/%m)T' "$(( 10#$ts ))"
+  else
+    d=$(fmt_epoch "$(( 10#$ts ))" "%d/%m")
+  fi
+  case "$d" in [0123456789][0123456789]/[0123456789][0123456789]) _reset_out="$d" ;; esac
 }
 fmt_reset "$five_hour_reset"; five_hour_reset_fmt="$_reset_out"
 fmt_reset_week "$seven_day_reset"; seven_day_reset_fmt="$_reset_out"
@@ -2259,6 +2277,141 @@ if [ -f "$WC_FILE" ]; then
   _words_fmt "$wo" words_out_w
 fi
 
+# === API meter ===
+# What this session spent on external model APIs and workers, booked by
+# agentline-meter.sh (or, later, a hook) into claude_api.v1.<session id> in
+# the side directory: one row per provider and source, "<provider> <src>
+# <calls> <errors> <tok_in> <tok_out> <cost_nano_usd>", totals only. The
+# 🔌 segment on line 3 shows "hetzner 12·51k · jev 303·70k · codex 4 ·
+# $0.01": calls, then input + output tokens when there are any, a red !N
+# for errors, and the cost at the end.
+#
+# The file is written by anything the user runs, so it is read as untrusted
+# text, with builtins only (the render gains no fork): the path from the
+# parsed session_id only when it is 1-64 of [A-Za-z0-9_-] and not
+# "default" (the writer's rule: "default" is what this script calls a
+# session it cannot name), a regular file of ours, not a
+# symlink, at most 40 lines (two full sources of 17 rows each fit). A row
+# counts only with exactly seven fields, a
+# provider name of the writer's shape, a source of c or h, and five
+# numbers of 1-15 ASCII digits. Every field is checked before arithmetic
+# sees it: $(( )) on an unchecked "a[$(cmd)]" runs cmd. 10# keeps "08"
+# decimal. A provider with a client row (c) shows that one, else its hook
+# row (h); the two are never added, as both count the same calls.
+# Providers keep the order of their first row; at most AGENTLINE_API_SHOW
+# (default 3) are named and the rest counted, "+2". The cost is the sum of
+# the rows shown for every provider, named or counted, rounded half up to
+# the cent; under half a cent it reads "<$0.01".
+api_body=""
+_api_file=""
+_api_nodir=""
+_api_p=(); _api_c=(); _api_h=()
+case "$session_id" in
+  ''|default|*[!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-]*) ;;
+  *)
+    if [ ${#session_id} -le 64 ]; then
+      if [ -n "$_side_ok" ]; then _api_file="$AGENTLINE_TMP/claude_api.v1.$session_id"; else _api_nodir="$AGENTLINE_TMP"; fi
+    fi ;;
+esac
+if [ -n "$_api_file" ] && [ -f "$_api_file" ] && [ ! -L "$_api_file" ] && [ -O "$_api_file" ]; then
+  _api_lines=0; _ap_ifs="$IFS"; IFS=' '
+  # A line is read whole, 128 characters at most (-n): a row of the
+  # writer's is 94 at most, and a longer line ends the read, so a ledger of
+  # one 50 MB line costs no more than a short one (`read` alone would take
+  # the whole line into memory). 40 lines of 128 bound the bytes too.
+  # `|| [ -n ... ]`: a last line without its newline still counts.
+  while [ "$_api_lines" -lt 40 ] && { IFS= read -r -n 128 _ap_line || [ -n "$_ap_line" ]; }; do
+    _api_lines=$(( _api_lines + 1 ))
+    [ ${#_ap_line} -lt 128 ] || break
+    # Exactly the writer's text: seven fields between six single spaces.
+    # Splitting would fold a leading, trailing or double space away and
+    # show a row the writer never wrote, so those rows go first; then the
+    # line is split on spaces alone (IFS is " " for this loop), with no
+    # glob character left to expand.
+    case "$_ap_line" in ' '*|*' '|*'  '*|*[\*\?\[]*) continue ;; esac
+    _ap_f=($_ap_line)
+    [ ${#_ap_f[@]} = 7 ] || continue
+    _ap_prov="${_ap_f[0]}" _ap_src="${_ap_f[1]}" _ap_calls="${_ap_f[2]}" _ap_errs="${_ap_f[3]}"
+    _ap_tin="${_ap_f[4]}" _ap_tout="${_ap_f[5]}" _ap_cost="${_ap_f[6]}"
+    case "$_ap_prov" in
+      [abcdefghijklmnopqrstuvwxyz]*) ;;
+      *) continue ;;
+    esac
+    case "$_ap_prov" in
+      *[!abcdefghijklmnopqrstuvwxyz0123456789-]*|?????????????*) continue ;;
+    esac
+    # The writer's secret check (secretish() in agentline-meter.sh), every
+    # alternative of it that a name of this shape can hold: a key prefix at
+    # the start or after a "-", "eyj" and 8 more anywhere, and the words.
+    # The rest need a "_", ".", space, ":" or "=", or 16 characters. The
+    # suite compares the two on every name it can build.
+    case "$_ap_prov" in
+      sk-*|*-sk-*|glpat-*|*-glpat-*|nvapi-*|*-nvapi-*|pypi-*|*-pypi-*|aiza*|*-aiza*) continue ;;
+      xox[abcdefghijklmnopqrstuvwxyz]-*|*-xox[abcdefghijklmnopqrstuvwxyz]-*) continue ;;
+      *eyj????????*|*token*|*secret*|*passw*|*apikey*|*bearer*) continue ;;
+    esac
+    case "$_ap_src" in c|h) ;; *) continue ;; esac
+    _ap_ok=1
+    for _ap_v in "$_ap_calls" "$_ap_errs" "$_ap_tin" "$_ap_tout" "$_ap_cost"; do
+      case "$_ap_v" in ''|*[!0123456789]*|????????????????*) _ap_ok=0; break ;; esac
+    done
+    [ "$_ap_ok" = 1 ] || continue
+    # The provider's slot, by a scan of at most 40 names (bash 3.2 has no
+    # associative arrays); the first row of each source wins.
+    _ap_i=0
+    while [ "$_ap_i" -lt ${#_api_p[@]} ] && [ "${_api_p[$_ap_i]}" != "$_ap_prov" ]; do _ap_i=$(( _ap_i + 1 )); done
+    if [ "$_ap_i" = ${#_api_p[@]} ]; then _api_p[$_ap_i]="$_ap_prov"; _api_c[$_ap_i]=""; _api_h[$_ap_i]=""; fi
+    _ap_row="$_ap_calls $_ap_errs $_ap_tin $_ap_tout $_ap_cost"
+    if [ "$_ap_src" = c ]; then
+      [ -n "${_api_c[$_ap_i]}" ] || _api_c[$_ap_i]="$_ap_row"
+    else
+      [ -n "${_api_h[$_ap_i]}" ] || _api_h[$_ap_i]="$_ap_row"
+    fi
+  done < "$_api_file"
+  IFS="$_ap_ifs"
+fi
+if [ ${#_api_p[@]} -gt 0 ]; then
+  case "${AGENTLINE_API_SHOW-}" in ''|*[!0-9]*|???*) _api_show=3 ;; *) _api_show=$(( 10#$AGENTLINE_API_SHOW )) ;; esac
+  _api_nano=0; _api_more=0; _ap_i=0
+  while [ "$_ap_i" -lt ${#_api_p[@]} ]; do
+    # Split by expansion: the five fields are checked digits.
+    _ap_row="${_api_c[$_ap_i]:-${_api_h[$_ap_i]}}"
+    _ap_calls="${_ap_row%% *}"; _ap_row="${_ap_row#* }"
+    _ap_errs="${_ap_row%% *}";  _ap_row="${_ap_row#* }"
+    _ap_tin="${_ap_row%% *}";   _ap_row="${_ap_row#* }"
+    _ap_tout="${_ap_row%% *}";  _ap_cost="${_ap_row#* }"
+    _api_nano=$(( _api_nano + 10#$_ap_cost ))
+    if [ "$_ap_i" -lt "$_api_show" ]; then
+      _ap_prov="${_api_p[$_ap_i]}"; _clean _ap_prov
+      _ap_tok=$(( 10#$_ap_tin + 10#$_ap_tout ))
+      # Two 15-digit totals can make 16 digits, which format_tokens would
+      # hand to awk (a fork); no session spends that many.
+      [ "$_ap_tok" -gt 999999999999999 ] && _ap_tok=999999999999999
+      _ap_seg="${DIM}${_ap_prov}${RESET} $(( 10#$_ap_calls ))"
+      if [ "$_ap_tok" -gt 0 ]; then
+        _ap_tokf=""; format_tokens "$_ap_tok" _ap_tokf
+        _ap_seg="${_ap_seg}${G_DOT}${_ap_tokf}"
+      fi
+      [ $(( 10#$_ap_errs )) -gt 0 ] && _ap_seg="${_ap_seg} ${RED}!$(( 10#$_ap_errs ))${RESET}"
+      api_body="${api_body:+${api_body} ${DIM}${G_DOT}${RESET} }${_ap_seg}"
+    else
+      _api_more=$(( _api_more + 1 ))
+    fi
+    _ap_i=$(( _ap_i + 1 ))
+  done
+  [ "$_api_more" -gt 0 ] && api_body="${api_body:+${api_body} ${DIM}${G_DOT}${RESET} }+${_api_more}"
+  if [ "$_api_nano" -gt 0 ]; then
+    # Cents, rounded half up: 5,000,000 nano-USD is half a cent.
+    _ap_cents=$(( (_api_nano + 5000000) / 10000000 ))
+    if [ "$_ap_cents" = 0 ]; then
+      _ap_usd='<$0.01'
+    else
+      printf -v _ap_usd '$%d.%02d' $(( _ap_cents / 100 )) $(( _ap_cents % 100 ))
+    fi
+    api_body="${api_body:+${api_body} ${DIM}${G_DOT}${RESET} }${_ap_usd}"
+  fi
+fi
+
 # === Hyperlinks ===
 # The PR number and the repository are OSC-8 links: click (or cmd-click) to
 # open them. No terminal allowlist: Claude Code decides itself whether its
@@ -2349,6 +2502,11 @@ elif [ "$compact_n" -gt 0 ] && [ -n "$compact_post" ] && [ "$compact_fresh" = 1 
   esac
 fi
 [ "$compact_n" -gt 0 ] && _seg compact "${DIM}${G_COMPACT}${compact_n}${RESET}"
+# The weekly limit's reset date, "↻05/10", dim, right after the compaction
+# counter, whether or not there were compactions. It used to close the week
+# segment; it is its own segment so a layout can place or drop it, and like
+# week it is never dropped for width (the layout pass's KEEP).
+[ -n "$seven_day_reset_fmt" ] && _seg reset "${DIM}${G_RESET}${seven_day_reset_fmt}${RESET}"
 if [ -n "$five_hour" ]; then
   _color_pct "$five_hour" 90 70
   reset_part=""; [ -n "$five_hour_reset_fmt" ] && reset_part="${DIM}${G_RESET}${five_hour_reset_fmt}${RESET}"
@@ -2514,9 +2672,9 @@ PYEOF
   fi
 fi
 # Weekly limits. The premium-model bucket rides inside the W segment as an
-# orange `F:` field, between the account-wide percentage and the reset marker,
-# so the reset date stays at the end where it reads as belonging to both. It
-# is its own colour on purpose: the 70/90 thresholds answer "how close am I to
+# orange `F:` field after the account-wide percentage; the reset date is the
+# reset segment's (above), which belongs to both. It is its own colour on
+# purpose: the 70/90 thresholds answer "how close am I to
 # the wall", while this answers "how much of that is the expensive model" —
 # a different question, so it does not share W's colour. Either half may be
 # missing; the segment renders whichever exist and disappears when neither do.
@@ -2535,10 +2693,7 @@ case "$seven_day_top" in
   *) printf -v _pct '%.0f' "$seven_day_top"
      week_body="${week_body:+${week_body} }${ORANGE}F:${_pct}%${RESET}" ;;
 esac
-if [ -n "$week_body" ]; then
-  reset_part=""; [ -n "$seven_day_reset_fmt" ] && reset_part="${DIM}${G_RESET}${seven_day_reset_fmt}${RESET}"
-  _seg week "${week_body}${reset_part:+ }${reset_part}"
-fi
+[ -n "$week_body" ] && _seg week "$week_body"
 
 # === Prompt cache ===
 # Whether the next turn pays full input price. A warm cache is the normal
@@ -2775,6 +2930,8 @@ _seg clock "${CYAN}${time_str}${RESET}"
 if [ -n "$active_agents$agents_done" ]; then
   _seg agents "${G_AGENTS}${active_agents:+${YELLOW}${active_agents}${RESET}}${active_agents:+${agents_done:+ ${DIM}${G_DOT}${RESET} }}${agents_done:+${GREEN}${agents_done}${RESET}}"
 fi
+# External APIs this session used (see "API meter").
+[ -n "$api_body" ] && _seg api "${G_API}${api_body}"
 # Recovery command: brings the session back after an unexpected exit.
 # `claude --resume` takes a session ID. A session name is free-form text, so
 # using it unquoted split the command into several arguments and could not be
@@ -2843,7 +3000,7 @@ SEGS="${SEGS}${_LSEGS}"
 # the output is used as-is. It is written as bytes through os.fsencode, which
 # reverses exactly how python decoded argv: a byte the locale cannot decode
 # round-trips instead of raising on the way out.
-AGENTLINE_LAYOUT_DEFAULT="model,effort,fast,ctx,compact,5h,week,cache,cost,dur,tok_in,tok_out,words,lines,cpu,mem,disk / version,dir,git,pr,worktree,session,email,date,clock / mcp,agents,resume / services,ssh,cron,ports"
+AGENTLINE_LAYOUT_DEFAULT="model,effort,fast,ctx,compact,reset,5h,week,cache,cost,dur,tok_in,tok_out,words,lines,cpu,mem,disk / version,dir,git,pr,worktree,session,email,date,clock / mcp,agents,api,resume / services,ssh,cron,ports"
 # cpu, mem and disk close the list: they are host readings, the least a line
 # about the session needs, and without them a busy line 1 at COLUMNS≈122
 # still overflowed by a few cells and wrapped them onto a row of their own.
@@ -2887,7 +3044,9 @@ pc_meas = sys.argv[14]
 segs = sys.stdin.buffer.read().decode('utf-8', 'surrogateescape')
 if segs.endswith('\n'):
     segs = segs[:-1]
-KEEP = ('warn', 'model', 'ctx', '5h', 'week')
+# reset is the week's reset date, which lived inside the never-dropped week
+# segment until it became a segment of its own.
+KEEP = ('warn', 'model', 'ctx', 'reset', '5h', 'week')
 # Plus whatever is in its warning state this render (_WARNED in bash).
 warned = set(sys.argv[13].split(','))
 drop = [n for n in re.split(r'[\s,]+', drop_spec) if n and n not in KEEP and n not in warned]
@@ -3148,7 +3307,7 @@ if [ -n "$CACHE_BASE" ]; then
   if [ $(( _now_epoch - _pruned_at )) -ge 86400 ]; then
     printf '%s\n' "$_now_epoch" > "$_prune_stamp" 2>/dev/null
     find "$CACHE_DIR" -maxdepth 1 \
-      \( -type f -mtime +7 ! -name .pruned -delete \) -o \
+      \( -type f -mtime +7 ! -name .pruned ! -name '*.lock' -delete \) -o \
       \( -type f ! -perm 600 -exec chmod 600 {} + \) -o \
       \( -type d ! -perm 700 -exec chmod 700 {} + \) 2>/dev/null
   fi
@@ -3255,6 +3414,7 @@ _dt_why() {  # _dt_why <segment> — where its data comes from
     fast)     echo "payload fast_mode" ;;
     ctx)      echo "payload context_window.used_percentage" ;;
     compact)  echo "compact_boundary lines in transcript_path (not counted by --doctor: it needs the cache)" ;;
+    reset)    echo "payload rate_limits.seven_day.resets_at (an epoch in seconds, still ahead)" ;;
     5h)       echo "payload rate_limits.five_hour.used_percentage" ;;
     week)     echo "payload rate_limits.seven_day.used_percentage (F: seven_day_overage_included, or AGENTLINE_USAGE_API=1)" ;;
     cache)
@@ -3282,6 +3442,11 @@ _dt_why() {  # _dt_why <segment> — where its data comes from
     date|clock) echo "always" ;;
     mcp)      echo "~/.claude.json mcpServers: remote, or with a running process" ;;
     agents)   echo "agent registry: $AGENTS_FILE$([ -f "$AGENTS_FILE" ] || echo ' (missing)')" ;;
+    api)
+      if [ -n "$_api_nodir" ]; then echo "API meter: no ledger read, $_api_nodir is no directory of yours (missing, a symlink or another user's)"
+      elif [ -z "$_api_file" ]; then echo "API meter: no ledger without a session_id of 1-64 [A-Za-z0-9_-]"
+      else echo "API meter ledger: $_api_file$([ -f "$_api_file" ] || echo ' (missing: agentline-meter.sh add ...)')"
+      fi ;;
     resume)   echo "payload session_id / session_name" ;;
     services)
       if ! command -v systemctl >/dev/null 2>&1; then echo "systemctl not installed (Linux only)"
@@ -3337,6 +3502,15 @@ if [ -n "$_AL_DOCTOR" ]; then
     printf '  %-16s %s\n' agentline-run "$_dt_run, $([ -n "$_dt_on" ] && echo "on PATH as $_dt_on" || echo 'not on PATH (install.sh --link-bin)')"
   else
     printf '  %-16s %s\n' agentline-run "not installed (re-run install.sh)"
+  fi
+  # The API meter's writer, the same way: beside this script, and on PATH
+  # as agentline-meter after install.sh --link-bin.
+  _dt_meter="$HOME/.claude/agentline/agentline-meter.sh"
+  if [ -x "$_dt_meter" ]; then
+    _dt_on=$(command -v agentline-meter 2>/dev/null)
+    printf '  %-16s %s\n' agentline-meter "$_dt_meter, $([ -n "$_dt_on" ] && echo "on PATH as $_dt_on" || echo 'not on PATH (install.sh --link-bin)')"
+  else
+    printf '  %-16s %s\n' agentline-meter "not installed (re-run install.sh)"
   fi
   echo
   echo "timings (one cold render, ms)"

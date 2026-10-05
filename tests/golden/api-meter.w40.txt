@@ -1,0 +1,4 @@
+Sonnet 5 │ 📊 12% │ ↻05/03 │ S:8% ⇣51% ↻2h0m │ W:21% │ 💰 $0.42
+~/work │ DD/MM/YYYY Day │ HH:MM:SS
+🔌 hetzner 12·51.0k · jev 303·69.7k · codex 4 !1 · +2 · $0.01
+♻️ claude --resume api-0001

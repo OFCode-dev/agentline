@@ -64,7 +64,7 @@ bash install.sh --with-subagents --link-bin
 - A status line that is not agentline (`npx ccstatusline`, your own `~/.claude/statusline.sh`, …) is left untouched. The installer prints the snippet to paste instead, says agentline is installed but **not active**, skips `--with-hooks`, and exits with status `3`. Pass `--force` to switch anyway. A `statusline.sh` / `statusline-command.sh` is migrated automatically only when it is provably agentline's own pre-rename copy: the file carries agentline's header line or reads `statusline-services.conf`, or the command is a single absolute path to a file that no longer exists. Its name or directory alone never counts, because those are the usual names of other status lines too.
 - agentline run through a wrapper (`bash -c "AGENTLINE_TZ=UTC exec ~/.claude/agentline/agentline.sh"`, or piped through `sed`) counts as active. The copy the wrapper runs is upgraded in place and the wrapper is left as it is.
 - With `--with-subagents`, `subagentStatusLine` follows the same rules: it is set when absent, kept when it already runs `agentline-subagents.sh` (a custom copy is upgraded in place), and left alone when it runs something else, unless you pass `--force`. In that last case the snippet is printed and the exit status is `3`.
-- `agentline-subagents.sh`, `agentline-run` and the registry helper `agentline-agent.sh` are always copied into `~/.claude/agentline/`. None of them runs until a setting or a command asks for it.
+- `agentline-subagents.sh`, `agentline-run`, the registry helper `agentline-agent.sh` and the API meter `agentline-meter.sh` are always copied into `~/.claude/agentline/`. None of them runs until a setting or a command asks for it.
 - Exit status: `0` installed and active, `1` `settings.json` unusable or unwritable (refused before anything is copied, or the write failed and the file was left whole next to its backup), `2` bad option, `3` installed but not active (the status line, or with `--with-subagents` the subagent line).
 - If the installed `agentline.sh` differs from the new one, it is kept as `agentline.sh.bak-<timestamp>` before being replaced. Put your tweaks in [`local.sh`](#faq) so they survive upgrades.
 
@@ -83,7 +83,8 @@ Every `│`-separated segment below is independent: when its value cannot be mea
 | `📊 42%` | Context window used | Green below 60 %, yellow from 60 %, red from 80 % — and at 80 % the icon swaps to `⚠️` as a deliberate "wrap up or compact" signal. On a window larger than 200k (the 1M models), 25 % is already past 200k tokens, but that is no reason for alarm. Current 1M-context models bill every token at the standard rate, with no long-context premium, so the colours stay on the 60/80 thresholds. A big context costs more per turn only because every request carries more tokens. `AGENTLINE_TAG_200K=1` adds a small dim `>200k` after the percentage when Claude Code's `exceeds_200k_tokens` flag (its fixed 200k threshold) is set. On a 200k window that flag only repeats the percentage, so it is ignored. The percentage is the payload's own `used_percentage` of the full window. It is not measured against the auto-compact threshold: the payload does not expose that threshold, so 100 % does not mean "compact now". Right after a compaction the payload has no figure until the next API call; then a dim `📊 ~16%` estimate (the compaction's `postTokens` over the window size) stands in until the real one returns — and only while the compaction is the latest thing in the transcript: once an assistant turn follows it, an old `postTokens` is no estimate of anything. |
 | `🔄 2` | Compactions this session | Dim; how many times the context has been compacted (`/compact` or auto-compact), counted from the `compact_boundary` entries in the session transcript. Hidden at 0. The transcript is read incrementally (only bytes added since the last render), so a long session costs one `stat` per render. |
 | `S:71% ⇡12% ↻2h0m` | 5-hour rate limit | Percentage used: green below 70 %, yellow from 70 %, red from 90 %. `⇡`/`⇣` is the **pace**: used % minus the share of the window already elapsed (the window started `resets_at` − 5 h ago). `⇡12%` means you are 12 points ahead of a flat pace and will hit the limit before the reset if you keep going (yellow from 5, red from 15); a dim `⇣12%` is headroom. Within ±5 points, in the first 30 minutes of a window, or when the reset time is missing, past or not an epoch, no arrow is shown. The percentage keeps its own colour, so 92 % stays red even when it is under pace. `AGENTLINE_PACE=0` turns the arrows off. `↻` shows the time left until the window resets (`2h49m`), dim; omitted when no reset timestamp is available. |
-| `W:58% F:12% ↻24/8` | 7-day rate limit | `W:` is the account-wide weekly percentage, same color thresholds as `S:` (70/90), followed by its pace arrow like `S:` (`W:58% ⇡8%`), measured over 7 days and shown only after the first ~5 hours of the week. `F:` is the **premium-model** share of that week — Fable/Opus — in orange, read from `rate_limits.seven_day_overage_included` (Claude Code's own label for that bucket is "Fable 5 limit"), falling back to `rate_limits.seven_day_opus`. Claude Code 2.1.x only forwards header-borne buckets to the status line, and many accounts receive no per-model header at all; for those, set `AGENTLINE_USAGE_API=1` to read the Fable share from the `/usage` endpoint instead (one cached HTTPS request per `AGENTLINE_USAGE_TTL`). It carries its own color on purpose: `W` answers "how close am I to the wall", `F` answers "how much of that is the expensive model". Either half is omitted when the payload lacks it, and the whole segment disappears when both are missing. `↻` shows the reset **date** as day/month, dim. |
+| `↻24/08` | Weekly reset date | Dim; the day and month the 7-day limit resets (`rate_limits.seven_day.resets_at`), zero-padded `DD/MM`, in `AGENTLINE_TZ`. It sits right after the compaction counter and shows whether or not there were compactions. Hidden when the payload has no reset time, when it is not an epoch in seconds, or when it is already past. Like the limits themselves, it is never dropped on a narrow terminal. |
+| `W:58% F:12%` | 7-day rate limit | `W:` is the account-wide weekly percentage, same color thresholds as `S:` (70/90), followed by its pace arrow like `S:` (`W:58% ⇡8%`), measured over 7 days and shown only after the first ~5 hours of the week. `F:` is the **premium-model** share of that week — Fable/Opus — in orange, read from `rate_limits.seven_day_overage_included` (Claude Code's own label for that bucket is "Fable 5 limit"), falling back to `rate_limits.seven_day_opus`. Claude Code 2.1.x only forwards header-borne buckets to the status line, and many accounts receive no per-model header at all; for those, set `AGENTLINE_USAGE_API=1` to read the Fable share from the `/usage` endpoint instead (one cached HTTPS request per `AGENTLINE_USAGE_TTL`). It carries its own color on purpose: `W` answers "how close am I to the wall", `F` answers "how much of that is the expensive model". Either half is omitted when the payload lacks it, and the whole segment disappears when both are missing. The reset date is the `↻24/08` segment before it. |
 | `🗄️ cold·tools ~45k` | Prompt cache — only when it matters | From Claude Code's `prompt_cache` object (Claude Code ≥ 2.1.251; the miss cause needs ≥ 2.1.260). Hidden while the cache is warm, because warm is normal. It appears in yellow as `🗄️ ↻1m12s`, a live countdown, once the warm cache has at most 60 s left on a 5-minute TTL (5 minutes on a 1-hour TTL, or `AGENTLINE_CACHE_WARN` seconds): send the follow-up now and it stays cheap. When the cache has gone cold it shows in red as `🗄️ cold·<cause>`, meaning the next turn pays full input price. A cache past its `expires_at` reads `cold·ttl`, even if the payload still says warm or recorded a different miss earlier — a miss re-writes the cache, so it is warm again right after one, and the segment stays hidden then. Only when the payload has no expiry at all (the latest response wrote no cache) is Claude Code's first `last_miss_cause` shown instead, shortened: `ttl`, `tools` (tools changed), `prompt` (system prompt changed), `model`, `effort`, `server`, and so on; plain `cold` when no cause was identified. The dim `~45k` is how many tokens going cold re-writes, when Claude Code reports it. `AGENTLINE_CACHE_VERBOSE=1` also shows the session hit ratio (`🗄️ 91%`: red below 25 %, yellow below 75 %). Hidden on older Claude Code, before the first API response, and when the provider reports no caching (`caching_observed: false`). |
 | `💰 $12.47` | Session cost | USD, two decimals. Hidden when the payload carries no cost. |
 | `⏱️ 3h42m` | Session duration | `XhYm`, or `Ym` under an hour. |
@@ -115,6 +116,7 @@ Every `│`-separated segment below is independent: when its value cannot be mea
 |---|---|---|
 | `⚙️ context7 · playwright` | Active MCP servers | Global and per-project servers from `~/.claude.json`, merged. Command-based servers count only if their process is actually running (`pgrep`-checked); remote HTTP/SSE servers count as configured. Hidden when none are active. |
 | `🤖 code review · tests · +2 · ✓explore` | Live subagents — optional hook | Entries fresher than 5 minutes, labels truncated at 25 chars, yellow. At most `AGENTLINE_AGENT_SHOW` (default 4) are listed, oldest first; the rest are counted as `+N`. A subagent that just finished flashes green as `✓label` for ten seconds. Claude's own subagents come from the [agent-tracker hook](#optional-hooks-word-counter--agent-tracker) and clear when each one stops. Any other process can [register itself](#showing-external-agents) and stays until it deregisters or goes stale. |
+| `🔌 hetzner 12·51.0k · jev 303·69.7k · codex 4 · $0.01` | External API use — optional | What this session spent on external model APIs and workers, as booked with [`agentline-meter`](#api-meter): per provider the calls, then input + output tokens when there are any, a red `!N` for errors, and the total cost at the end (`<$0.01` under half a cent). At most `AGENTLINE_API_SHOW` (default 3) providers are named, in the order they first appeared; the rest are counted as `+N`, and their cost is still in the total. Hidden until something is booked for this session. |
 | `♻️ claude --resume <id>` | Recovery command | Ready to paste after a crash to resume this exact session. Prefers the session **id** (what `--resume` accepts); falls back to the quoted session name, which `--resume` treats as a picker search term. |
 
 ### Line 4 — System layer
@@ -154,6 +156,7 @@ Everything is optional — agentline works with zero configuration.
 | `AGENTLINE_PACE` | `1` | Set to `0` to hide the `⇡`/`⇣` pace arrows after `S:` and `W:` |
 | `AGENTLINE_TAG_200K` | `0` | Set to `1` for a small dim `>200k` after the context percentage when Claude Code's `exceeds_200k_tokens` flag is set on a window larger than 200k. It is informational only: the percentage's colour and icon never change for it |
 | `AGENTLINE_AGENT_SHOW` | `4` | How many running agents `🤖` lists before it counts the rest as `+N` |
+| `AGENTLINE_API_SHOW` | `3` | How many providers `🔌` names before it counts the rest as `+N` (`0` counts them all) |
 | `AGENTLINE_THEME` | `dark` | `light` or `mono` (also selected by `NO_COLOR`) — see [Themes, glyphs and colours](#themes-glyphs-and-colours) |
 | `AGENTLINE_GLYPHS` | `emoji` | `ascii` for a line with nothing above U+007F |
 | `AGENTLINE_COLOR_*` | unset | `GOLD`, `ORANGE`, `FABLE_FROM`, `FABLE_TO` as `r,g,b` |
@@ -167,7 +170,7 @@ Everything is optional — agentline works with zero configuration.
 | `AGENTLINE_USAGE_API` | unset | Set to `1` to fetch the Fable weekly share (`F:`) from `https://api.anthropic.com/api/oauth/usage` when the payload carries no per-model bucket. This is the **only** network call agentline can make, and only when you opt in. Uses the OAuth token from `.credentials.json` in your profile directory (`$CLAUDE_CONFIG_DIR`, default `~/.claude`); the token never leaves the python helper. The result is cached per profile, so two profiles never show each other's figure. Once the cache expires, only one of your open sessions makes the request, in the background so the render never waits on the network (the previous figure stays up meanwhile, for at most a minute past the TTL); it gives up after 20 s. On macOS the token lives in the Keychain rather than in `.credentials.json`, so `F:` stays hidden there |
 | `AGENTLINE_USAGE_TTL` | `300` | Seconds a fetched `/usage` result is reused before the endpoint is asked again |
 | `AGENTLINE_LOCAL` | `~/.claude/agentline/local.sh` | Your override file, sourced on every full render if it exists (see [FAQ](#faq)) |
-| `AGENTLINE_TMP` | private, see note | Directory for the files the optional hooks and `agentline-run` write (`claude_wordcount.txt`, `claude_agents.txt`). By default it belongs to you alone: `$XDG_RUNTIME_DIR/agentline` when that directory exists and is yours, else `${TMPDIR:-/tmp}/agentline-<uid>`. It is created mode 700 and used only when it is a real directory you own that nobody else can write to, and every file in it is mode 600. The writers apply the same test to a directory you name here or through `CLAUDE_AGENTS_FILE`, so a shared `/tmp` itself is refused, and so is a directory left group-writable (umask `002`); `chmod 700` it. The registry is read only when it is a regular file of yours, and only its first 256 KB and 512 lines. agentline and the writers resolve it by the same rule. If they run with different environments (a shell with another `TMPDIR`), set this for both |
+| `AGENTLINE_TMP` | private, see note | Directory for the files the optional hooks, `agentline-run` and `agentline-meter` write (`claude_wordcount.txt`, `claude_agents.txt`, `claude_api.v1.<session>`). By default it belongs to you alone: `$XDG_RUNTIME_DIR/agentline` when that directory exists and is yours, else `${TMPDIR:-/tmp}/agentline-<uid>`. It is created mode 700 and used only when it is a real directory you own that nobody else can write to, and every file in it is mode 600. The writers apply the same test to a directory you name here or through `CLAUDE_AGENTS_FILE`, so a shared `/tmp` itself is refused, and so is a directory left group-writable (umask `002`); `chmod 700` it. The registry is read only when it is a regular file of yours, and only its first 256 KB and 512 lines. agentline and the writers resolve it by the same rule. If they run with different environments (a shell with another `TMPDIR`), set this for both |
 
 Set them in the `env` block of `~/.claude/settings.json` so Claude Code passes them to every render:
 
@@ -182,7 +185,7 @@ Set them in the `env` block of `~/.claude/settings.json` so Claude Code passes t
 `AGENTLINE_LAYOUT` is one string: `/` starts a line, `,` separates segment names, and a segment you leave out is hidden. Order and grouping are exactly what you write; empty lines collapse, and unknown names are ignored. The default is today's four lines:
 
 ```
-model,effort,fast,ctx,compact,5h,week,cache,cost,dur,tok_in,tok_out,words,lines,cpu,mem,disk / version,dir,git,pr,worktree,session,email,date,clock / mcp,agents,resume / services,ssh,cron,ports
+model,effort,fast,ctx,compact,reset,5h,week,cache,cost,dur,tok_in,tok_out,words,lines,cpu,mem,disk / version,dir,git,pr,worktree,session,email,date,clock / mcp,agents,api,resume / services,ssh,cron,ports
 ```
 
 | Name | Segment | Name | Segment |
@@ -201,6 +204,7 @@ model,effort,fast,ctx,compact,5h,week,cache,cost,dur,tok_in,tok_out,words,lines,
 | `lines` | 📝 lines changed | `ssh` / `cron` / `ports` | 🔐 / ⏰ / 🌐 |
 | `cpu` / `mem` / `disk` | 🔥 / 💾 / 💽 | `pr` | 🔀 pull / merge request |
 | `compact` | 🔄 compactions | `worktree` | 🌳 linked worktree |
+| `reset` | `↻` weekly reset date | `api` | 🔌 external API use |
 | `local:<name>` | your own, from `local.sh` ([FAQ](#faq)) | | |
 
 A compact two-line bar, for example:
@@ -210,6 +214,8 @@ A compact two-line bar, for example:
   "env": { "AGENTLINE_LAYOUT": "model,effort,ctx,5h,week,cost / dir,git,clock" }
 }
 ```
+
+**Upgrading a custom layout.** A layout names every segment it shows, so a segment added in a release stays hidden until you add its name. The weekly reset date used to close the `W:` segment and is now its own segment, `reset`: add `reset` (and `api`, for the 🔌 meter) to a custom `AGENTLINE_LAYOUT`, for example `model,effort,ctx,reset,5h,week,cost / dir,git,clock / api`.
 
 **Narrow terminals.** Claude Code ≥ 2.1.153 tells the status line the terminal width (`COLUMNS`); agentline takes 2 cells off as a margin, because the value is read when the render starts and can trail a resize. When a line is wider than that, segments are dropped from it in `AGENTLINE_DROP` order until it fits, and whatever still does not fit wraps at `│` boundaries. A line that has to wrap anyway gets its dropped segments back, most important first, wherever they fit without adding a row. The model, context and both rate limits are never dropped. A resize takes effect on the next tick — the width is part of the render cache key. On older Claude Code there is no `COLUMNS`, so the width is a guess (120, or `AGENTLINE_WIDTH`) and lines 1 and 2 are never trimmed on a guess; set `AGENTLINE_DROP` to opt in anyway.
 
@@ -311,6 +317,31 @@ agentline-run [--label TEXT] [--heartbeat SECONDS|0] -- CMD [ARGS...]
 - Every call to the registry helper gets 3 s, then it is killed, and a `TERM` or `HUP` for CMD is passed on while it runs. A stuck registry (a FIFO in its place, say) cannot hold up CMD or its signals. If the registry helper or `python3` is missing, the command simply runs.
 
 `install.sh` puts it in `~/.claude/agentline/agentline-run`. `bash install.sh --link-bin` also links it as `~/.local/bin/agentline-run`. It never overwrites a different file already at that name.
+
+### API meter
+
+`🔌` on line 3 shows how much this session used external model APIs and
+workers. Claude Code knows nothing of them, so whatever calls them books the
+use with `agentline-meter` (installed as `~/.claude/agentline/agentline-meter.sh`,
+and linked as `~/.local/bin/agentline-meter` by `install.sh --link-bin`):
+
+```bash
+agentline-meter add hetzner --usage response.json         # tokens and cost from a saved API response
+curl -s "$URL" -d @req.json | tee out.json | agentline-meter add nim --usage -
+agentline-meter add jev --in 230 --cost 0.00000966          # explicit numbers
+agentline-meter add codex/gpt-6-astra                       # one call; the model is not kept
+agentline-meter add arb --errors 1                          # a failed call
+```
+
+```text
+agentline-meter add <provider[/model]> [--calls N] [--in N] [--out N] [--cost USD] [--errors N] [--usage FILE|-] [--session ID]
+```
+
+- The session is `--session`, else `$CLAUDE_CODE_SESSION_ID` (Claude Code sets it for the commands it runs). It must be 1–64 of `A-Z a-z 0-9 _ -`; without one, nothing is written.
+- A provider name is `[a-z][a-z0-9-]`, at most 12 characters, and must pass the [secret check](#the-secret-check). Anything else is booked as `other`, and so is a 17th provider in one session. A `/model` suffix is dropped.
+- `--usage` reads a saved response, or a bare usage object, from a file or stdin (at most 4 MB) and takes only numbers from it. A file must be a regular file; stdin (`-`) and a process substitution (`<(…)`) may be a pipe, which gets 3 s to close. A terminal, a named FIFO, a device or a slower pipe is not waited for: the call is booked without its numbers. It takes `prompt_tokens`/`input_tokens`, `completion_tokens`/`output_tokens` (or `total_tokens` when neither is there) from its top-level `usage` object, and a top-level `total_cost_usd` or `cost_usd`. The flags add to what it finds. `--calls` defaults to 1. Every count is 1–15 digits and a cost a plain decimal, or nothing is recorded.
+- Totals, never events, are kept per session in `claude_api.v1.<session id>` in `AGENTLINE_TMP`: one line per provider, `<provider> c <calls> <errors> <tok_in> <tok_out> <cost in nano-USD>`. Writes are locked, so parallel calls lose nothing; a write waits for the lock as long as other writes get through (60 s at most), and only a lock nobody has got for 10 s skips it. Ledgers idle for more than a week are deleted.
+- It always exits 0 and never prints a provider name or a value, so it cannot break the pipeline it measures. Sourced, it offers the same as a function, `agentline_meter add ...`.
 
 ## Subagent status line
 
@@ -465,7 +496,7 @@ Runs are hermetic. The suite first unsets every `AGENTLINE_*` variable you may h
 Yes — and it is the only statusline that can. Claude Code's payload reports ultracode as plain `xhigh`, so agentline reads the session transcript's effort markers to tell them apart: an ultracode session renders a violet `ultracode` pill, a genuine xhigh session stays red.
 
 **Does agentline show my Claude rate limits?**
-Yes. Line 1 shows both the 5-hour rate limit (`S:31% ↻2h49m`) and the 7-day rate limit (`W:58% ↻24/8`) — percentage used, a `⇡`/`⇣` pace arrow saying whether you are burning faster than the window allows, and time until reset, updated on every render.
+Yes. Line 1 shows both the 5-hour rate limit (`S:31% ↻2h49m`) and the 7-day rate limit (`↻24/08 │ W:58%`) — percentage used, a `⇡`/`⇣` pace arrow saying whether you are burning faster than the window allows, and time until reset, updated on every render.
 
 **Why are lines 3 and 4 sometimes missing?**
 They hide when empty, merge when short, and wrap onto extra rows when crowded — a status bar should spend rows on information, not on structure. See [Adaptive layout](#why-agentline).

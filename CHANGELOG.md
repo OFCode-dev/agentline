@@ -2,6 +2,51 @@
 
 ## Unreleased
 
+- API meter. A new `🔌` segment on line 3 shows what the session spent on
+  external model APIs and workers: `🔌 hetzner 12·51.0k · jev 303·69.7k ·
+  codex 4 · $0.01` (calls, tokens, a red `!N` for errors, the total cost).
+  Use is booked with `agentline-meter add <provider[/model]> [--calls N]
+  [--in N] [--out N] [--cost USD] [--errors N] [--usage FILE|-]`, which
+  keeps per-session totals in `claude_api.v1.<session id>` in the side
+  directory, numbers only, under the registry helper's rules (a private
+  directory, files 600, no symlink or FIFO followed, temp file and rename).
+  A write blocks on the lock, woken the moment it is free, for as long as
+  other writes get through (60 s at most); only a lock nobody has got for
+  10 s skips it. A burst of 64 parallel calls loses nothing. `--usage` takes the token
+  counts and cost out of a saved API response without passing it to any
+  command line. It never waits on a terminal or a FIFO: a file must be a
+  regular file, and only stdin (`-`) or a process substitution
+  (`/dev/fd/N`) may be a pipe, read for 3 s at most; anything else books
+  the call without its numbers. Provider names that are not
+  `[a-z][a-z0-9-]{0,11}`, or fail the secret check, are booked as `other`;
+  counts are 1-15 ASCII digits and costs plain decimals, kept as integer
+  nano-USD. It always exits 0 and its notes name nothing. The reader is
+  builtins only, so a render gains no fork. It reads 40 lines of 128
+  characters at most (a longer line ends the read), takes a row only as
+  the writer writes it (seven fields between single spaces), refuses every
+  name the writer's secret check refuses, and checks every field before
+  any arithmetic. It reads the ledger only from a directory of yours that
+  is not a symlink. `AGENTLINE_TMP=link/` (or `link/.`) means the link
+  itself, in agentline and in both helpers: `O_NOFOLLOW` let a trailing
+  slash through to the link's target, in the registry helper too.
+  `AGENTLINE_API_SHOW` (default 3) sets how many providers are named; it
+  and `AGENTLINE_AGENT_SHOW` are now part of the render-cache key, so a
+  change shows at once. `install.sh` copies the meter; `--link-bin` also
+  links `~/.local/bin/agentline-meter`. `--doctor` reports the ledger and
+  the install. (J11a)
+- The weekly reset date is its own segment, `reset`: a dim, zero-padded
+  `↻05/10` right after the compaction counter, where it used to close the
+  `W:` segment as `↻5/10`. It is hidden when the reset time is missing, not
+  an epoch in seconds, or already past, and it is never dropped for width.
+  **Upgrade note:** a custom `AGENTLINE_LAYOUT` shows only the segments it
+  names, so one that names `week` but not `reset` no longer shows the
+  reset date. Add `reset` (and `api`) to a custom `AGENTLINE_LAYOUT`.
+  (J11a)
+- The daily cache prune keeps `*.lock` files whatever their age. Without
+  an `XDG_RUNTIME_DIR` the cache directory is also the hooks' side
+  directory, and deleting `claude_api.lock` or `claude_agents.txt.lock`
+  while a writer held it let the next writer walk past the holder. (J11a)
+
 - One secret check for everything agentline shows that it did not write
   itself. Claude Code already shows its subagents' descriptions, tools and
   commands, and agentline must not add a secret to them. A worker's model,

@@ -207,6 +207,8 @@ prepare() {  # prepare <fixture-name> <filled-payload>
   [ -f "$FIX/payloads/$name.probes" ] && pset=$(cat "$FIX/payloads/$name.probes")
   seed_probes "$sid" "$pset"
   [ -f "$FIX/payloads/$name.wordcount" ] && cp "$FIX/payloads/$name.wordcount" "$SIDE/claude_wordcount.txt"
+  # The API meter's ledger, under the session's own name (J11a).
+  [ -f "$FIX/payloads/$name.api" ] && cp "$FIX/payloads/$name.api" "$SIDE/claude_api.v1.$sid"
   if [ -f "$FIX/payloads/$name.agents" ]; then
     now=$TNOW
     while IFS= read -r label; do
@@ -855,7 +857,9 @@ check "pace: stderr empty" [ ! -s "$T/err" ]
 check "pace: 5h over pace ⇡30%, before the reset" grep -qF 'S:80% ⇡30% ↻2h' "$T/pl"
 check "pace: 5h ⇡ red from 15 points" grep -q "${ESC}\[1;31m⇡30%" "$T/out"
 check "pace: week over pace ⇡8%, yellow" grep -q "${ESC}\[1;33m⇡8%" "$T/out"
-check "pace: week arrow sits after W:" grep -qF 'W:58% ⇡8% ↻' "$T/pl"
+check "pace: week arrow sits after W:" grep -qF 'W:58% ⇡8%' "$T/pl"
+check "pace: the reset date is no longer inside W:" sh -c "! grep -qF 'W:58% ⇡8% ↻' '$T/pl'"
+check "pace: the reset date is its own segment before S:" grep -qE '↻[0-9]{2}/[0-9]{2} │ S:80%' "$T/pl"
 check "pace: S: keeps its absolute colour" grep -q "${ESC}\[1;33mS:80%" "$T/out"
 pace "{\"used_percentage\":20,\"resets_at\":$((pnow + 3600))}" "{\"used_percentage\":94,\"resets_at\":$((pnow + 3600))}"
 check "pace: 5h under pace ⇣60%, dim" grep -q "${ESC}\[2m⇣60%" "$T/out"
@@ -1377,22 +1381,46 @@ for p in 59.99 60 79.9 80 80.0 99.5 0012 1e-05 \
     check "ctx icon: $p warns" grep -qF '⚠️' "$T/nb"
   elif grep -qF '⚠️' "$T/nb"; then fail "ctx icon: $p does not warn"; else pass; fi
 done
-# The week's reset day and the date segment, against date itself, in UTC
-# and in two other zones (a half-hour offset, and one across a DST change).
+# The weekly reset date (its own segment since J11a, zero-padded DD/MM)
+# and the date segment, against date itself, in UTC and in two other zones
+# (a half-hour offset, and New York on both sides of its 2027 DST changes:
+# 01:30 local on 14/03 and on 07/11). The resets are in the future, as a
+# reset date must be; the week segment carries no date any more.
 exp_date() {  # exp_date <epoch> <fmt>
   if date -r 0 >/dev/null 2>&1; then date -r "$1" "+$2"; else date -d "@$1" "+$2"; fi
 }
 for z in UTC Asia/Kolkata America/New_York; do
-  for ts in 0 1790208000 1767225599 1772953200 1762063200; do
-    nb "\"rate_limits\":{\"seven_day\":{\"used_percentage\":5,\"resets_at\":$ts}}" week AGENTLINE_TZ="$z"
-    e=$(TZ="$z" exp_date "$ts" '%d/%m' | LC_ALL=C sed 's/^0//; s#/0#/#')
-    if grep -qE -- "(^|[^0-9/])$e([^0-9/]|\$)" "$T/nb"; then pass; else fail "week reset [$z $ts]: $e (got $(cat "$T/nb"))"; fi
+  for ts in 1799088300 1805005800 1825565400 4107888000 $(( TNOW + 3600 )); do
+    nb "\"rate_limits\":{\"seven_day\":{\"used_percentage\":5,\"resets_at\":$ts}}" reset AGENTLINE_TZ="$z"
+    e=$(TZ="$z" exp_date "$ts" '%d/%m')
+    check "reset date [$z $ts]: ↻$e (got $(cat "$T/nb"))" [ "$(cat "$T/nb")" = "↻$e" ]
   done
   nb '"model":{"id":"claude-opus-5"}' date AGENTLINE_TZ="$z"
   e=$(TZ="$z" LC_ALL=C date "+%d/%m/%Y %a")
   # Raw output: normalize masks the date.
   check "date [$z]: $e" grep -qF -- "$e" "$T/out"
 done
+# Zero-padded, dim, and never twice: the week segment has no date of its own.
+nb '"rate_limits":{"seven_day":{"used_percentage":5,"resets_at":1799088300}}' reset AGENTLINE_TZ=UTC
+check "reset date: zero-padded (↻04/01)" [ "$(cat "$T/nb")" = "↻04/01" ]
+check "reset date: dim" grep -qF "${ESC}[2m↻04/01" "$T/out"
+nb '"rate_limits":{"seven_day":{"used_percentage":5,"resets_at":1799088300}}' week AGENTLINE_TZ=UTC
+check "reset date: not in the week segment ($(cat "$T/nb"))" [ "$(cat "$T/nb")" = "W:5%" ]
+nb '"rate_limits":{"seven_day":{"used_percentage":5,"resets_at":1799088300}}' "" AGENTLINE_TZ=UTC
+check "reset date: default layout, before S:/W: on line 1" sh -c "head -n 1 '$T/nb' | grep -qF '↻04/01 │ W:5%'"
+check "reset date: shown once" [ "$(grep -o '↻04/01' "$T/nb" | wc -l | tr -d ' ')" = 1 ]
+# With no compaction too, and without a percentage: the date stands alone.
+nb '"rate_limits":{"seven_day":{"resets_at":1799088300}}' "compact,reset,week" AGENTLINE_TZ=UTC
+check "reset date: shown without compactions or W: ($(cat "$T/nb"))" [ "$(cat "$T/nb")" = "↻04/01" ]
+# Hidden when missing, past, now, not an epoch in seconds (ISO, a float,
+# milliseconds, 13 digits), or no number at all.
+for ts in 0 1790208000 "$TNOW" "$(( TNOW - 1 ))" '"2027-01-04T18:45:00Z"' 1799088300.5 1799088300000 '"x"' null '"1799088300 "'; do
+  nb "\"rate_limits\":{\"seven_day\":{\"used_percentage\":5,\"resets_at\":$ts}}" "reset,week" AGENTLINE_TZ=UTC
+  check "reset date: hidden for $ts ($(cat "$T/nb"))" [ "$(cat "$T/nb")" = "W:5%" ]
+  check "reset date: $ts, stderr empty" [ ! -s "$T/err" ]
+done
+nb '"model":{"id":"claude-opus-5"}' "reset,model" AGENTLINE_TZ=UTC
+check "reset date: hidden without rate_limits" [ "$(cat "$T/nb")" = "Opus 5" ]
 # Word counts from the hook's file: the k rounding, and a zero shows none.
 for wc in "1050 1150" "999 1250" "0 2450" "007 99950"; do
   NB_WC="$wc" nb '"model":{"id":"claude-opus-5"}' words
@@ -1696,6 +1724,17 @@ PYEOF
   fi
   check "full render: at most 8 forks besides date (got $full_forks, $ndate date: $full_progs)" [ $(( full_forks - ndate )) -le 8 ]
   check "fast path: at most $max_forks fork(s), got $tick_forks ($tick_progs)" [ "$tick_forks" -le "$max_forks" ]
+  # The API meter's reader is builtins only (J11a): the api-meter fixture
+  # renders with its ledger and without it in the same forks and execs.
+  fill "$FIX/payloads/api-meter.json" "$PAY/api-meter.json"
+  prepare api-meter "$PAY/api-meter.json"
+  strace_render "$PAY/api-meter.json" "$T/st-api1"
+  prepare api-meter "$PAY/api-meter.json"; rm -f "$SIDE"/claude_api.*
+  strace_render "$PAY/api-meter.json" "$T/st-api0"
+  read -r api1_forks api1_progs <<< "$(count_procs "$T/st-api1")"
+  read -r api0_forks api0_progs <<< "$(count_procs "$T/st-api0")"
+  check "api meter: the same forks with a ledger and without ($api1_forks vs $api0_forks)" [ "$api1_forks" = "$api0_forks" ]
+  check "api meter: the same execs ([$api1_progs] vs [$api0_progs])" [ "$api1_progs" = "$api0_progs" ]
   bad=""
   for prog in ${tick_progs//,/ }; do
     case " $allowed " in *" $prog "*) ;; *) bad="$bad $prog" ;; esac
@@ -1967,7 +2006,8 @@ echo x >> "$T/py-boots"
 exec "$REAL_PY" "\$@"
 EOF
 chmod +x "$PYSHIM/python3"
-for fx in full fable-max; do
+# api-meter: the API ledger is read with builtins, no python of its own.
+for fx in full fable-max api-meter; do
   fill "$FIX/payloads/$fx.json" "$PAY/$fx.json"
   prepare "$fx" "$PAY/$fx.json"; rm -f "$T/py-boots"
   render "$PAY/$fx.json" 120 PATH="$PYSHIM:$PATH_F"
@@ -2489,6 +2529,19 @@ render "$p" 120
 case "$(ls -l "$CACHE_DIR/legacy.cache")" in -rw-------*) pass ;; *) fail "prune: cache file not repaired to 600: $(ls -l "$CACHE_DIR/legacy.cache")" ;; esac
 case "$(ls -ld "$CACHE_DIR")" in drwx------*) pass ;; *) fail "prune: cache dir not repaired to 700: $(ls -ld "$CACHE_DIR")" ;; esac
 rm -f "$CACHE_DIR/legacy.cache"
+# Lock files are never pruned, whatever their age: without an
+# XDG_RUNTIME_DIR the cache directory is the hooks' side directory too, and
+# a lock deleted while held lets the next writer walk past the holder.
+prepare minimal "$p"
+for f in claude_api.lock claude_agents.txt.lock old.cache; do
+  : > "$CACHE_DIR/$f"; chmod 600 "$CACHE_DIR/$f"; age_file "$CACHE_DIR/$f" $(( 9 * 86400 ))
+done
+rm -f "$CACHE_DIR/.pruned"
+render "$p" 120
+check "prune: an 8-day-old cache file goes" [ ! -e "$CACHE_DIR/old.cache" ]
+check "prune: claude_api.lock is kept" [ -f "$CACHE_DIR/claude_api.lock" ]
+check "prune: claude_agents.txt.lock is kept" [ -f "$CACHE_DIR/claude_agents.txt.lock" ]
+rm -f "$CACHE_DIR/claude_api.lock" "$CACHE_DIR/claude_agents.txt.lock"
 
 # ===========================================================================
 # 4. Hooks and the AGENTLINE_TMP seam
@@ -2552,6 +2605,21 @@ check "default registry: and said so" grep -q 'not a directory of yours' "$T/ser
 echo '{}' | side_env "$TEST_BASH" "$ROOT/hooks/wordcount-hook.sh"
 check "default wordcount: a symlinked dir is refused" [ ! -e "$T/elsewhere/claude_wordcount.txt" ]
 rm -f "$DDIR"
+# A named AGENTLINE_TMP or CLAUDE_AGENTS_FILE directory that is a symlink is
+# refused too, however it is spelled: "link/" and "link/." name the target,
+# which O_NOFOLLOW alone let through (review of J11a).
+ln -s "$T/elsewhere" "$T/alink"
+for sfx in '' / /. /./ //.//; do
+  hook_env AGENTLINE_TMP="$T/alink$sfx" "$TEST_BASH" "$AGENT" add "via link" 2> "$T/serr"
+  check "registry: AGENTLINE_TMP=link$sfx is refused" [ ! -e "$T/elsewhere/claude_agents.txt" ]
+done
+hook_env CLAUDE_AGENTS_FILE="$T/alink/./claude_agents.txt" "$TEST_BASH" "$AGENT" add "via link" 2> "$T/serr"
+check "registry: CLAUDE_AGENTS_FILE=link/./file is refused" [ ! -e "$T/elsewhere/claude_agents.txt" ]
+check "registry: ... and said so" grep -q 'not a directory of yours' "$T/serr"
+mkdir -m 700 "$T/areal"
+hook_env AGENTLINE_TMP="$T/areal/./" "$TEST_BASH" "$AGENT" add "via dir"
+check "registry: AGENTLINE_TMP=dir/./ is still that dir" grep -q 'via dir' "$T/areal/claude_agents.txt"
+rm -rf "$T/alink" "$T/areal"
 # The upgrade: rows in the legacy file are shown, then moved and removed.
 printf '%s legacy run\n' "$(date +%s)" > "$LEG/claude_agents.txt"; chmod 644 "$LEG/claude_agents.txt"
 printf '7123 9456\n' > "$LEG/claude_wordcount.txt"
@@ -2781,6 +2849,13 @@ prepare minimal "$PAY/minimal.json"; agents_rows
 render "$PAY/minimal.json" 200 AGENTLINE_AGENT_SHOW=junk
 normalize "$T/out" "$T/got"
 check "reader: bad AGENTLINE_AGENT_SHOW falls back to 4" grep -qF '· +2 ·' "$T/got"
+# AGENTLINE_AGENT_SHOW is part of the render-cache key (review of J11a):
+# with the default TTL, a change is not served the render cached without it.
+prepare minimal "$PAY/minimal.json"; agents_rows
+render "$PAY/minimal.json" 200; normalize "$T/out" "$T/got"
+check "reader: cached with four named" grep -qF '🤖 run1 · run2 · run3 · run4 · +2' "$T/got"
+render "$PAY/minimal.json" 200 AGENTLINE_AGENT_SHOW=0; normalize "$T/out" "$T/got"
+check "reader: AGENTLINE_AGENT_SHOW=0 is not served the cached render" grep -qF '🤖 +6 · ✓fresh' "$T/got"
 rm -f "$AF"
 # The reader reads a regular file of ours only, never through a symlink, and
 # at most 512 rows of it (review of J9c, stage J9d).
@@ -2803,6 +2878,7 @@ heur "$ROOT/agentline-subagents.sh" > "$T/heur.subs"
 check "heuristic: the classifier has it" [ -s "$T/heur.subs" ]
 check "heuristic: the registry helper's copy is the same" sh -c "sed -n '/^SECRET_KEY = /,/^# (end of the secret heuristic)/p' '$AGENT' | cmp -s - '$T/heur.subs'"
 check "heuristic: the tracker hook's copy is the same" sh -c "sed -n '/^SECRET_KEY = /,/^# (end of the secret heuristic)/p' '$ROOT/hooks/agent-tracker-hook.sh' | cmp -s - '$T/heur.subs'"
+check "heuristic: the API meter's copy is the same" sh -c "sed -n '/^SECRET_KEY = /,/^# (end of the secret heuristic)/p' '$ROOT/hooks/agentline-meter.sh' | cmp -s - '$T/heur.subs'"
 # The helper applies it itself: a direct call cannot store a secret. The
 # text is replaced whole by "agent" ("run" for an agentline-run key); the
 # finished mark, the tracker's #id and the run's pid are kept, so a remove
@@ -3024,6 +3100,594 @@ check "default dir left 0777: refused" [ ! -e "$DT2/agentline-${EUID:-0}/claude_
 check "default dir left 0777: says so" grep -q 'writable by others' "$T/rerr"
 rm -rf "$WDIR" "$T/newdir" "$DT2"
 
+# --- The API meter: agentline-meter.sh (J11a) ----------------------------------
+# Totals per provider and source in claude_api.v1.<session id>, written under
+# flock(2) on claude_api.lock, numbers only. The writer is a black box here:
+# its file, its stderr and what agentline.sh then shows.
+METER="$ROOT/hooks/agentline-meter.sh"
+MSIDE="$T/mside"; mkdir -m 700 "$MSIDE"
+ML="$MSIDE/claude_api.v1.m1"
+meter() {  # meter <args...> -> $T/merr (appended)
+  env -i PATH="$PATH_F" HOME="$HOME_F" AGENTLINE_TMP="$MSIDE" CLAUDE_CODE_SESSION_ID=m1 \
+    "$TEST_BASH" "$METER" "$@" 2>> "$T/merr"
+}
+mtimed() {  # mtimed [VAR=val...] -- <args...> -> $mrc, $msecs, $T/merr (killed after 20 s)
+  local start pid i=0 envs=()
+  while [ $# -gt 0 ] && [ "$1" != -- ]; do envs[${#envs[@]}]="$1"; shift; done
+  shift
+  start=$(date +%s)
+  env -i PATH="$PATH_F" HOME="$HOME_F" AGENTLINE_TMP="$MSIDE" CLAUDE_CODE_SESSION_ID=m1 ${envs[@]+"${envs[@]}"} \
+    "$TEST_BASH" "$METER" "$@" 2> "$T/merr" &
+  pid=$!
+  while kill -0 "$pid" 2>/dev/null && [ "$i" -lt 200 ]; do sleep 0.1; i=$((i + 1)); done
+  if kill -0 "$pid" 2>/dev/null; then kill -9 "$pid" 2>/dev/null; mrc=hung; wait "$pid" 2>/dev/null
+  else wait "$pid"; mrc=$?; fi
+  msecs=$(( $(date +%s) - start ))
+}
+mrow() { grep "^$1 " "${2:-$ML}" 2>/dev/null; }  # mrow <provider> [ledger] -> its row(s)
+# Sums: calls default to 1, flags add up.
+rm -f "$T/merr"
+meter add hetzner; mrc=$?
+check "meter: exit 0 (got $mrc)" [ "$mrc" = 0 ]
+meter add hetzner --calls 2 --in 10 --out 5
+meter add hetzner --errors 1 --in 7
+check "meter: totals summed ($(mrow hetzner))" [ "$(mrow hetzner)" = "hetzner c 4 1 17 5 0" ]
+check "meter: stderr empty" [ ! -s "$T/merr" ]
+check "meter: dir 0700, ledger and lock 0600" \
+  [ "$(mode_of "$MSIDE")|$(mode_of "$ML")|$(mode_of "$MSIDE/claude_api.lock")" = "drwx------|-rw-------|-rw-------" ]
+# --usage: a saved response from a file, or stdin; a bare usage object; the
+# flags add to it. Only the allowlisted numbers are kept.
+printf '%s' '{"id":"cmpl-usage-marker-x9","usage":{"prompt_tokens":100,"completion_tokens":20,"total_tokens":120},"total_cost_usd":0.5,"note":"sk-ant-abcdefghijklmnop"}' > "$T/u1.json"
+meter add nim --usage "$T/u1.json"
+check "meter --usage FILE ($(mrow nim))" [ "$(mrow nim)" = "nim c 1 0 100 20 500000000" ]
+printf '%s' '{"usage":{"input_tokens":7,"output_tokens":3},"cost_usd":1e-05}' \
+  | env -i PATH="$PATH_F" AGENTLINE_TMP="$MSIDE" CLAUDE_CODE_SESSION_ID=m1 "$TEST_BASH" "$METER" add arb --usage - --in 1 2>> "$T/merr"
+check "meter --usage - plus --in, a 1e-05 cost ($(mrow arb))" [ "$(mrow arb)" = "arb c 1 0 8 3 10000" ]
+printf '%s' '{"total_tokens":50}' > "$T/u2.json"
+meter add deepseek --usage "$T/u2.json"
+check "meter --usage: a bare usage object, total_tokens as input ($(mrow deepseek))" [ "$(mrow deepseek)" = "deepseek c 1 0 50 0 0" ]
+check "meter: only numbers stored" sh -c "! grep -qE 'marker|sk-ant|cmpl' '$ML'"
+# Options are read in pairs: a --usage file named "--session" is a value,
+# not the session option (review of J11a, gpt-6.1-sol).
+cp "$T/u2.json" "$MSIDE/--session"
+( cd "$MSIDE" && env -i PATH="$PATH_F" AGENTLINE_TMP="$MSIDE" CLAUDE_CODE_SESSION_ID=m1 "$TEST_BASH" "$METER" add pairs --usage --session --in 7 2>> "$T/merr" )
+check "meter: an option's value is never an option ($(mrow pairs))" [ "$(mrow pairs)" = "pairs c 1 0 57 0 0" ]
+rm -f "$MSIDE/--session"
+# A lock or ledger an older umask left 0644 is made private on the next write.
+meter add tight --session m9
+chmod 644 "$MSIDE/claude_api.lock" "$MSIDE/claude_api.v1.m9"
+meter add tight --session m9
+check "meter: existing side files tightened to 0600" \
+  [ "$(mode_of "$MSIDE/claude_api.v1.m9")|$(mode_of "$MSIDE/claude_api.lock")" = "-rw-------|-rw-------" ]
+rm -f "$MSIDE/claude_api.v1.m9"
+# The usage data never reaches a child's argv: a shim logs every python3's.
+MPYSHIM="$T/mpyshim"; mkdir -p "$MPYSHIM"
+printf '#!/bin/sh\nprintf "%%s\\n" "$*" >> "%s"\nexec "%s" "$@"\n' "$T/mpy-argv" "$(command -v python3)" > "$MPYSHIM/python3"
+chmod +x "$MPYSHIM/python3"; rm -f "$T/mpy-argv"
+env -i PATH="$MPYSHIM:$PATH_F" AGENTLINE_TMP="$MSIDE" CLAUDE_CODE_SESSION_ID=m1 "$TEST_BASH" "$METER" add nim --usage "$T/u1.json"
+env -i PATH="$MPYSHIM:$PATH_F" AGENTLINE_TMP="$MSIDE" CLAUDE_CODE_SESSION_ID=m1 "$TEST_BASH" "$METER" add nim --usage - < "$T/u1.json"
+check "meter --usage: python3 ran" [ -s "$T/mpy-argv" ]
+check "meter --usage: the data is in no argv" sh -c "! grep -qE 'usage-marker|sk-ant-abc|cmpl-' '$T/mpy-argv'"
+check "meter --usage: both added ($(mrow nim))" [ "$(mrow nim)" = "nim c 3 0 300 60 1500000000" ]
+# Hostile usage documents: deep nesting, 5 MB, NaN, bools, negatives,
+# strings, floats, a 5000-digit integer. No traceback, and only the call
+# itself is counted.
+python3 -c 'open("'"$T"'/u-deep.json", "w").write("[" * 200000)'
+python3 -c 'open("'"$T"'/u-big.json", "w").write("{\"usage\":{\"prompt_tokens\":1},\"pad\":\"" + "x" * (5 * 1024 * 1024) + "\"}")'
+printf '%s' '{"usage":{"prompt_tokens":true,"completion_tokens":-5,"total_tokens":"9"},"total_cost_usd":NaN}' > "$T/u-odd1.json"
+printf '%s' '{"usage":{"prompt_tokens":1.5,"output_tokens":'"$(printf '%05000d' 7)"'},"cost_usd":-1}' > "$T/u-odd2.json"
+printf '%s' '{"usage":{"input_tokens":1e400},"total_cost_usd":Infinity}' > "$T/u-odd3.json"
+printf '%s' 'not json at all' > "$T/u-odd4.json"
+printf '\377\376{' > "$T/u-odd5.json"
+rm -f "$T/merr"
+for u in deep big odd1 odd2 odd3 odd4 odd5; do meter add zeta --usage "$T/u-$u.json"; done
+meter add zeta --usage "$T/nonexistent.json"
+check "meter --usage hostile: calls counted, nothing else ($(mrow zeta))" [ "$(mrow zeta)" = "zeta c 8 0 0 0 0" ]
+check "meter --usage hostile: no traceback" sh -c "! grep -q Traceback '$T/merr'"
+check "meter --usage hostile: says so" grep -q 'holds no JSON object' "$T/merr"
+# Cost exactness: 303 records of 230 tokens at 0.042 USD per million tokens
+# (9.66e-06 USD each) sum to exactly 2,926,980 nano-USD, in parallel batches.
+rm -f "$MSIDE/claude_api.v1.cost1"
+i=0
+while [ "$i" -lt 303 ]; do
+  env -i PATH="$PATH_F" AGENTLINE_TMP="$MSIDE" "$TEST_BASH" "$METER" add jev --in 230 --cost 0.00000966 --session cost1 2>/dev/null &
+  i=$((i + 1))
+  [ $(( i % 16 )) = 0 ] && wait
+done
+wait
+check "meter: 303 x 0.00000966 USD sum exactly ($(mrow jev "$MSIDE/claude_api.v1.cost1"))" \
+  [ "$(mrow jev "$MSIDE/claude_api.v1.cost1")" = "jev c 303 0 69690 0 2926980" ]
+# Costs: rounded half up past nine decimals, the 12 decimals allowed.
+rm -f "$MSIDE/claude_api.v1.cost2"
+for c in a:0.0000000005 b:0.000000000499 c:1 d:2.5 e:0.123456789012; do
+  env -i PATH="$PATH_F" AGENTLINE_TMP="$MSIDE" "$TEST_BASH" "$METER" add "c${c%%:*}" --cost "${c#*:}" --session cost2
+done
+check "meter: cost decimals to nano-USD" [ "$(cut -d' ' -f7 "$MSIDE/claude_api.v1.cost2" | tr '\n' ' ')" = "1 0 1000000000 2500000000 123456789 " ]
+# Clamps: one record at most 10^12 tokens, a million calls; a total stops
+# below 10^15 and never goes down.
+rm -f "$MSIDE/claude_api.v1.cl"
+env -i PATH="$PATH_F" AGENTLINE_TMP="$MSIDE" "$TEST_BASH" "$METER" add big --session cl --calls 999999999999999 --in 999999999999999 --cost 999999999.5
+check "meter: a record is clamped ($(mrow big "$MSIDE/claude_api.v1.cl"))" \
+  [ "$(mrow big "$MSIDE/claude_api.v1.cl")" = "big c 1000000 0 1000000000000 0 100000000000000" ]
+printf 'big c 999999999999990 0 999999999999999 0 5\n' > "$MSIDE/claude_api.v1.cl"; chmod 600 "$MSIDE/claude_api.v1.cl"
+env -i PATH="$PATH_F" AGENTLINE_TMP="$MSIDE" "$TEST_BASH" "$METER" add big --session cl --calls 50 --in 50
+check "meter: totals saturate at 15 digits ($(mrow big "$MSIDE/claude_api.v1.cl"))" \
+  [ "$(mrow big "$MSIDE/claude_api.v1.cl")" = "big c 999999999999999 0 999999999999999 0 5" ]
+# Session ids: none, or anything but 1-64 of [A-Za-z0-9_-] (and "default"),
+# writes nothing at all, not even the lock; --session wins over the
+# environment, valid or not.
+NS="$T/mside-ns"; mkdir -m 700 "$NS"
+env -i PATH="$PATH_F" AGENTLINE_TMP="$NS" "$TEST_BASH" "$METER" add hetzner 2> "$T/merr"; mrc=$?
+check "meter: no session, exit 0, silent" [ "$mrc" = 0 -a ! -s "$T/merr" ]
+long65=$(printf '%065d' 0)
+for bad in '' default ../x "$long65" a.b 'a b' "$(printf 'a\nb')" 'ş'; do
+  env -i PATH="$PATH_F" AGENTLINE_TMP="$NS" CLAUDE_CODE_SESSION_ID="$bad" "$TEST_BASH" "$METER" add hetzner 2> "$T/merr"
+  env -i PATH="$PATH_F" AGENTLINE_TMP="$NS" "$TEST_BASH" "$METER" add hetzner --session "$bad" 2>> "$T/merr"
+done
+check "meter: bad session ids write nothing ($(ls -A "$NS" | tr '\n' ' '))" [ -z "$(ls -A "$NS")" ]
+check "meter: bad session ids, silent" [ ! -s "$T/merr" ]
+env -i PATH="$PATH_F" AGENTLINE_TMP="$NS" CLAUDE_CODE_SESSION_ID=envsid "$TEST_BASH" "$METER" add hetzner --session flagsid
+check "meter: --session wins" [ -f "$NS/claude_api.v1.flagsid" -a ! -e "$NS/claude_api.v1.envsid" ]
+env -i PATH="$PATH_F" AGENTLINE_TMP="$NS" CLAUDE_CODE_SESSION_ID=envsid "$TEST_BASH" "$METER" add hetzner --session a.b
+check "meter: an invalid --session is not replaced by the environment" [ ! -e "$NS/claude_api.v1.envsid" ]
+check "meter: a 64-character id is fine" sh -c "env -i PATH='$PATH_F' AGENTLINE_TMP='$NS' '$TEST_BASH' '$METER' add x --session $(printf '%064d' 0) && [ -f '$NS/claude_api.v1.$(printf '%064d' 0)' ]"
+# The model after a slash is dropped.
+meter add codex/gpt-6-astra
+check "meter: /model dropped ($(mrow codex))" [ "$(mrow codex)" = "codex c 1 0 0 0 0" ]
+check "meter: the model stored nowhere" sh -c "! grep -q astra '$ML'"
+# Names that look like a secret, or are not of the shape, go to "other" and
+# appear nowhere: not in the file, not on stderr, not on the bar.
+rm -f "$MSIDE/claude_api.v1.sec" "$T/merr"
+for n in sk-abcdefgh1 'Bearer x' inference.hetzner.com 10.1.2.3 /home/u/.ssh/id_rsa abcdefghijklm Hetzner \
+         "$(printf 'escq\033[2J')" 'tokenizer' ''; do
+  env -i PATH="$PATH_F" AGENTLINE_TMP="$MSIDE" "$TEST_BASH" "$METER" add "$n" --session sec --in 1 2>> "$T/merr"
+done
+check "meter: refused names booked as other ($(cat "$MSIDE/claude_api.v1.sec" | tr '\n' ' '))" \
+  [ "$(cat "$MSIDE/claude_api.v1.sec")" = "other c 10 0 10 0 0" ]
+check "meter: refused names, silent" [ ! -s "$T/merr" ]
+printf '{"session_id":"sec","cwd":"%s"}\n' "$WORK" > "$T/msec.json"
+prepare minimal "$T/msec.json"; cp "$MSIDE/claude_api.v1.sec" "$SIDE/claude_api.v1.sec"
+render "$T/msec.json" 200; normalize "$T/out" "$T/got"
+check "meter: refused names shown as other" grep -qF '🔌 other 10·10' "$T/got"
+for f in "$MSIDE/claude_api.v1.sec" "$T/merr" "$T/out"; do
+  if LC_ALL=C grep -qE 'sk-abc|Bearer|inference|10\.1\.2|id_rsa|abcdefghijklm|Hetzner|escq|tokenizer' "$f"; then
+    fail "meter: a refused name reached ${f##*/}"
+  else
+    pass
+  fi
+done
+# A 17th provider is booked as "other"; nothing is lost from the totals.
+rm -f "$MSIDE/claude_api.v1.many"
+for i in 01 02 03 04 05 06 07 08 09 10 11 12 13 14 15 16 17 18; do
+  env -i PATH="$PATH_F" AGENTLINE_TMP="$MSIDE" "$TEST_BASH" "$METER" add "p$i" --in 10 --session many
+done
+check "meter: 16 providers kept, then other ($(cut -d' ' -f1 "$MSIDE/claude_api.v1.many" | tr '\n' ' '))" \
+  [ "$(cut -d' ' -f1 "$MSIDE/claude_api.v1.many" | tr '\n' ' ')" = "p01 p02 p03 p04 p05 p06 p07 p08 p09 p10 p11 p12 p13 p14 p15 p16 other " ]
+check "meter: other holds the 17th and 18th" [ "$(mrow other "$MSIDE/claude_api.v1.many")" = "other c 2 0 20 0 0" ]
+check "meter: grand total unchanged" \
+  [ "$(awk '{c += $3; t += $5} END {print c, t}' "$MSIDE/claude_api.v1.many")" = "18 180" ]
+env -i PATH="$PATH_F" AGENTLINE_TMP="$MSIDE" "$TEST_BASH" "$METER" add p03 --session many
+check "meter: a known provider still books under its name" [ "$(mrow p03 "$MSIDE/claude_api.v1.many")" = "p03 c 2 0 10 0 0" ]
+# Numbers: 1-15 ASCII digits or nothing is recorded, with a note and no
+# traceback; a cost is a plain decimal.
+cp "$ML" "$T/ml.before"; rm -f "$T/merr"
+for v in '²' '٣٠' -5 1e9 nan '' ' 5' '5 ' 0x10 '+5' "$(printf '%020d' 1)" "$(printf '%05000d' 1)"; do
+  for f in --calls --in --out --errors; do meter add hetzner "$f" "$v"; done
+done
+for v in 1e-3 .5 5. -1 nan inf 0.0000000000001 1234567890 '1,5' '٣' '0.5 ' 'NaN'; do meter add hetzner --cost "$v"; done
+check "meter: bad numbers change nothing" cmp -s "$ML" "$T/ml.before"
+check "meter: bad numbers, no traceback" sh -c "! grep -q Traceback '$T/merr'"
+check "meter: bad numbers, a note each" [ "$(grep -c 'nothing recorded' "$T/merr")" = 60 ]
+check "meter: bad numbers, the values are not echoed" sh -c "! grep -qE '²|٣|1e9|0x10|00000000001' '$T/merr'"
+meter add hetzner --bogus 1; meter add hetzner --in
+check "meter: unknown option or missing value changes nothing" cmp -s "$ML" "$T/ml.before"
+meter add; meter bogus x; mrc=$?
+check "meter: usage errors exit 0 too" [ "$mrc" = 0 ]
+check "meter: usage printed" grep -q '^usage: agentline-meter.sh add' "$T/merr"
+# The directory: a symlink, or one others can write to, is refused.
+mkdir -p "$T/mreal"; ln -s "$T/mreal" "$T/mlink"
+env -i PATH="$PATH_F" AGENTLINE_TMP="$T/mlink" CLAUDE_CODE_SESSION_ID=m1 "$TEST_BASH" "$METER" add x 2> "$T/merr"
+check "meter: a symlinked AGENTLINE_TMP is refused" [ -z "$(ls -A "$T/mreal")" ]
+check "meter: ... and said so" grep -q 'symlink' "$T/merr"
+# ... also spelled with a trailing "/" or "/.", which O_NOFOLLOW lets through.
+for sfx in / /. /./ //.//; do
+  env -i PATH="$PATH_F" AGENTLINE_TMP="$T/mlink$sfx" CLAUDE_CODE_SESSION_ID=m1 "$TEST_BASH" "$METER" add x 2> "$T/merr"
+  check "meter: AGENTLINE_TMP=link$sfx is refused ($(ls -A "$T/mreal" | tr '\n' ' '))" [ -z "$(ls -A "$T/mreal")" ]
+done
+env -i PATH="$PATH_F" AGENTLINE_TMP="$T/mreal/./" CLAUDE_CODE_SESSION_ID=m1 "$TEST_BASH" "$METER" add x
+check "meter: AGENTLINE_TMP=dir/./ is still that dir" [ "$(cat "$T/mreal/claude_api.v1.m1" 2>/dev/null)" = "x c 1 0 0 0 0" ]
+rm -f "$T/mreal"/*
+MDT="$T/mdtmp"; mkdir -p "$MDT/real"; ln -s "$MDT/real" "$MDT/agentline-${EUID:-0}"
+env -i PATH="$PATH_F" TMPDIR="$MDT" CLAUDE_CODE_SESSION_ID=m1 "$TEST_BASH" "$METER" add x 2> "$T/merr"
+check "meter: a symlinked default dir is refused" [ -z "$(ls -A "$MDT/real")" ]
+rm -rf "$MDT"; mkdir -p "$MDT"
+env -i PATH="$PATH_F" TMPDIR="$MDT" CLAUDE_CODE_SESSION_ID=m1 "$TEST_BASH" "$METER" add x
+check "meter: the default dir is made 0700 ($(mode_of "$MDT/agentline-${EUID:-0}"))" [ "$(mode_of "$MDT/agentline-${EUID:-0}")" = drwx------ ]
+check "meter: ... and written" [ "$(cat "$MDT/agentline-${EUID:-0}/claude_api.v1.m1" 2>/dev/null)" = "x c 1 0 0 0 0" ]
+rm -rf "$MDT"
+MW="$T/mwide"; mkdir -m 777 "$MW"
+env -i PATH="$PATH_F" AGENTLINE_TMP="$MW" CLAUDE_CODE_SESSION_ID=m1 "$TEST_BASH" "$METER" add x 2> "$T/merr"
+check "meter: a 0777 dir is refused" [ -z "$(ls -A "$MW")" ]
+check "meter: ... and said so" grep -q 'writable by others' "$T/merr"
+chmod 755 "$MW"
+env -i PATH="$PATH_F" AGENTLINE_TMP="$MW/new" CLAUDE_CODE_SESSION_ID=m1 "$TEST_BASH" "$METER" add x
+check "meter: an AGENTLINE_TMP it makes is 0700" [ "$(mode_of "$MW/new")|$(cat "$MW/new/claude_api.v1.m1" 2>/dev/null)" = "drwx------|x c 1 0 0 0 0" ]
+rm -rf "$MW" "$T/mreal" "$T/mlink"
+# A FIFO or a symlink at the ledger's or the lock's name: no hang, nothing
+# written through. A ledger name is replaced by a file of ours; a lock name
+# is refused.
+FS="$T/mfs"; mkdir -m 700 "$FS"; printf 'keep\n' > "$T/mtarget"
+for kind in fifo link; do
+  for which in claude_api.v1.m1 claude_api.lock; do
+    rm -f "$FS"/claude_api.*
+    if [ "$kind" = fifo ]; then mkfifo "$FS/$which"; else ln -s "$T/mtarget" "$FS/$which"; fi
+    mtimed AGENTLINE_TMP="$FS" -- add x --in 3
+    check "meter: $kind at $which, no hang (rc $mrc, ${msecs}s)" [ "$mrc" = 0 -a "$msecs" -le 3 ]
+    check "meter: $kind at $which, the target untouched" [ "$(cat "$T/mtarget")" = keep ]
+    if [ "$which" = claude_api.lock ]; then
+      check "meter: $kind at the lock, refused" grep -q 'cannot open the lock' "$T/merr"
+      check "meter: $kind at the lock, no ledger" [ ! -e "$FS/claude_api.v1.m1" ]
+    else
+      check "meter: $kind at the ledger, replaced by a file" sh -c "[ -f '$FS/$which' ] && [ ! -L '$FS/$which' ] && [ \"\$(cat '$FS/$which')\" = 'x c 1 0 3 0 0' ]"
+    fi
+  done
+done
+rm -rf "$FS"
+# --usage never waits on what may never end (review of J11a): a named FIFO
+# nobody writes to, a terminal, /dev/stdin; and stdin or a process
+# substitution that stays open gets 3 s. Each is booked as the call alone.
+UF="$T/mufifo"; rm -f "$UF"; mkfifo "$UF"
+for src in "$UF" /dev/tty /dev/null "$T"; do
+  rm -f "$MSIDE/claude_api.v1.uw"
+  mtimed CLAUDE_CODE_SESSION_ID=uw -- add uw --in 3 --usage "$src"
+  check "meter --usage ${src##*/}: no wait (rc $mrc, ${msecs}s)" [ "$mrc" = 0 -a "$msecs" -le 2 ]
+  check "meter --usage ${src##*/}: the call booked" [ "$(mrow uw "$MSIDE/claude_api.v1.uw")" = "uw c 1 0 3 0 0" ]
+done
+rm -f "$UF"
+mpipe() {  # mpipe <usage-arg> [stdin-from-the-sleeper: 1] -> $mrc $msecs; the writer never closes
+  local start pf="$T/mpipe.pid"
+  rm -f "$pf" "$T/mpipe.end" "$MSIDE/claude_api.v1.uw"
+  start=$(date +%s)
+  if [ "${2-}" = 1 ]; then
+    sh -c 'echo $$ > "$1"; exec sleep 60' _ "$pf" \
+      | { env -i PATH="$PATH_F" AGENTLINE_TMP="$MSIDE" CLAUDE_CODE_SESSION_ID=uw "$TEST_BASH" "$METER" add uw --in 3 --usage "$1" 2> "$T/merr"
+          echo $? > "$T/mpipe.end"; } &
+  else
+    { env -i PATH="$PATH_F" AGENTLINE_TMP="$MSIDE" CLAUDE_CODE_SESSION_ID=uw "$TEST_BASH" "$METER" add uw --in 3 \
+        --usage <(sh -c 'echo $$ > "$1"; exec sleep 60' _ "$pf") 2> "$T/merr"
+      echo $? > "$T/mpipe.end"; } &
+  fi
+  wait_for 12 [ -s "$T/mpipe.end" ]
+  msecs=$(( $(date +%s) - start ))
+  mrc=$(cat "$T/mpipe.end" 2>/dev/null); mrc="${mrc:-hung}"
+  wait_for 5 [ -s "$pf" ]
+  kill "$(cat "$pf" 2>/dev/null)" 2>/dev/null
+  wait
+}
+mpipe - 1
+check "meter --usage -: a pipe that stays open is left after 3 s (rc $mrc, ${msecs}s)" [ "$mrc" = 0 -a "$msecs" -le 6 ]
+check "meter --usage -: ... and the call booked" [ "$(mrow uw "$MSIDE/claude_api.v1.uw")" = "uw c 1 0 3 0 0" ]
+mpipe /dev/stdin 1
+check "meter --usage /dev/stdin on an open pipe: no wait (rc $mrc, ${msecs}s)" [ "$mrc" = 0 -a "$msecs" -le 2 ]
+check "meter --usage /dev/stdin: ... the call booked" [ "$(mrow uw "$MSIDE/claude_api.v1.uw")" = "uw c 1 0 3 0 0" ]
+mpipe procsub
+check "meter --usage <(...) that stays open: left after 3 s (rc $mrc, ${msecs}s)" [ "$mrc" = 0 -a "$msecs" -le 6 ]
+check "meter --usage <(...): ... the call booked" [ "$(mrow uw "$MSIDE/claude_api.v1.uw")" = "uw c 1 0 3 0 0" ]
+# A process substitution that closes is read.
+rm -f "$MSIDE/claude_api.v1.uw"
+env -i PATH="$PATH_F" AGENTLINE_TMP="$MSIDE" CLAUDE_CODE_SESSION_ID=uw "$TEST_BASH" "$METER" add uw \
+  --usage <(printf '%s' '{"usage":{"prompt_tokens":11,"completion_tokens":2}}') 2>> "$T/merr"
+check "meter --usage <(...): read ($(mrow uw "$MSIDE/claude_api.v1.uw"))" [ "$(mrow uw "$MSIDE/claude_api.v1.uw")" = "uw c 1 0 11 2 0" ]
+rm -f "$MSIDE/claude_api.v1.uw"
+# A stuck lock: when nobody gets it for 10 s, the write is skipped (exit 0)
+# and the ledger stays as it was.
+cp "$ML" "$T/ml.before"; rm -f "$T/mheld"
+mhold() {  # mhold <seconds>: hold claude_api.lock in the background -> $mholder
+  python3 - "$MSIDE/claude_api.lock" "$T/mheld" "$1" <<'PYEOF' &
+import fcntl, os, sys, time
+fd = os.open(sys.argv[1], os.O_RDWR)
+fcntl.flock(fd, fcntl.LOCK_EX)
+open(sys.argv[2], 'w').close()
+time.sleep(float(sys.argv[3]))
+PYEOF
+  mholder=$!
+  wait_for 5 [ -e "$T/mheld" ]
+}
+mhold 30
+mtimed -- add hetzner
+check "meter: lock held, exit 0 (got $mrc)" [ "$mrc" = 0 ]
+check "meter: lock held, gives up at the 10 s deadline (${msecs}s)" [ "$msecs" -ge 9 -a "$msecs" -le 13 ]
+check "meter: lock held, said busy" grep -q 'ledger busy' "$T/merr"
+check "meter: lock held, ledger untouched" cmp -s "$ML" "$T/ml.before"
+kill -9 "$mholder" 2>/dev/null; wait "$mholder" 2>/dev/null
+mtimed -- add hetzner
+check "meter: a dead holder releases the lock (rc $mrc, ${msecs}s)" [ "$mrc" = 0 -a "$msecs" -le 4 ]
+# A lock held for 3 s is waited for, and the write lands as soon as it is
+# free (a 2 s deadline skipped it).
+rm -f "$T/mheld"; mhold 3
+mtimed -- add waited
+check "meter: a lock held 3 s is waited for (rc $mrc, ${msecs}s)" [ "$mrc" = 0 -a "$msecs" -le 6 ]
+check "meter: ... and the write lands ($(mrow waited))" [ "$(mrow waited)" = "waited c 1 0 0 0 0" ]
+check "meter: ... without a note" [ ! -s "$T/merr" ]
+wait "$mholder" 2>/dev/null
+# A queue that moves is waited for past 10 s: here the holder keeps
+# renaming into the directory, as writers getting through do, for 12 s.
+rm -f "$T/mheld"
+python3 - "$MSIDE/claude_api.lock" "$T/mheld" "$MSIDE" <<'PYEOF' &
+import fcntl, os, sys, time
+fd = os.open(sys.argv[1], os.O_RDWR)
+fcntl.flock(fd, fcntl.LOCK_EX)
+open(sys.argv[2], 'w').close()
+end = time.monotonic() + 12
+while time.monotonic() < end:
+    p = os.path.join(sys.argv[3], 'mprogress')
+    open(p + '.tmp', 'w').close()
+    os.replace(p + '.tmp', p)
+    time.sleep(0.5)
+os.unlink(os.path.join(sys.argv[3], 'mprogress'))
+PYEOF
+mholder=$!
+wait_for 5 [ -e "$T/mheld" ]
+mtimed -- add queued
+check "meter: a moving queue is waited for past 10 s (rc $mrc, ${msecs}s)" [ "$mrc" = 0 -a "$msecs" -ge 11 -a "$msecs" -le 18 ]
+check "meter: ... and the write lands ($(mrow queued))" [ "$(mrow queued)" = "queued c 1 0 0 0 0" ]
+wait "$mholder" 2>/dev/null
+# 12 parallel writers, 15 rounds: every record lands, exactly.
+bad_rounds=0
+for round in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
+  rm -f "$MSIDE/claude_api.v1.par"
+  for i in 1 2 3 4 5 6 7 8 9 10 11 12; do
+    env -i PATH="$PATH_F" AGENTLINE_TMP="$MSIDE" "$TEST_BASH" "$METER" add par --in "$i" --cost 0.000000001 --session par 2>/dev/null &
+  done
+  wait
+  [ "$(cat "$MSIDE/claude_api.v1.par" 2>/dev/null)" = "par c 12 0 78 0 12" ] || bad_rounds=$((bad_rounds + 1))
+done
+check "meter: 15 rounds x 12 parallel adds exact, $bad_rounds bad" [ "$bad_rounds" = 0 ]
+# A burst of 64 at once, 3 rounds (review of J11a: a 50 ms poll against a
+# 2 s deadline landed 49-63 of them).
+bad_rounds=""
+for round in 1 2 3; do
+  rm -f "$MSIDE/claude_api.v1.burst" "$T/mburst.err"
+  i=1
+  while [ "$i" -le 64 ]; do
+    env -i PATH="$PATH_F" AGENTLINE_TMP="$MSIDE" "$TEST_BASH" "$METER" add burst --in "$i" --session burst 2>> "$T/mburst.err" &
+    i=$((i + 1))
+  done
+  wait
+  got=$(cat "$MSIDE/claude_api.v1.burst" 2>/dev/null)
+  [ "$got" = "burst c 64 0 2080 0 0" ] || bad_rounds="$bad_rounds [$got]"
+done
+check "meter: 3 rounds x 64 parallel adds exact${bad_rounds}" [ -z "$bad_rounds" ]
+check "meter: the burst, no note" [ ! -s "$T/mburst.err" ]
+check "meter: no temp file left" sh -c "! ls '$MSIDE'/claude_api.v1.*.* >/dev/null 2>&1"
+# No python3: a one-line note, nothing written.
+mkdir -p "$T/mnopy"; for b in bash sh env; do ln -sf "$(command -v "$b")" "$T/mnopy/$b"; done
+cp "$ML" "$T/ml.before"
+env -i PATH="$T/mnopy" AGENTLINE_TMP="$MSIDE" CLAUDE_CODE_SESSION_ID=m1 "$TEST_BASH" "$METER" add 'sk-abcdefgh1' 2> "$T/merr"; mrc=$?
+check "meter: no python3, exit 0 (got $mrc)" [ "$mrc" = 0 ]
+check "meter: no python3, one note" [ "$(wc -l < "$T/merr" | tr -d ' ')" = 1 ]
+check "meter: no python3, the note names nothing" sh -c "grep -q 'python3 not found' '$T/merr' && ! grep -q sk- '$T/merr'"
+check "meter: no python3, nothing written" cmp -s "$ML" "$T/ml.before"
+rm -rf "$T/mnopy"
+# The daily sweep: ledgers idle for more than 7 days go, the lock and a
+# ledger touched today stay; it runs once a day (the stamp is the lock's
+# content).
+SW="$T/msweep"; mkdir -m 700 "$SW"
+for n in old today; do printf 'x c 1 0 0 0 0\n' > "$SW/claude_api.v1.$n"; done
+printf 'junk\n' > "$SW/claude_api.v1.old.123.abcd"; printf 'other file\n' > "$SW/unrelated"
+python3 -c 'import os, sys, time
+t = time.time() - 8 * 86400
+for p in sys.argv[1:]:
+    os.utime(p, (t, t))' "$SW/claude_api.v1.old" "$SW/claude_api.v1.old.123.abcd" "$SW/unrelated"
+env -i PATH="$PATH_F" AGENTLINE_TMP="$SW" "$TEST_BASH" "$METER" add x --session today
+check "meter sweep: an 8-day-old ledger removed" [ ! -e "$SW/claude_api.v1.old" ]
+check "meter sweep: an old temp file removed" [ ! -e "$SW/claude_api.v1.old.123.abcd" ]
+check "meter sweep: today's ledger kept" [ "$(cat "$SW/claude_api.v1.today")" = "x c 2 0 0 0 0" ]
+check "meter sweep: the lock kept, stamped" grep -qE '^[0-9]{10}$' "$SW/claude_api.lock"
+check "meter sweep: other files left alone" [ -f "$SW/unrelated" ]
+printf 'x c 1 0 0 0 0\n' > "$SW/claude_api.v1.old2"
+python3 -c 'import os, sys, time; t = time.time() - 8 * 86400; os.utime(sys.argv[1], (t, t))' "$SW/claude_api.v1.old2"
+env -i PATH="$PATH_F" AGENTLINE_TMP="$SW" "$TEST_BASH" "$METER" add x --session today
+check "meter sweep: once a day" [ -e "$SW/claude_api.v1.old2" ]
+rm -rf "$SW"
+# Sourced under set -eu (bash 3.2 included), the function and every
+# failure path return 0 and the caller carries on.
+out=$(env -i PATH="$PATH_F" AGENTLINE_TMP="$MSIDE" "$TEST_BASH" -euc '
+  . "$1"
+  agentline_meter add sourced --session m1 --in 2
+  agentline_meter add
+  agentline_meter
+  agentline_meter add x --session bad.id
+  agentline_meter add x --session m1 --in nan
+  CLAUDE_CODE_SESSION_ID=m1 agentline_meter add sourced
+  echo alive' _ "$METER" 2>/dev/null)
+check "meter: sourced under set -eu, the caller survives" [ "$out" = alive ]
+check "meter: sourced, written ($(mrow sourced))" [ "$(mrow sourced)" = "sourced c 2 0 2 0 0" ]
+
+# The reader (agentline.sh): the ledger is anyone's text, read with
+# builtins only. api_render writes a ledger by hand and renders 🔌 alone.
+api_render() {  # api_render <ledger-text, printf %b> [VAR=val...] -> normalized $T/got, raw $T/out
+  local l="$1"; shift
+  printf '{"session_id":"apir-1","cwd":"%s","model":{"id":"claude-opus-5"}}\n' "$WORK" > "$T/apir.json"
+  prepare minimal "$T/apir.json"
+  printf '%b' "$l" > "$SIDE/claude_api.v1.apir-1"
+  render "$T/apir.json" 300 AGENTLINE_LAYOUT=api ${1+"$@"}
+  normalize "$T/out" "$T/got"
+}
+api_is() {  # api_is <name> <expected line>
+  check "api reader: $1 ($(cat "$T/got"))" [ "$(cat "$T/got")" = "$2" ]
+  check "api reader: $1, exit 0 and stderr empty" [ "$rc" = 0 -a ! -s "$T/err" ]
+}
+api_render 'hetzner c 12 0 50000 1000 0\njev c 3 2 0 0 0\n'
+api_is "two providers" "🔌 hetzner 12·51.0k · jev 3 !2"
+check "api reader: names dim, errors red" grep -qF "${ESC}[2mhetzner${ESC}[0m 12" "$T/out"
+check "api reader: errors red" grep -qF "${ESC}[1;31m!2${ESC}[0m" "$T/out"
+api_render 'jev h 999 0 0 0 0\njev c 303 0 69690 0 0\ncodex h 4 0 0 0 0\n'
+api_is "a client row wins over the hook row, never added" "🔌 jev 303·69.7k · codex 4"
+api_render 'a c 1 0 0 0 0\nb c 1 0 0 0 0\nc c 1 0 0 0 0\nd c 1 0 0 0 0\ne h 1 0 0 0 0\n'
+api_is "three shown, the rest counted" "🔌 a 1 · b 1 · c 1 · +2"
+for sv in 0:'🔌 +5' 1:'🔌 a 1 · +4' 10:'🔌 a 1 · b 1 · c 1 · d 1 · e 1' x:'🔌 a 1 · b 1 · c 1 · +2' 999:'🔌 a 1 · b 1 · c 1 · +2' -1:'🔌 a 1 · b 1 · c 1 · +2' 05:'🔌 a 1 · b 1 · c 1 · d 1 · e 1'; do
+  api_render 'a c 1 0 0 0 0\nb c 1 0 0 0 0\nc c 1 0 0 0 0\nd c 1 0 0 0 0\ne h 1 0 0 0 0\n' AGENTLINE_API_SHOW="${sv%%:*}"
+  api_is "AGENTLINE_API_SHOW=${sv%%:*}" "${sv#*:}"
+done
+api_render 'jev c 303 0 69690 0 2926980\n'
+api_is "under half a cent" "🔌 jev 303·69.7k · <\$0.01"
+for cv in 4999999:'<$0.01' 5000000:'$0.01' 1994999999:'$1.99' 1995000000:'$2.00' 123456000000000:'$123456.00'; do
+  api_render "x c 1 0 0 0 ${cv%%:*}\n"
+  api_is "cost ${cv%%:*} nano" "🔌 x 1 · ${cv#*:}"
+done
+api_render 'x c 1 0 0 0 3000000\ny h 1 0 0 0 3000000\nz c 1 0 0 0 0\nz h 1 0 0 0 9000000000\n' AGENTLINE_API_SHOW=1
+api_is "the cost counts every provider's shown row, c over h" "🔌 x 1 · +2 · \$0.01"
+api_render 'x c 0 0 0 0 0\n'
+api_is "zero calls, no tokens" "🔌 x 0"
+api_render 'zz c 08 0 0 0 0\nyy c 1 0 007 0 0\n'
+api_is "leading zeros are decimal" "🔌 zz 8 · yy 1·7"
+api_render 'last c 5 0 0 0 0'
+api_is "no trailing newline" "🔌 last 5"
+api_render 'dup c 1 0 0 0 0\ndup c 9 0 0 0 0\n'
+api_is "the first row of a source wins" "🔌 dup 1"
+# Rows that break a rule are skipped whole; none reaches arithmetic.
+MP="$T/api-pwned"; rm -f "$MP"
+api_render "esc\\033[2J c 1 0 0 0 0\\nback\\\\\\\\slash c 1 0 0 0 0\\nHetzner c 1 0 0 0 0\\nx c 1234567890123456 0 0 0 0\\nx c -5 0 0 0 0\\nx c 1 0 0 0 0 extra\\nx q 1 0 0 0 0\\nx c 1 0 0 0\\n1x c 1 0 0 0 0\\nabcdefghijklm c 1 0 0 0 0\\nx c a[\$(touch\\t$MP)] 0 0 0 0\\nx c 1 0 0 0 a[\$(touch\\t$MP)]\\nx\\tc 1 0 0 0 0\\nx c ٣ 0 0 0 0\\nok c 1 0 0 0 0\\n"
+api_is "bad rows skipped, the good one kept" "🔌 ok 1"
+# A ledger the writer did not write: a secret-shaped name is not shown.
+api_render "sk-abcdefg1 c 1 0 0 0 0\\nxoxb-12345 c 1 0 0 0 0\\nmytoken c 1 0 0 0 0\\nok c 1 0 0 0 0\\n"
+api_is "secret-shaped names from a foreign ledger are not shown" "🔌 ok 1"
+check "api reader: a numeric field never runs code" [ ! -e "$MP" ]
+check "api reader: no ESC from a label" sh -c "! LC_ALL=C grep -q '2J' '$T/out'"
+# Parity with the writer: the reader shows exactly the names the writer's
+# secretish() accepts, over every key prefix and word at every position a
+# name of the shape allows, plus seeded random names and the usual workers
+# (review of J11a: pypi-, aiza, eyj… and x-sk- were shown, and the reader
+# refused names the writer keeps).
+sed -n '/^SECRET_KEY = /,/^# (end of the secret heuristic)/p' "$ROOT/hooks/agentline-meter.sh" > "$T/heur.meter"
+python3 - "$T/heur.meter" "$T/parity" > "$T/parity.count" <<'PYEOF'
+import random, re, sys
+exec('import re\n' + open(sys.argv[1]).read())
+NAME = re.compile(r'[a-z][a-z0-9-]{0,11}')
+parts = ['sk-', 'sk', 'glpat-', 'glpat', 'xoxb-', 'xoxz-', 'xox1-', 'xox--', 'xox', 'nvapi-', 'nvapi',
+         'aiza', 'aiz', 'pypi-', 'pypi', 'eyjabcdefgh', 'eyjabcdefg', 'eyj12345678', 'eyj-------x', 'eyj-a1',
+         'token', 'toke', 'secret', 'secre', 'passw', 'pass', 'apikey', 'api-key', 'apike', 'bearer', 'beare',
+         'basic', 'rk-', 'pk-', 'xapp-', 'ghp-', 'hf-', 'npm-', 'ya29-', 'akia1234', 'asia', 'github-pat-']
+names = []
+for p in parts:
+    for pre in ('', 'x-', 'x', 'a1-', 'ab-cd-', 'q-1'):
+        for suf in ('', 'a', '1', '-', '-z'):
+            names.append(pre + p + suf)
+names += ['hetzner', 'jev', 'jevk5', 'jev-api', 'codex', 'agy', 'arb', 'nim', 'deepseek', 'claude', 'other',
+          'gemini', 'openai', 'qwen3-8', 'nemotron', 'skeleton', 'asking', 'task-eyj', 'okskies']
+rnd = random.Random(11)
+alpha = 'skeyjaizpbtonwrcxv-14'
+for _ in range(600):
+    names.append(rnd.choice('skeyjaiznptxbgo') + ''.join(rnd.choice(alpha) for _ in range(rnd.randint(0, 11))))
+seen, uniq = set(), []
+for n in names:
+    if NAME.fullmatch(n) and n not in seen:
+        seen.add(n)
+        uniq.append(n)
+for k in range(0, len(uniq), 40):
+    chunk = uniq[k:k + 40]
+    with open('%s.%03d.led' % (sys.argv[2], k // 40), 'w') as f:
+        f.write(''.join('%s c 1 0 0 0 0\n' % n for n in chunk))
+    with open('%s.%03d.exp' % (sys.argv[2], k // 40), 'w') as f:
+        f.write(' '.join(n for n in chunk if not secretish(n)) + '\n')
+print('%d names, %d refused' % (len(uniq), sum(1 for n in uniq if secretish(n))))
+PYEOF
+par_bad=""; par_n=0
+prepare minimal "$T/apir.json"
+for led in "$T"/parity.*.led; do
+  cp "$led" "$SIDE/claude_api.v1.apir-1"
+  render "$T/apir.json" 4000 AGENTLINE_LAYOUT=api AGENTLINE_API_SHOW=99 AGENTLINE_CACHE_TTL=0; normalize "$T/out" "$T/got"
+  shown=$(python3 -c 'import sys
+t = open(sys.argv[1], encoding="utf-8").read().strip()
+t = t[len("🔌 "):] if t.startswith("🔌 ") else ""
+print(" ".join(x[:-2] for x in t.split(" · ") if x.endswith(" 1")))' "$T/got")
+  want=$(cat "${led%.led}.exp")
+  [ "$want" = "$shown" ] || par_bad="$par_bad [${led##*/}: want '$want' got '$shown']"
+  par_n=$((par_n + 1))
+done
+check "api reader: shows exactly what the writer's secretish() accepts ($(cat "$T/parity.count"), $par_n ledgers)$par_bad" [ -z "$par_bad" -a "$par_n" -gt 5 ]
+rm -f "$T"/parity.* "$SIDE/claude_api.v1.apir-1"
+# At most 40 lines: a row on line 41 is not read.
+api_render "$(printf 'junk\\n%.0s' $(seq 39))ok c 1 0 0 0 0\\nlate c 1 0 0 0 0\\n"
+api_is "line 40 read, line 41 not" "🔌 ok 1"
+# Only a regular file of ours, never through a symlink; a FIFO is no file.
+printf '{"session_id":"apir-1","cwd":"%s","model":{"id":"claude-opus-5"}}\n' "$WORK" > "$T/apir.json"
+prepare minimal "$T/apir.json"
+printf 'linked c 1 0 0 0 0\n' > "$T/api-target"; ln -s "$T/api-target" "$SIDE/claude_api.v1.apir-1"
+render "$T/apir.json" 300 AGENTLINE_LAYOUT=api,model; normalize "$T/out" "$T/got"
+api_is "a symlinked ledger is not read" "Opus 5"
+rm -f "$SIDE/claude_api.v1.apir-1"; mkfifo "$SIDE/claude_api.v1.apir-1"
+render "$T/apir.json" 300 AGENTLINE_LAYOUT=api,model; normalize "$T/out" "$T/got"
+api_is "a FIFO ledger is not read (no hang)" "Opus 5"
+rm -f "$SIDE/claude_api.v1.apir-1"
+# Only from a side directory of ours that is not a symlink, however it is
+# spelled: AGENTLINE_TMP=link/ or link/. is the link (review of J11a). The
+# directory is not in the render-cache key, hence AGENTLINE_CACHE_TTL=0.
+mkdir -m 700 "$T/rside"; ln -s "$T/rside" "$T/rlink"
+printf 'linkdir c 1 0 0 0 0\n' > "$T/rside/claude_api.v1.apir-1"
+for sfx in '' / /. /./ //.//; do
+  render "$T/apir.json" 300 AGENTLINE_LAYOUT=api,model AGENTLINE_CACHE_TTL=0 AGENTLINE_TMP="$T/rlink$sfx"; normalize "$T/out" "$T/got"
+  api_is "AGENTLINE_TMP=link$sfx is not read" "Opus 5"
+done
+render "$T/apir.json" 300 AGENTLINE_LAYOUT=api,model AGENTLINE_CACHE_TTL=0 AGENTLINE_TMP="$T/rside/./"; normalize "$T/out" "$T/got"
+api_is "AGENTLINE_TMP=dir/./ is that dir" "🔌 linkdir 1 │ Opus 5"
+rm -rf "$T/rside" "$T/rlink"
+# Bytes are bounded too: a line past 128 characters ends the read, and a
+# 50 MB ledger of one line costs no more than a short one.
+api_render "ok c 1 0 0 0 0\\n$(printf 'x%.0s' $(seq 130)) c 1 0 0 0 0\\nlate c 1 0 0 0 0\\n"
+api_is "an overlong line ends the read" "🔌 ok 1"
+printf '{"session_id":"apir-1","cwd":"%s","model":{"id":"claude-opus-5"}}\n' "$WORK" > "$T/apir.json"
+prepare minimal "$T/apir.json"
+python3 -c 'import sys; open(sys.argv[1], "w").write("big c 1 0 0 0 0" + "7" * (50 * 1024 * 1024))' "$SIDE/claude_api.v1.apir-1"
+TIMEFORMAT=%R
+{ time render "$T/apir.json" 300 AGENTLINE_LAYOUT=api,model; } 2> "$T/rtime"
+rtime=$(cat "$T/rtime")
+normalize "$T/out" "$T/got"
+api_is "a 50 MB one-line ledger shows nothing" "Opus 5"
+check "api reader: a 50 MB one-line ledger renders in under 1 s (${rtime}s)" awk -v t="$rtime" 'BEGIN { exit !(t != "" && t < 1.0) }'
+rm -f "$SIDE/claude_api.v1.apir-1"
+# A row is taken only as the writer writes it: seven fields between single
+# spaces. A leading, trailing or double space is not folded away.
+api_render ' lead c 1 0 0 0 0\ntrail c 1 0 0 0 0 \ndbl  c 1 0 0 0 0\nmid c 1  0 0 0 0\nend c 1 0 0 0  0\nok c 1 0 0 0 0\n'
+api_is "rows with a leading, trailing or double space are skipped" "🔌 ok 1"
+# AGENTLINE_API_SHOW is part of the render-cache key: a change shows at once,
+# not after the cache TTL (the default one here).
+api_render 'a c 1 0 0 0 0\nb c 1 0 0 0 0\nc c 1 0 0 0 0\nd c 1 0 0 0 0\ne h 1 0 0 0 0\n'
+api_is "cached: three named" "🔌 a 1 · b 1 · c 1 · +2"
+render "$T/apir.json" 300 AGENTLINE_LAYOUT=api AGENTLINE_API_SHOW=10; normalize "$T/out" "$T/got"
+api_is "AGENTLINE_API_SHOW=10 is not served the cached render" "🔌 a 1 · b 1 · c 1 · d 1 · e 1"
+# A custom layout naming week but not reset loses the reset date, by
+# design (no implicit segment); the upgrade note says so (review of J11a).
+check "docs: README tells a custom layout to add reset and api" grep -qF 'add `reset` (and `api`, for the 🔌 meter) to a custom `AGENTLINE_LAYOUT`' "$ROOT/README.md"
+check "docs: CHANGELOG carries the upgrade note" grep -qF 'Add `reset` (and `api`) to a custom `AGENTLINE_LAYOUT`.' "$ROOT/CHANGELOG.md"
+# Hidden by a layout that leaves it out; no ledger, no segment.
+api_render 'x c 1 0 0 0 0\n' AGENTLINE_LAYOUT=model,resume
+check "api reader: AGENTLINE_LAYOUT without api hides it" sh -c "! grep -q '🔌' '$T/got'"
+api_render 'x c 1 0 10 0 0\ny c 1 0 0 0 0\n' AGENTLINE_GLYPHS=ascii
+api_is "ascii glyphs" "api:x 1/10 / y 1"
+# The session id is the parsed one and follows the writer's rule: no ledger
+# for "default", a path, 65 characters, a dot.
+for sidv in default ../x "$long65" a.b; do
+  printf '{"session_id":"%s","cwd":"%s","model":{"id":"claude-opus-5"}}\n' "$sidv" "$WORK" > "$T/apis.json"
+  prepare minimal "$T/apis.json"
+  case "$sidv" in */*) ;; *) printf 'planted c 1 0 0 0 0\n' > "$SIDE/claude_api.v1.$sidv" ;; esac
+  render "$T/apis.json" 300 AGENTLINE_LAYOUT=api,model; normalize "$T/out" "$T/got"
+  api_is "session id '${sidv:0:12}' has no ledger" "Opus 5"
+done
+rm -f "$SIDE"/claude_api.v1.*
+# Writer and reader together: what the helper books is what the bar shows.
+SMK_SID="smoke-$$"
+printf '{"session_id":"%s","cwd":"%s","model":{"id":"claude-opus-5"}}\n' "$SMK_SID" "$WORK" > "$T/apis.json"
+prepare minimal "$T/apis.json"
+for a in "hetzner --in 51000 --out 1000 --calls 12" "jev --calls 303 --in 69690 --cost 0.00292698" "codex/gpt-6-astra --calls 4"; do
+  # shellcheck disable=SC2086
+  env -i PATH="$PATH_F" AGENTLINE_TMP="$SIDE" "$TEST_BASH" "$METER" add $a --session "$SMK_SID"
+done
+render "$T/apis.json" 300 AGENTLINE_LAYOUT=api; normalize "$T/out" "$T/got"
+api_is "writer to reader" "🔌 hetzner 12·52.0k · jev 303·69.7k · codex 4 · <\$0.01"
+rm -f "$SIDE"/claude_api.*
+
 # --- --doctor -----------------------------------------------------------------
 # A report instead of the status line: phases timed, every segment shown or
 # hidden with its source, cache and hook state. It must bypass both caches —
@@ -3098,6 +3762,21 @@ rm -rf "$T/dtmp"
 # A local.sh segment (J10) is listed with its source.
 doctor "$T/doc2.json" AGENTLINE_LOCAL="$T/local-seg.sh"
 check "doctor: local segment listed" dhas '^  local:vpn +shown +local\.sh: agentline_seg vpn$'
+# The API meter and the reset date (J11a): each says where it comes from.
+printf '%s' '{"session_id":"doc-api","model":{"id":"claude-opus-5"},"rate_limits":{"seven_day":{"used_percentage":5,"resets_at":4107888000}}}' > "$T/docapi.json"
+rm -f "$SIDE"/claude_api.*
+doctor "$T/docapi.json"
+check "doctor: api hidden, its ledger missing" dhas "^  api +hidden +API meter ledger: $SIDE/claude_api\.v1\.doc-api \(missing"
+check "doctor: reset shown" dhas '^  reset +shown +payload rate_limits\.seven_day\.resets_at'
+printf 'jev c 1 0 0 0 0\n' > "$SIDE/claude_api.v1.doc-api"
+doctor "$T/docapi.json"
+check "doctor: api shown with its ledger" dhas "^  api +shown +API meter ledger: $SIDE/claude_api\.v1\.doc-api$"
+check "doctor: the render has it" dhas '🔌 jev 1'
+printf '%s' '{"model":{"id":"claude-opus-5"}}' > "$T/docnosid.json"
+doctor "$T/docnosid.json"
+check "doctor: api without a session id" dhas '^  api +hidden +API meter: no ledger without a session_id'
+check "doctor: reset hidden, absent" dhas '^  reset +hidden +absent: rate_limits\.seven_day\.resets_at'
+rm -f "$SIDE"/claude_api.*
 # Missing git counts are explained (J10): every way out of the status gate
 # names itself on the "counts" row. The repositories are the C14 ones.
 if [ -n "${GR-}" ] && [ -d "$GR" ]; then
@@ -3694,6 +4373,15 @@ check "isolated: tracker still registers" grep -q 'evil sub' "$SIDE/claude_agent
 pwned "isolated: tracker hook"
 erun /dev/null AGENTLINE_TMP="$SIDE" "$TEST_BASH" "$ROOT/hooks/agentline-agent.sh" remove "evil sub"
 pwned "isolated: agentline-agent.sh"
+# The API meter, its --usage parse included, from a file and from stdin.
+rm -f "$SIDE"/claude_api.*
+printf '%s' '{"usage":{"prompt_tokens":4,"completion_tokens":2},"total_cost_usd":0.25}' > "$T/evil-usage.json"
+erun /dev/null AGENTLINE_TMP="$SIDE" CLAUDE_CODE_SESSION_ID=evil-1 "$TEST_BASH" "$ROOT/hooks/agentline-meter.sh" add evil --usage "$T/evil-usage.json"
+erun "$T/evil-usage.json" AGENTLINE_TMP="$SIDE" CLAUDE_CODE_SESSION_ID=evil-1 "$TEST_BASH" "$ROOT/hooks/agentline-meter.sh" add evil --usage -
+check "isolated: the meter still books ($(cat "$SIDE/claude_api.v1.evil-1" 2>/dev/null))" \
+  [ "$(cat "$SIDE/claude_api.v1.evil-1" 2>/dev/null)" = "evil c 2 0 8 4 500000000" ]
+pwned "isolated: agentline-meter.sh"
+rm -f "$SIDE"/claude_api.*
 # The installer.
 inst_home evil
 erun /dev/null HOME="$H" "$TEST_BASH" "$ROOT/install.sh"
@@ -4205,7 +4893,8 @@ check "subagents perf: 16 tasks x 1 MB in ${perf_ms}ms (< $perf_max; $perf_why)"
 # 32 pending commands of ~120 KB (heredocs, ssh + bash -c, a long argument):
 # only the first 4 KB of each is lexed, so this costs what the small ones do.
 perf_ms=$(cd "$WORK" && run_env python3 -I "$T/perf.py" "$TEST_BASH" "$SUBS" "$SPAY/heavy.json")
-check "subagents perf: 32 x 120 KB commands in ${perf_ms}ms (< $perf_max; $perf_why)" [ "${perf_ms:-9999}" -lt "$perf_max" ]
+# 1.5x the budget: twice the tasks of the 16-task case, and it flaked on slow hosts.
+check "subagents perf: 32 x 120 KB commands in ${perf_ms}ms (< $(( perf_max * 3 / 2 )); $perf_why)" [ "${perf_ms:-9999}" -lt $(( perf_max * 3 / 2 )) ]
 srun "$SPAY/heavy.json"
 sgot h-00 "→ codex/gpt-6-astra ⏳2m"
 sgot h-01 "→ ssh ⏳2m"
@@ -4479,6 +5168,9 @@ install_run
 AL="$H/.claude/agentline"
 check "install: companions installed" [ -x "$AL/agentline-subagents.sh" -a -x "$AL/agentline-run" -a -x "$AL/agentline-agent.sh" ]
 check "install: companions are this checkout's" cmp -s "$ROOT/agentline-run" "$AL/agentline-run"
+check "install: the API meter is a companion" [ -x "$AL/agentline-meter.sh" ]
+check "install: ... this checkout's" cmp -s "$ROOT/hooks/agentline-meter.sh" "$AL/agentline-meter.sh"
+check "install: no PATH link without --link-bin" [ ! -e "$H/.local/bin/agentline-meter" ]
 jcheck "install: no subagentStatusLine without the flag" "$S" "'subagentStatusLine' in d" 'false'
 install_run --with-subagents
 check "install --with-subagents: exit 0 (got $irc)" [ "$irc" = 0 ]
@@ -4519,13 +5211,23 @@ inst_home sub-bin
 install_run --link-bin
 check "install --link-bin: exit 0 (got $irc)" [ "$irc" = 0 ]
 check "install --link-bin: linked" [ "$(readlink "$H/.local/bin/agentline-run")" = "$H/.claude/agentline/agentline-run" ]
+check "install --link-bin: agentline-meter linked" [ "$(readlink "$H/.local/bin/agentline-meter")" = "$H/.claude/agentline/agentline-meter.sh" ]
+check "install --link-bin: the meter link runs" sh -c "env -i PATH='$PATH_F' AGENTLINE_TMP='$T/inst-mside' CLAUDE_CODE_SESSION_ID=i1 '$H/.local/bin/agentline-meter' add x 2>/dev/null; [ -f '$T/inst-mside/claude_api.v1.i1' ]"
 install_run --link-bin
-check "install --link-bin: re-run keeps the link" grep -q 'already links' "$T/iout"
+check "install --link-bin: re-run keeps the link" grep -q 'agentline-run already links' "$T/iout"
+check "install --link-bin: re-run keeps the meter link" grep -q 'agentline-meter already links' "$T/iout"
+check "install --link-bin: idempotent" [ "$(readlink "$H/.local/bin/agentline-meter")" = "$H/.claude/agentline/agentline-meter.sh" ]
 rm -f "$H/.local/bin/agentline-run"; echo mine > "$H/.local/bin/agentline-run"
+rm -f "$H/.local/bin/agentline-meter"; echo mine too > "$H/.local/bin/agentline-meter"
 install_run --link-bin
 check "install --link-bin: another file left alone" [ "$(cat "$H/.local/bin/agentline-run")" = mine ]
-check "install --link-bin: says so" grep -q 'left alone' "$T/iout"
+check "install --link-bin: another meter file left alone" [ "$(cat "$H/.local/bin/agentline-meter")" = "mine too" ]
+check "install --link-bin: says so" grep -q 'agentline-run exists and is not a link' "$T/iout"
+check "install --link-bin: says so for the meter" grep -q 'agentline-meter exists and is not a link' "$T/iout"
 check "install --link-bin: still exit 0" [ "$irc" = 0 ]
+rm -f "$H/.local/bin/agentline-meter"; ln -s /nonexistent/elsewhere "$H/.local/bin/agentline-meter"
+install_run --link-bin
+check "install --link-bin: a foreign link left alone" [ "$(readlink "$H/.local/bin/agentline-meter")" = /nonexistent/elsewhere ]
 
 # --- --doctor: the subagent line and agentline-run ------------------------------
 mkdir -p "$HOME_F/.claude"
@@ -4533,11 +5235,18 @@ printf '%s\n' '{"subagentStatusLine":{"type":"command","command":"/x/agentline-s
 doctor "$T/doc2.json"
 check "doctor: subagent rows reported" dhas '^  subagent rows +/x/agentline-subagents\.sh$'
 check "doctor: agentline-run not installed" dhas '^  agentline-run +not installed'
+check "doctor: agentline-meter not installed" dhas '^  agentline-meter +not installed'
 mkdir -p "$HOME_F/.claude/agentline"; cp "$ARUN" "$HOME_F/.claude/agentline/agentline-run"
+cp "$ROOT/hooks/agentline-meter.sh" "$HOME_F/.claude/agentline/agentline-meter.sh"
 printf '%s\n' '{}' > "$HOME_F/.claude/settings.json"
 doctor "$T/doc2.json"
 check "doctor: no subagent rows" dhas '^  subagent rows +\(none: install\.sh --with-subagents\)$'
 check "doctor: agentline-run installed, not on PATH" dhas '^  agentline-run +.*/agentline-run, not on PATH'
+check "doctor: agentline-meter installed, not on PATH" dhas '^  agentline-meter +.*/agentline-meter\.sh, not on PATH'
+ln -s "$HOME_F/.claude/agentline/agentline-meter.sh" "$SHIM/agentline-meter"
+doctor "$T/doc2.json"
+check "doctor: agentline-meter on PATH" dhas "^  agentline-meter +.*/agentline-meter\.sh, on PATH as $SHIM/agentline-meter$"
+rm -f "$SHIM/agentline-meter"
 rm -rf "$HOME_F/.claude/agentline" "$HOME_F/.claude/settings.json"
 
 # ===========================================================================
