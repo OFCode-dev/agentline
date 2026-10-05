@@ -14,7 +14,10 @@
 #   bash install.sh --with-subagents
 #                                 also set subagentStatusLine to
 #                                 agentline-subagents.sh: rich rows in Claude
-#                                 Code's subagent panel (see README)
+#                                 Code's subagent panel (see README), and
+#                                 AGENTLINE_AGENTS=external: the panel lists
+#                                 Claude's subagents, so the main line keeps
+#                                 to the external workers
 #   bash install.sh --link-bin    also symlink ~/.local/bin/agentline-run, so
 #                                 a shell finds it on PATH
 #
@@ -100,7 +103,7 @@ STAMP=$(date -u +%Y%m%d-%H%M%S)
 #   settings_py hooks      <settings> <stamp> <hooks_dest>
 #   settings_py subresolve <settings> <stamp> <default_dest>
 #   settings_py subagents  <settings> <stamp> <dest> <force>
-#   settings_py env        <settings> <stamp> KEY=VALUE...
+#   settings_py env        <settings> <stamp> KEY=VALUE|KEY?=VALUE...
 #
 # A parse error is fatal and never written back. Before the fix, any error
 # turned into `d = {}` and the next save replaced the file with a lone
@@ -441,15 +444,21 @@ elif mode == 'env':
     # Claude Code hands that block to the status line's environment, and an
     # upgrade never touches it. The flag is an explicit request, so a
     # different value already there is replaced, and the old one printed;
-    # an equal one is left as it is.
+    # an equal one is left as it is. KEY?=VALUE is a default that comes with
+    # another option (--with-subagents): set when the key is absent, and a
+    # value the user chose is kept, and printed.
     env = d.setdefault('env', {})
     if not isinstance(env, dict):
         fail(f"{settings_path}: \"env\" is not a JSON object")
     changed = False
     for pair in args:
         key, _, value = pair.partition('=')
+        soft = key.endswith('?')
+        key = key[:-1] if soft else key
         if env.get(key) == value:
             print(f"• settings.json env {key} already {value}")
+        elif soft and key in env:
+            print(f"• settings.json env {key} left as-is: {env[key]} (--with-subagents would set {value})")
         else:
             print(f"✓ settings.json env {key}={value}" + (f" (was: {env[key]})" if key in env else ''))
             env[key] = value
@@ -551,7 +560,10 @@ mkdir -p "$(dirname "$SETTINGS")"
 # before anything is touched: an unparsable settings.json stops the install
 # here, with the script not yet copied either.
 WITH_ENV=0; [ -n "$THEME$GLYPHS" ] && WITH_ENV=1
-DEST=$(settings_py resolve "$SETTINGS" "$STAMP" "$DEFAULT_DEST" "$WITH_HOOKS" "$WITH_ENV")
+# --with-subagents writes into the env block too (AGENTLINE_AGENTS, below):
+# one that is no object is refused here, before anything is written.
+ENV_CHECK="$WITH_ENV"; [ "$WITH_SUB" = 1 ] && ENV_CHECK=1
+DEST=$(settings_py resolve "$SETTINGS" "$STAMP" "$DEFAULT_DEST" "$WITH_HOOKS" "$ENV_CHECK")
 
 mkdir -p "$(dirname "$DEST")"
 # The README used to say "edit agentline.sh directly", and every upgrade then
@@ -665,6 +677,14 @@ if [ "$WITH_SUB" = 1 ]; then
   fi
   settings_py subagents "$SETTINGS" "$STAMP" "$SUB_DEST" "$FORCE" || SUB_RC=$?
   [ "$SUB_RC" = 3 ] || [ "$SUB_RC" = 0 ] || exit "$SUB_RC"
+  # The panel now lists every Claude subagent, so the main line's 🤖 list
+  # keeps to the external workers it never shows (codex, agy, Hetzner, ...).
+  # Only when the panel is ours: with another subagentStatusLine (exit 3)
+  # the main line stays the one place Claude's subagents show. A value the
+  # user set is kept.
+  if [ "$SUB_RC" = 0 ]; then
+    settings_py env "$SETTINGS" "$STAMP" "AGENTLINE_AGENTS?=external"
+  fi
 fi
 
 # --- agentline-run on PATH ----------------------------------------------------

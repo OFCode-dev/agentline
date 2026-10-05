@@ -61,14 +61,21 @@ HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)"
 input=$(cat)
 
 # The parse prints the registry edit for the shell below: a ttl, then one
-# "+label" or "-label" per row, separated by \x1f (no label can hold one:
-# control characters are blanked), or SKIP. (Program read first, run with -c:
+# "+label" or "-label" per row, separated by \x1e (no description can hold
+# one: control characters are blanked), or SKIP. Every row this hook writes
+# ends in \x1fc, the mark of a Claude subagent: agentline.sh shows it in
+# Claude's colour, and leaves it off the main line under
+# AGENTLINE_AGENTS=external, where Claude Code's subagent panel lists it.
+# The mark is part of the key, hidden like agentline-run's pid. The state
+# file keeps a started agent's row as written, so the stop of an agent
+# started under a release without the mark still removes its unmarked row. (Program read first, run with -c:
 # see the note at the payload parser in agentline.sh.)
 IFS= read -r -d '' _AL_HOOK_PY <<'PYEOF'
 import errno, fcntl, json, os, re, sys, time
 
 base = sys.argv[1]
-US = '\x1f'
+SEP = '\x1e'      # between the ops printed for the shell
+MARK = '\x1fc'    # the key suffix of a Claude subagent's row
 QUEUE_TTL = 120   # a dispatch whose SubagentStart never came
 IDS_TTL = 3600    # a started agent whose SubagentStop never came
 CAP = 64          # entries of each kind kept, a bound on the file
@@ -201,7 +208,7 @@ try:
         if tool in ('Agent', 'Task') and label:
             def edit(queue, ids):
                 queue.append([atype, label, now])
-                return [str(QUEUE_TTL), '+' + label]
+                return [str(QUEUE_TTL), '+' + label + MARK]
     elif event == 'SubagentStart':
         atype = shown(d.get('agent_type') or '', '*', 64)
         if atype and aid:
@@ -214,13 +221,13 @@ try:
                     return None
                 queue.remove(hit)
                 label = hit[1]
-                row = '%s #%s' % (label, aid[:6])
+                row = '%s #%s%s' % (label, aid[:6], MARK)
                 ids[:] = [e for e in ids if e[0] != aid] + [[aid, row, label, now]]
                 ops = ['0', '+' + row]
                 # Two dispatches with one description share one row: it
                 # stays until the last of them has started.
                 if not any(q[1] == label for q in queue):
-                    ops.append('-' + label)
+                    ops.append('-' + label + MARK)
                 return ops
     elif event == 'SubagentStop':
         if aid:
@@ -232,7 +239,7 @@ try:
                 # The ✓ row is not the session's: a Stop right after the last
                 # agent finished must not wipe the flash. It ages out on its
                 # own (see agentline-agent.sh).
-                return ['0', '+✓' + hit[-1][2], '-' + hit[-1][1]]
+                return ['0', '+✓' + hit[-1][2] + MARK, '-' + hit[-1][1]]
     elif event == 'Stop':
         def edit(queue, ids):
             labels = []
@@ -240,7 +247,7 @@ try:
                 if q[1] not in labels:
                     labels.append(q[1])
             del queue[:]
-            return ['0'] + ['-' + l for l in labels] if labels else None
+            return ['0'] + ['-' + l + MARK for l in labels] if labels else None
         # The per-session sidecars of earlier releases (.pending/.ids/.owned
         # and their locks): no hook of this release opens those names, so
         # they can go, and their rows age out of the registry on their own.
@@ -251,7 +258,7 @@ try:
                 except OSError:
                     pass
     ops = session(state, edit) if edit else None
-    print(US.join(ops) if ops else 'SKIP')
+    print(SEP.join(ops) if ops else 'SKIP')
 except Exception:
     print('SKIP')
 PYEOF
@@ -259,7 +266,7 @@ PYEOF
 # would import a json.py or re.py sitting there instead of the standard one.
 parsed=$(printf '%s' "$input" | python3 -I -c "$_AL_HOOK_PY" "$AGENTLINE_AGENT_FILE" 2>/dev/null)
 
-IFS=$'\x1f' read -r -a ops <<< "$parsed"
+IFS=$'\x1e' read -r -a ops <<< "$parsed"
 case "${ops[0]}" in ''|*[!0-9]*) exit 0 ;; esac
 [ "${#ops[@]}" -gt 1 ] && agentline_agent_edit "${ops[@]}"
 exit 0

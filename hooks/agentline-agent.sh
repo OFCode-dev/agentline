@@ -172,8 +172,9 @@ UID = os.getuid()
 # A stored label has no control character: one row per line, so a label can
 # never smuggle in a second one, and no ESC or C1 that a reader, or a
 # diagnostic here, would hand to a terminal. Bidi overrides go too. \x1f
-# stays: it is agentline-run's key separator (label, \x1f, pid). An op is
-# its sign and a label; one without a label means nothing.
+# stays: it is the key separator (label, \x1f, agentline-run's pid or the
+# tracker's mark, see KEY). An op is its sign and a label; one without a
+# label means nothing.
 CTRL = re.compile('[\x00-\x08\x0b\x0c\x0e-\x1e\x7f-\x9f‎‏‪-‮⁦-⁩]')
 
 def clean(s):
@@ -200,22 +201,25 @@ def secretish(s):
     return False
 # (end of the secret heuristic)
 
-# A stored label is [✓]TEXT[ #ID][\x1fPID]: the finished mark, the text a
-# reader shows, the tracker's agent id (six of [A-Za-z0-9_-]) and
-# agentline-run's run id. TEXT that looks like a secret is stored as the
-# generic word — "run" for a run, "agent" for anything else — and the rest
-# is kept, so the rows of two such runs stay two rows, and a remove finds
-# the row its add wrote (the same label maps the same way). A \x1f not
-# followed by a plain pid is TEXT too, and checked with it: nothing past a
-# separator is kept unchecked. TEXT is cut to 40 characters.
-KEY = re.compile(r'(.*?)((?: #[A-Za-z0-9_-]{1,6})?)((?:\x1f[0-9]{1,10})?)', re.S)
+# A stored label is [✓]TEXT[ #ID][\x1fPID|\x1fc]: the finished mark, the
+# text a reader shows, the tracker's agent id (six of [A-Za-z0-9_-]), and
+# after a unit separator either agentline-run's run id or "c", the mark the
+# tracker hook puts on the rows of Claude's own subagents (agentline.sh's
+# AGENTLINE_AGENTS=external leaves those to Claude Code's subagent panel).
+# TEXT that looks like a secret is stored as the generic word — "run" for a
+# run, "agent" for anything else — and the rest is kept, so the rows of two
+# such runs stay two rows, and a remove finds the row its add wrote (the same
+# label maps the same way). A \x1f followed by anything but a plain pid or
+# the mark is TEXT too, and checked with it: nothing past a separator is
+# kept unchecked. TEXT is cut to 40 characters.
+KEY = re.compile(r'(.*?)((?: #[A-Za-z0-9_-]{1,6})?)((?:\x1f(?:[0-9]{1,10}|c))?)', re.S)
 
 def guard(label):
     done = label.startswith(DONE)
     m = KEY.fullmatch(label[1:] if done else label)
     text, tag, run = m.group(1).replace('\x1f', ' ').strip(), m.group(2), m.group(3)
     if not text or secretish(text):
-        text = 'run' if run else 'agent'
+        text = 'run' if run[1:].isdigit() else 'agent'
     return (DONE if done else '') + text[:40].rstrip() + tag + run
 
 ops = [(o[0], clean(o[1:])) for o in sys.argv[8:] if len(o) > 1 and o[0] in '+-']
