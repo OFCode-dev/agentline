@@ -63,7 +63,7 @@ bash install.sh --with-subagents --link-bin
 - A timestamped backup (`settings.json.agentline-bak-YYYYmmdd-HHMMSS`, UTC, newest 5 kept) is taken before any edit, and the new file is swapped in atomically. A symlinked `settings.json` stays a symlink; it is edited, and its backups are written, next to the link's **target** (e.g. inside your dotfiles repo). A `settings.json` bind-mounted on its own (devcontainers) cannot be swapped, so it is rewritten in place after the backup.
 - A status line that is not agentline (`npx ccstatusline`, your own `~/.claude/statusline.sh`, …) is left untouched. The installer prints the snippet to paste instead, says agentline is installed but **not active**, skips `--with-hooks`, and exits with status `3`. Pass `--force` to switch anyway. A `statusline.sh` / `statusline-command.sh` is migrated automatically only when it is provably agentline's own pre-rename copy: the file carries agentline's header line or reads `statusline-services.conf`, or the command is a single absolute path to a file that no longer exists. Its name or directory alone never counts, because those are the usual names of other status lines too.
 - agentline run through a wrapper (`bash -c "AGENTLINE_TZ=UTC exec ~/.claude/agentline/agentline.sh"`, or piped through `sed`) counts as active. The copy the wrapper runs is upgraded in place and the wrapper is left as it is.
-- With `--with-subagents`, `subagentStatusLine` follows the same rules: it is set when absent, kept when it already runs `agentline-subagents.sh` (a custom copy is upgraded in place), and left alone when it runs something else, unless you pass `--force`. In that last case the snippet is printed and the exit status is `3`.
+- With `--with-subagents`, `subagentStatusLine` follows the same rules: it is set when absent, kept when it already runs `agentline-subagents.sh` (a custom copy is upgraded in place), and left alone when it runs something else, unless you pass `--force`. In that last case the snippet is printed and the exit status is `3`. When the subagent line is agentline's, `AGENTLINE_AGENTS=external` is also written into the `env` block, so Claude's subagents are listed in the panel and not twice. A value you already set there is kept (and printed); on exit `3` nothing is written.
 - `agentline-subagents.sh`, `agentline-run`, the registry helper `agentline-agent.sh` and the API meter `agentline-meter.sh` are always copied into `~/.claude/agentline/`. None of them runs until a setting or a command asks for it.
 - Exit status: `0` installed and active, `1` `settings.json` unusable or unwritable (refused before anything is copied, or the write failed and the file was left whole next to its backup), `2` bad option, `3` installed but not active (the status line, or with `--with-subagents` the subagent line).
 - If the installed `agentline.sh` differs from the new one, it is kept as `agentline.sh.bak-<timestamp>` before being replaced. Put your tweaks in [`local.sh`](#faq) so they survive upgrades.
@@ -71,6 +71,31 @@ bash install.sh --with-subagents --link-bin
 ## What each line shows
 
 Every `│`-separated segment below is independent: when its value cannot be measured (or is zero/empty), the segment disappears and the pipes close up around it — nothing ever renders as `n/a`.
+
+A session on a 150-column terminal, with three external workers running and two providers booked by the [API meter](#api-meter). The `🤖` list stands in a column at the right edge, each entry in its worker's colour (codex purple, Gemini blue, Hetzner red). Line 1 had no room for it, so it starts beside line 2:
+
+```text
+✦ Fable 5.1 │ 🔴xhigh │ 📊 42% │ 🔄 1 │ ↻08/10 │ S:31% ⇣19% ↻2h28m │ W:58% │ 💰 $12.47 │ ⏱️ 3h42m │ 📝 +1204 -336 │ 🔥 37% │ 💾 6.2G │ 💽 41%
+v2.1.285 │ ~/work │ 🌿 OFCode-dev/agentline@main │ 🏷️ agentline │ 05/10/2026 Mon │ 18:24:55                                     🤖 codex/gpt-6.1-sol
+⚙️ context7 · playwright │ 🔌 hetzner 12·51.0k · jev 303·69.7k · codex 4 · +1 · <$0.01 │ ♻️ claude --resume demo-0001          🤖 agy/gemini-3.1-pro
+🛡️ Web ✓ · DB ✗ · Cache ✓ │ 🔐 ssh:2 │ ⏰ cron:5 │ 🌐 node(3000) vite(5173) python3(8000) postgres(5432) redis-server(6379)   🤖 hetzner/qwen3.6-fp8
+```
+
+The same session at 72 columns: the low-priority segments of line 1 step aside (the compaction counter among them), the reset date `↻08/10` stays, and the `🤖` list, with no room for a column, takes rows of its own under line 3:
+
+```text
+✦ Fable 5.1 │ 🔴xhigh │ 📊 42% │ ↻08/10 │ S:31% ⇣19% ↻2h28m │ W:58%
+💰 $12.47 │ ⏱️ 3h42m │ 📝 +1204 -336 │ 🔥 37% │ 💾 6.2G │ 💽 41%
+~/work │ 🌿 OFCode-dev/agentline@main │ 🏷️ agentline │ 18:24:55
+⚙️ context7 · playwright
+🔌 hetzner 12·51.0k · jev 303·69.7k · codex 4 · +1 · <$0.01
+♻️ claude --resume demo-0001
+🤖 codex/gpt-6.1-sol
+🤖 agy/gemini-3.1-pro
+🤖 hetzner/qwen3.6-fp8
+🛡️ Web ✓ · DB ✗ · Cache ✓ │ 🔐 ssh:2 │ ⏰ cron:5
+🌐 node(3000) vite(5173) python3(8000) postgres(5432) redis-server(6379)
+```
 
 ### Line 1 — Session
 
@@ -115,7 +140,7 @@ Every `│`-separated segment below is independent: when its value cannot be mea
 | Segment | Meaning | Details |
 |---|---|---|
 | `⚙️ context7 · playwright` | Active MCP servers | Global and per-project servers from `~/.claude.json`, merged. Command-based servers count only if their process is actually running (`pgrep`-checked); remote HTTP/SSE servers count as configured. Hidden when none are active. |
-| `🤖 code review · tests · +2 · ✓explore` | Live subagents — optional hook | Entries fresher than 5 minutes, labels truncated at 25 chars, yellow. At most `AGENTLINE_AGENT_SHOW` (default 4) are listed, oldest first; the rest are counted as `+N`. A subagent that just finished flashes green as `✓label` for ten seconds. Claude's own subagents come from the [agent-tracker hook](#optional-hooks-word-counter--agent-tracker) and clear when each one stops. Any other process can [register itself](#showing-external-agents) and stays until it deregisters or goes stale. |
+| `🤖 codex/gpt-6-astra` | Live agents — optional hook | One entry per row. With the live terminal width (`COLUMNS`) and room to spare, the entries stand in a column at the right edge, entry 1 beside row 1 and so on, at least 3 cells from each row's own text; otherwise (no `COLUMNS`, a row too long, more entries than rows) they are rows of their own under line 3, before line 4. Each entry is in its worker's colour, not bold: codex purple, agy/Gemini blue, NVIDIA (DeepSeek, NIM) green, Hetzner red, Claude orange, arb teal, jev pink, anything else grey (see [the colours](#agent-colours)). Entries fresher than 5 minutes, labels truncated at 25 chars. At most `AGENTLINE_AGENT_SHOW` (default 4) are listed, oldest first; the rest are counted as `+N`. A subagent that just finished flashes green as `✓label` for ten seconds. Claude's own subagents come from the [agent-tracker hook](#optional-hooks-word-counter--agent-tracker) and clear when each one stops; with `AGENTLINE_AGENTS=external` they are left to Claude Code's subagent panel. Any other process can [register itself](#showing-external-agents) and stays until it deregisters or goes stale. |
 | `🔌 hetzner 12·51.0k · jev 303·69.7k · codex 4 · $0.01` | External API use — optional | What this session spent on external model APIs and workers, as booked with [`agentline-meter`](#api-meter): per provider the calls, then input + output tokens when there are any, a red `!N` for errors, and the total cost at the end (`<$0.01` under half a cent). At most `AGENTLINE_API_SHOW` (default 3) providers are named, in the order they first appeared; the rest are counted as `+N`, and their cost is still in the total. Hidden until something is booked for this session. |
 | `♻️ claude --resume <id>` | Recovery command | Ready to paste after a crash to resume this exact session. Prefers the session **id** (what `--resume` accepts); falls back to the quoted session name, which `--resume` treats as a picker search term. |
 
@@ -157,6 +182,7 @@ Everything is optional — agentline works with zero configuration.
 | `AGENTLINE_TAG_200K` | `0` | Set to `1` for a small dim `>200k` after the context percentage when Claude Code's `exceeds_200k_tokens` flag is set on a window larger than 200k. It is informational only: the percentage's colour and icon never change for it |
 | `AGENTLINE_AGENT_SHOW` | `4` | How many running agents `🤖` lists before it counts the rest as `+N` |
 | `AGENTLINE_API_SHOW` | `3` | How many providers `🔌` names before it counts the rest as `+N` (`0` counts them all) |
+| `AGENTLINE_AGENTS` | `all` | `external` leaves Claude's own subagents (the agent-tracker hook's rows) off the `🤖` list, because Claude Code's subagent panel already lists them, and keeps the external workers the panel never shows (`agentline-run`, scripts using the registry helper). `install.sh --with-subagents` sets it. Any other value means `all` |
 | `AGENTLINE_THEME` | `dark` | `light` or `mono` (also selected by `NO_COLOR`) — see [Themes, glyphs and colours](#themes-glyphs-and-colours) |
 | `AGENTLINE_GLYPHS` | `emoji` | `ascii` for a line with nothing above U+007F |
 | `AGENTLINE_COLOR_*` | unset | `GOLD`, `ORANGE`, `FABLE_FROM`, `FABLE_TO` as `r,g,b` |
@@ -278,11 +304,32 @@ clears its own session's subagents on `SubagentStop` (and queued dispatches on `
 everything else alone, so an external run in progress survives the end of an
 assistant turn.
 
-The segment shows the first `AGENTLINE_AGENT_SHOW` (default 4) running rows,
-oldest first, so labels keep their place from one second to the next. The rest
-are counted instead of hidden: `🤖 explore · review · fork · codex round 1 · +3`.
+The list shows the first `AGENTLINE_AGENT_SHOW` (default 4) running rows,
+oldest first, one per row, so labels keep their place from one second to the
+next. The rest are counted instead of hidden, as a last `🤖 +3` row.
 A label starting with `✓` is a finished agent. It shows in green for ten
 seconds and is pruned from the file after a minute.
+
+<a id="agent-colours"></a>Each entry is coloured by its label's first word, up to a `/` or a space,
+so `codex round 1` is codex's colour as much as `codex/gpt-6-astra` is. A row
+the agent-tracker hook wrote is Claude's whatever its text: the hook puts an
+invisible mark after the label (`\x1fc`, hidden like `agentline-run`'s pid),
+and that mark is also what `AGENTLINE_AGENTS=external` leaves out. The
+registry helper keeps nothing after a `\x1f` but a pid or that mark. The same
+colours are used for the worker on a [subagent row](#subagent-status-line):
+
+| Worker (first word) | Dark | Light (4.5:1 or more on white) |
+|---|---|---|
+| `codex` | `#A970FF` | `#7B3FE4` |
+| `agy`, `antigravity`, `gemini` | `#4285F4` | `#1A63D6` |
+| `deepseek`, `nim`, `nvidia` | `#76B900` | `#4E7A00` |
+| `hetzner` | `#D50C2D` | `#C00A28` |
+| `claude`, and every tracker row | `#D97757` | `#B04E2C` |
+| `arb` | `#2BB5A8` | `#0F766E` |
+| `jev`, `jevk5` | `#F06BA8` | `#BF2F6E` |
+| `bayrak`, `ssh`, anything else | `#A8A8A8` | `#666666` |
+
+`mono` and `NO_COLOR` remove them with every other colour.
 
 Set `CLAUDE_AGENTS_FILE` to point the helper somewhere else (agentline reads
 the same variable, so it must be set for both, e.g. in the `settings.json` `env` block),
@@ -365,7 +412,7 @@ those rows. `bash install.sh --with-subagents` sets it to
 | velocity | a six-cell sparkline of the growth between the last token samples |
 | cwd | the subagent's directory, when it is not the session's |
 
-The activity names the tool and its target without ever showing input text: `Read parser.py`, `Edit README.md`, `WebFetch docs.example.com` (host only), `search` for Grep, Glob and WebSearch, `agent/Explore`, `mcp:github`. For a `Bash` call it names the external worker it runs, in the worker colour, or else the program when that is a common tool (`Bash git`, `Bash make`, `Bash docker`) or a script (`Bash etl.py`). Any other program is plain `Bash`:
+The activity names the tool and its target without ever showing input text: `Read parser.py`, `Edit README.md`, `WebFetch docs.example.com` (host only), `search` for Grep, Glob and WebSearch, `agent/Explore`, `mcp:github`. For a `Bash` call it names the external worker it runs, in that worker's own [colour](#agent-colours) (not bold), or else the program when that is a common tool (`Bash git`, `Bash make`, `Bash docker`) or a script (`Bash etl.py`). Any other program is plain `Bash`:
 
 | Command | Row |
 |---------|-----|

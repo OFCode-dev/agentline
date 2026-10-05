@@ -249,9 +249,13 @@ normalize() {  # normalize <in> <out>
 # the unwrapped render's — and a row wider than the budget is always a single
 # segment, the one legitimate overflow (a segment is never split). Widths are
 # measured the way the script measures them: wide glyphs count two cells.
+# The agent list is one row per entry, each a single segment, after line 3
+# at every width. Beside a row (the right column, live width only) an entry
+# sits after a run of 3+ spaces: it is taken off the row and counted after
+# the rows' own segments, so the row is measured and split without it.
 check_wrap() {  # check_wrap <narrow-normalized> <wide-normalized> <width>
   python3 - "$1" "$2" "$3" <<'PYEOF'
-import sys, unicodedata
+import re, sys, unicodedata
 narrow = open(sys.argv[1], encoding='utf-8').read()
 wide = open(sys.argv[2], encoding='utf-8').read()
 width = int(sys.argv[3])
@@ -269,12 +273,21 @@ def vis(s):
             prev = 2 if unicodedata.east_asian_width(c) in ('W', 'F') else 1
             n += prev
     return n
+COL = re.compile(r'(.*\S) {3,}((?:\U0001F916 |agents:)\S.*)')
+def split(rows):
+    main, col = [], []
+    for r in rows:
+        m = COL.fullmatch(r)
+        main.append(m.group(1) if m else r)
+        col += [m.group(2)] if m else []
+    return main, col
 def segs(rows):
-    return [s for r in rows for s in r.split(SEP)]
+    main, col = split(rows)
+    return [s for r in main for s in r.split(SEP)] + col
 n_rows, w_rows = narrow.splitlines()[2:], wide.splitlines()[2:]
 if segs(n_rows) != segs(w_rows):
     sys.exit('segments differ:\n  %r\n  %r' % (segs(n_rows), segs(w_rows)))
-for r in n_rows:
+for r in split(n_rows)[0]:
     if vis(r) > width and SEP in r:
         sys.exit('row over %d cells holds more than one segment: %r' % (width, r))
 PYEOF
@@ -600,7 +613,8 @@ check "... and keeps the text" grep -q hot "$T/out"
 prepare agents-overflow "$PAY/agents-overflow.json"
 render "$PAY/agents-overflow.json" 200 AGENTLINE_GLYPHS=ascii
 normalize "$T/out" "$T/got"
-check "ascii: agents joined with /, done as ok:" grep -qF 'agents:explore the repo / review #a1b2c3 / fork / codex round 1 / +2 / ok:code review | claude --resume agents-0001' "$T/got"
+check "ascii: one agent per row, done as ok:" [ "$(grep -A 6 -x 'claude --resume agents-0001' "$T/got" | tr '\n' '|')" = \
+  'claude --resume agents-0001|agents:explore the repo|agents:review #a1b2c3|agents:fork|agents:codex round 1|agents:+2|agents:ok:code review|' ]
 prepare full "$PAY/full.json"
 render "$PAY/full.json" 200 AGENTLINE_GLYPHS=ascii
 normalize "$T/out" "$T/got"
@@ -1805,10 +1819,13 @@ prepare full "$p"; render "$p" 120 AGENTLINE_NOW="$(( TNOW + 3600 ))x"; normaliz
 if grep -qF '↻1h0m' "$T/got"; then fail "clock: a non-numeric AGENTLINE_NOW is ignored"; else pass; fi
 
 # A live width with room for everything renders exactly what the same fixed
-# width does: fit mode changes nothing that already fits.
+# width does: fit mode changes nothing that already fits. (Without agents:
+# the live width is what lets the agent list take a column, see below.)
+prepare full "$p"; rm -f "$SIDE/claude_agents.txt"; render "$p" 200; normalize "$T/out" "$T/fixed0"
+prepare full "$p"; rm -f "$SIDE/claude_agents.txt"; render "$p" - COLUMNS=202; normalize "$T/out" "$T/got"
+check "layout: COLUMNS=202 (fits) = fixed 200 render" cmp -s "$T/got" "$T/fixed0"
 prepare full "$p"; render "$p" 200; normalize "$T/out" "$T/fixed"
 prepare full "$p"; render "$p" - COLUMNS=202; normalize "$T/out" "$T/got"
-check "layout: COLUMNS=202 (fits) = fixed 200 render" cmp -s "$T/got" "$T/fixed"
 check "layout: COLUMNS=202 exit 0 (got $rc)" [ "$rc" = 0 ]
 check "layout: COLUMNS=202 stderr empty" [ ! -s "$T/err" ]
 
@@ -2653,16 +2670,26 @@ rm -rf "$DTMP" "$LEG" "$XDG"
 # tool_name as the Stop, so a SubagentStop would have wiped every sibling.
 AF="$SIDE/claude_agents.txt"
 hook() { printf '%s' "$1" | hook_env "$TEST_BASH" "$ROOT/hooks/agent-tracker-hook.sh"; }
-rows() { sed 's/^[0-9]* //' "$AF" 2>/dev/null; }
+# The tracker's rows carry the mark of a Claude subagent, \x1fc after the
+# label (hidden like agentline-run's pid): rows() shows them without it,
+# raw_rows() as stored.
+US1=$(printf '\037')
+raw_rows() { LC_ALL=C sed 's/^[0-9]* //' "$AF" 2>/dev/null; }
+rows() { LC_ALL=C sed -e 's/^[0-9]* //' -e "s/${US1}c\$//" "$AF" 2>/dev/null; }
 row_is() { rows | grep -qxF -- "$1"; }
+no_row() { ! rows | grep -qx -- "$1"; }  # no_row <basic regex>
+raw_is() { raw_rows | grep -qxF -- "$1"; }
 rm -f "$SIDE"/claude_*
 hook_env "$TEST_BASH" "$AGENT" add "external run"
 hook '{"hook_event_name":"PreToolUse","tool_name":"Agent","session_id":"s2","tool_input":{"description":"explore repo","subagent_type":"Explore"}}'
 check "lifecycle: dispatch row appears at once" row_is "explore repo"
+check "lifecycle: the tracker's row carries the Claude mark" raw_is "explore repo${US1}c"
+check "lifecycle: a helper row carries none" raw_is "external run"
 hook '{"hook_event_name":"PreToolUse","tool_name":"Agent","session_id":"s2","tool_input":{"description":"review diff"}}'
 hook '{"hook_event_name":"SubagentStart","session_id":"s2","agent_id":"abcdef123","agent_type":"Explore"}'
 check "lifecycle: start re-labels the oldest dispatch" row_is "explore repo #abcdef"
-check "lifecycle: bare dispatch row replaced" sh -c "! sed 's/^[0-9]* //' '$AF' | grep -qx 'explore repo'"
+check "lifecycle: ... marked" raw_is "explore repo #abcdef${US1}c"
+check "lifecycle: bare dispatch row replaced" no_row 'explore repo'
 hook '{"hook_event_name":"SubagentStart","session_id":"s2","agent_id":"zzz999x","agent_type":"general-purpose"}'
 check "lifecycle: second start takes the second label" row_is "review diff #zzz999"
 cp "$AF" "$T/af.before"
@@ -2683,6 +2710,7 @@ check "lifecycle: the stuck dispatch keeps its own row" row_is "denied plan"
 hook '{"hook_event_name":"SubagentStop","session_id":"s2","agent_id":"abcdef123","agent_type":"Explore","last_assistant_message":"done"}'
 check "lifecycle: stop removes that agent" sh -c "! grep -q 'explore repo #abcdef' '$AF'"
 check "lifecycle: stop leaves a done row" row_is "✓explore repo"
+check "lifecycle: ... marked" raw_is "✓explore repo${US1}c"
 check "lifecycle: stop keeps the sibling" row_is "review diff #zzz999"
 check "lifecycle: stop keeps the external agent" row_is "external run"
 cp "$AF" "$T/af.before"
@@ -2716,6 +2744,29 @@ hook '{"hook_event_name":"PostToolUse","tool_name":"Bash","session_id":"s2"}'
 hook '{"hook_event_name":"PreToolUse","tool_name":"Bash","session_id":"s2","tool_input":{"description":"x"}}'
 check "lifecycle: garbage and other events ignored" cmp -s "$AF" "$T/af.before"
 
+# An agent started under a release without the mark: its state holds the
+# unmarked row it wrote, and the stop removes exactly that row.
+rm -f "$SIDE"/claude_*
+printf '%s old agent #old123\n' "$(date +%s)" > "$AF"
+printf '{"queue": [], "ids": [["old12345", "old agent #old123", "old agent", %s]]}' "$(date +%s)" > "$AF.session.up"
+hook '{"hook_event_name":"SubagentStop","session_id":"up","agent_id":"old12345","agent_type":"general-purpose"}'
+check "upgrade: a stop removes the unmarked row an older tracker wrote" no_row 'old agent #old123'
+check "upgrade: ... and flashes a marked done row" raw_is "✓old agent${US1}c"
+# The mark cannot be forged: a description loses its control characters
+# (the row is the tracker's, so it is marked anyway), and the helper keeps
+# nothing after a separator but a pid or the bare mark — "c" and nothing
+# more, so \x1fclaude is text, checked and shown as such.
+rm -f "$SIDE"/claude_*
+hook '{"hook_event_name":"PreToolUse","tool_name":"Agent","session_id":"fg","tool_input":{"description":"desc\u001fc"}}'
+check "mark: a description's \\x1f is blanked" raw_is "desc c${US1}c"
+hook_env "$TEST_BASH" "$AGENT" add "$(printf 'plain\037claude')"
+check "mark: \\x1fclaude is text, not the mark" raw_is 'plain claude'
+hook_env "$TEST_BASH" "$AGENT" add "$(printf 'twice\037c\037c')"
+check "mark: a second separator is text" raw_is "twice c${US1}c"
+hook_env "$TEST_BASH" "$AGENT" add "$(printf 'both\0374242\037c')"
+check "mark: a pid then a mark is text" raw_is "both 4242${US1}c"
+rm -f "$SIDE"/claude_*
+
 # Parallel starts never pop the same queued label: 6 dispatches, 6 starts at
 # once, 6 distinct labels bound.
 rm -f "$SIDE"/claude_*
@@ -2728,7 +2779,7 @@ done
 wait
 check "lifecycle: parallel starts bind 6 distinct labels" \
   [ "$(rows | grep -E '^job [1-6] #agent' | sed 's/ #.*//' | sort -u | wc -l | tr -d ' ')" = 6 ]
-check "lifecycle: parallel starts leave no bare dispatch row" sh -c "! sed 's/^[0-9]* //' '$AF' | grep -qx 'job [1-6]'"
+check "lifecycle: parallel starts leave no bare dispatch row" no_row 'job [1-6]'
 
 # Typed queue: a start takes the oldest dispatch of its own type, whatever
 # was queued before it.
@@ -2745,7 +2796,7 @@ hook '{"hook_event_name":"PreToolUse","tool_name":"Agent","session_id":"ty","too
 hook '{"hook_event_name":"SubagentStart","session_id":"ty","agent_id":"twin001","agent_type":"general-purpose"}'
 check "queue: a shared dispatch row stays for the twin" row_is "twin"
 hook '{"hook_event_name":"SubagentStart","session_id":"ty","agent_id":"twin002","agent_type":"general-purpose"}'
-check "queue: ... and goes with the last of them" sh -c "! sed 's/^[0-9]* //' '$AF' | grep -qx twin"
+check "queue: ... and goes with the last of them" no_row twin
 
 # A dispatch that never started expires after 120 s: its queue entry, so a
 # later agent of the type is not given its label, and its row, which the
@@ -2835,27 +2886,33 @@ agents_rows() {
   for i in 1 2 3 4 5 6; do printf '%s run%s\n' "$now" "$i"; done > "$AF"
   printf '%s\n' "$now ✓fresh" "$(( now - 30 )) ✓stale" "$(( now - 400 )) old" >> "$AF"
 }
+# The list is vertical, one entry per row; without a live width (here
+# AGENTLINE_WIDTH alone) the rows go under line 3. ag_list prints them.
+ag_list() { grep '^🤖 ' "$1" | tr '\n' '|'; }  # ag_list <normalized>
 prepare minimal "$PAY/minimal.json"; agents_rows
 render "$PAY/minimal.json" 200; normalize "$T/out" "$T/got"
-check "reader: first four, then +2, then the done flash" grep -qF '🤖 run1 · run2 · run3 · run4 · +2 · ✓fresh' "$T/got"
+check "reader: first four, then +2, then the done flash, a row each ($(ag_list "$T/got"))" \
+  [ "$(ag_list "$T/got")" = '🤖 run1|🤖 run2|🤖 run3|🤖 run4|🤖 +2|🤖 ✓fresh|' ]
 check "reader: stale done row hidden" sh -c "! grep -q stale '$T/got'"
 check "reader: aged row hidden" sh -c "! grep -q ' old' '$T/got'"
-check "reader: done flash is green" grep -q "${ESC}\[1;32m✓fresh" "$T/out"
+check "reader: done flash is green, not bold" grep -q "${ESC}\[32m✓fresh" "$T/out"
+check "reader: +N is dim" grep -q "${ESC}\[2m+2" "$T/out"
+check "reader: no entry is bold" sh -c "! grep -q '🤖 ${ESC}\[1;' '$T/out'"
 prepare minimal "$PAY/minimal.json"; agents_rows
 render "$PAY/minimal.json" 200 AGENTLINE_AGENT_SHOW=0
 normalize "$T/out" "$T/got"
-check "reader: AGENTLINE_AGENT_SHOW=0 counts only" grep -qF '🤖 +6 · ✓fresh' "$T/got"
+check "reader: AGENTLINE_AGENT_SHOW=0 counts only" [ "$(ag_list "$T/got")" = '🤖 +6|🤖 ✓fresh|' ]
 prepare minimal "$PAY/minimal.json"; agents_rows
 render "$PAY/minimal.json" 200 AGENTLINE_AGENT_SHOW=junk
 normalize "$T/out" "$T/got"
-check "reader: bad AGENTLINE_AGENT_SHOW falls back to 4" grep -qF '· +2 ·' "$T/got"
+check "reader: bad AGENTLINE_AGENT_SHOW falls back to 4" grep -qx '🤖 +2' "$T/got"
 # AGENTLINE_AGENT_SHOW is part of the render-cache key (review of J11a):
 # with the default TTL, a change is not served the render cached without it.
 prepare minimal "$PAY/minimal.json"; agents_rows
 render "$PAY/minimal.json" 200; normalize "$T/out" "$T/got"
-check "reader: cached with four named" grep -qF '🤖 run1 · run2 · run3 · run4 · +2' "$T/got"
+check "reader: cached with four named" sh -c "grep -qx '🤖 run4' '$T/got' && grep -qx '🤖 +2' '$T/got'"
 render "$PAY/minimal.json" 200 AGENTLINE_AGENT_SHOW=0; normalize "$T/out" "$T/got"
-check "reader: AGENTLINE_AGENT_SHOW=0 is not served the cached render" grep -qF '🤖 +6 · ✓fresh' "$T/got"
+check "reader: AGENTLINE_AGENT_SHOW=0 is not served the cached render" sh -c "grep -qx '🤖 +6' '$T/got' && ! grep -q 'run1' '$T/got'"
 rm -f "$AF"
 # The reader reads a regular file of ours only, never through a symlink, and
 # at most 512 rows of it (review of J9c, stage J9d).
@@ -2867,7 +2924,194 @@ rm -f "$AF"
 prepare minimal "$PAY/minimal.json"
 i=0; while [ "$i" -lt 600 ]; do printf '%s r%s\n' "$TNOW" "$i"; i=$((i + 1)); done > "$AF"
 render "$PAY/minimal.json" 200; normalize "$T/out" "$T/got"
-check "reader: at most 512 rows are read (+508 of 596 more)" grep -qF 'r3 · +508' "$T/got"
+check "reader: at most 512 rows are read (+508 of 596 more)" [ "$(ag_list "$T/got")" = '🤖 r0|🤖 r1|🤖 r2|🤖 r3|🤖 +508|' ]
+rm -f "$AF"
+
+# --- The agent list: worker colours, AGENTLINE_AGENTS, a right column ----------
+# Each entry is a row of its own, in its worker's colour (the label's first
+# word; a tracker row is Claude's whatever its text), never bold. With the
+# live width (COLUMNS) the rows stand in a column at the right edge, entry i
+# beside row i; else they follow line 3.
+ag_reg() {  # ag_reg <label>... -> the registry, every row stamped TNOW
+  local l
+  for l in "$@"; do printf '%s %s\n' "$TNOW" "$l"; done > "$AF"
+}
+col_check() {  # col_check <normalized> <width> <k>: entries beside rows 1..k, flush right
+  python3 - "$@" <<'PYEOF'
+import re, sys, unicodedata
+rows = open(sys.argv[1], encoding='utf-8').read().splitlines()
+width, k = int(sys.argv[2]), int(sys.argv[3])
+def vis(s):
+    n = prev = 0
+    for c in s:
+        if c == '\N{VARIATION SELECTOR-16}':
+            n, prev = n + 2 - prev, 2
+        elif unicodedata.category(c) in ('Mn', 'Me', 'Cf'):
+            continue
+        else:
+            prev = 2 if unicodedata.east_asian_width(c) in ('W', 'F') else 1
+            n += prev
+    return n
+for i, r in enumerate(rows):
+    if vis(r) > width:
+        sys.exit('row %d over %d cells: %r' % (i + 1, width, r))
+    beside = re.fullmatch(r'(.*\S) {3,}(🤖 \S.*)', r)
+    if i < k and not (beside and vis(r) == width):
+        sys.exit('row %d has no entry flush at %d: %r (%d cells)' % (i + 1, width, r, vis(r)))
+    if i >= k and ('🤖 ' in r and (beside or r.startswith('🤖 '))):
+        sys.exit('row %d holds an entry past the column: %r' % (i + 1, r))
+PYEOF
+}
+# Colours: every family, dark and light, as "label|dark|light".
+AG_FAMILIES="codex/gpt-6-astra|169;112;255|123;63;228
+agy/gemini-3-pro|66;133;244|26;99;214
+hetzner/qwen3.6-fp8|213;12;45|192;10;40
+deepseek|118;185;0|78;122;0
+nim/llama|118;185;0|78;122;0
+arb/qwen3.6|43;181;168|15;118;110
+jev/jevk5|240;107;168|191;47;110
+claude/opus|217;119;87|176;78;44
+review diff #a1b2c3|217;119;87|176;78;44
+bayrak/opus|168;168;168|102;102;102
+ssh|168;168;168|102;102;102
+nightly eval|168;168;168|102;102;102"
+ag_all() {
+  ag_reg "codex/gpt-6-astra${US1}101" "agy/gemini-3-pro${US1}102" "hetzner/qwen3.6-fp8${US1}103" \
+    "deepseek${US1}104" "nim/llama${US1}105" "arb/qwen3.6${US1}106" "jev/jevk5${US1}107" \
+    "claude/opus${US1}108" "review diff #a1b2c3${US1}c" "bayrak/opus${US1}109" "ssh${US1}110" "nightly eval"
+}
+prepare minimal "$PAY/minimal.json"; ag_all
+render "$PAY/minimal.json" 200 AGENTLINE_AGENT_SHOW=20
+check "agent colours: exit 0 (got $rc)" [ "$rc" = 0 ]
+while IFS='|' read -r lab dark light; do
+  check "agent colour (dark): $lab" grep -qF "🤖 ${ESC}[38;2;${dark}m${lab}${ESC}[0m" "$T/out"
+done <<EOF
+$AG_FAMILIES
+EOF
+check "agent colours: no entry is bold" sh -c "! grep -q '🤖 ${ESC}\[1' '$T/out'"
+normalize "$T/out" "$T/got"
+check "agent colours: 12 entries, 12 rows" [ "$(grep -c '^🤖 ' "$T/got")" = 12 ]
+prepare minimal "$PAY/minimal.json"; ag_all
+render "$PAY/minimal.json" 200 AGENTLINE_AGENT_SHOW=20 AGENTLINE_THEME=light
+while IFS='|' read -r lab dark light; do
+  check "agent colour (light): $lab" grep -qF "🤖 ${ESC}[38;2;${light}m${lab}${ESC}[0m" "$T/out"
+done <<EOF
+$AG_FAMILIES
+EOF
+prepare minimal "$PAY/minimal.json"; ag_all
+render "$PAY/minimal.json" 200 AGENTLINE_AGENT_SHOW=20 AGENTLINE_THEME=mono
+check "agent colours: mono has no SGR" sh -c "! grep -q '${ESC}\[' '$T/out' && grep -q '^🤖 codex/gpt-6-astra$' '$T/out'"
+prepare minimal "$PAY/minimal.json"; ag_all
+render "$PAY/minimal.json" 200 AGENTLINE_AGENT_SHOW=20 AGENTLINE_GLYPHS=ascii
+normalize "$T/out" "$T/got"
+check "agent colours: ascii prints nothing above U+007F" all_ascii "$T/got"
+check "agent colours: ascii rows" grep -qx 'agents:codex/gpt-6-astra' "$T/got"
+# The two tables, agentline.sh's case and agentline-subagents.sh's dict,
+# must agree: every name, both colours, and the default.
+# (A file, not a heredoc inside $(...): its regexes hold parentheses.)
+cat > "$T/wtables.py" <<'PYEOF'
+import re, sys
+def block(path):
+    s = open(path, encoding='utf-8').read()
+    return s[s.index('# (worker colours)'):s.index('# (end of worker colours)')]
+sh = {}
+for pats, dark, light in re.findall(r'^\s*([a-z0-9|*]+)\)\s+_wrgb="([0-9;]+) ([0-9;]+)" ;;$', block(sys.argv[1]), re.M):
+    for p in pats.split('|'):
+        sh[p] = (dark, light)
+py = {k: (d, l) for k, d, l in re.findall(r"^\s*'([a-z0-9*]+)': \('([0-9;]+)', '([0-9;]+)'\),$", block(sys.argv[2]), re.M)}
+if len(sh) < 10 or sh != py:
+    sys.exit('tables differ:\n  sh %r\n  py %r' % (sorted(sh.items()), sorted(py.items())))
+PYEOF
+if msg=$(python3 "$T/wtables.py" "$ROOT/agentline.sh" "$ROOT/agentline-subagents.sh" 2>&1); then pass; else fail "agent colours: the two tables: $msg"; fi
+
+# AGENTLINE_AGENTS=external leaves the tracker's rows (marked) to Claude
+# Code's subagent panel, running and finished alike; agentline-run's rows
+# and a script's plain ones stay. all (the default) and anything else show
+# every row.
+ag_mix() {
+  ag_reg "codex/gpt-6-astra${US1}101" "review diff #a1b2c3${US1}c" "nightly eval" \
+    "✓explore repo${US1}c" "✓plain done"
+}
+for mode in external all junk ''; do
+  prepare minimal "$PAY/minimal.json"; ag_mix
+  render "$PAY/minimal.json" 200 ${mode:+AGENTLINE_AGENTS=$mode}; normalize "$T/out" "$T/got"
+  if [ "$mode" = external ]; then
+    want='🤖 codex/gpt-6-astra|🤖 nightly eval|🤖 ✓plain done|'
+  else
+    want='🤖 codex/gpt-6-astra|🤖 review diff #a1b2c3|🤖 nightly eval|🤖 ✓explore repo|🤖 ✓plain done|'
+  fi
+  check "AGENTLINE_AGENTS=${mode:-unset}: $(ag_list "$T/got")" [ "$(ag_list "$T/got")" = "$want" ]
+done
+# Only the tracker's rows: external hides the segment whole.
+prepare minimal "$PAY/minimal.json"; ag_reg "review diff #a1b2c3${US1}c"
+render "$PAY/minimal.json" 200 AGENTLINE_AGENTS=external; normalize "$T/out" "$T/got"
+check "AGENTLINE_AGENTS=external: Claude rows only, no segment" [ -z "$(ag_list "$T/got")" ]
+# The setting is part of the render-cache key.
+prepare minimal "$PAY/minimal.json"; ag_mix
+render "$PAY/minimal.json" 200; render "$PAY/minimal.json" 200 AGENTLINE_AGENTS=external; normalize "$T/out" "$T/got"
+check "AGENTLINE_AGENTS: a change re-renders at once" sh -c "! grep -q 'review diff' '$T/got'"
+
+# The rows follow line 3 and come before line 4 (which is then not merged
+# into line 3): the full fixture, no live width.
+prepare full "$PAY/full.json"; render "$PAY/full.json" 200; normalize "$T/out" "$T/got"
+check "agent rows: between line 3 and line 4" \
+  [ "$(sed -n '3,6p' "$T/got" | awk '{ print $2 }' | tr '\n' '|')" = 'context7|code|run|Web|' ]
+
+# The right column. A layout of short rows, two entries: at COLUMNS=33 (a
+# budget of 31) both fit beside their rows with 3 and 4 cells to spare...
+ag_two() { ag_reg "codex/gpt-6-astra${US1}101" "agy/gemini-3-pro${US1}102"; }
+prepare minimal "$PAY/minimal.json"; ag_two
+render "$PAY/minimal.json" - COLUMNS=33 AGENTLINE_LAYOUT="model / clock / agents"; normalize "$T/out" "$T/got"
+check "column: exit 0 (got $rc), stderr empty" [ "$rc" = 0 -a ! -s "$T/err" ]
+check "column: two rows, the entries flush right ($(tr '\n' '|' < "$T/got"))" \
+  [ "$(tr '\n' '|' < "$T/got")" = 'Sonnet 5   🤖 codex/gpt-6-astra|HH:MM:SS    🤖 agy/gemini-3-pro|' ]
+if msg=$(col_check "$T/got" 31 2 2>&1); then pass; else fail "column: $msg"; fi
+if msg=$(rows_fit "$T/got" 31 2>&1); then pass; else fail "column: rows_fit: $msg"; fi
+check "column: the colours stay" grep -qF "   🤖 ${ESC}[38;2;169;112;255mcodex/gpt-6-astra" "$T/out"
+render "$PAY/minimal.json" - COLUMNS=33 AGENTLINE_LAYOUT="model / clock / agents"; normalize "$T/out" "$T/tick"
+check "column: a cached tick is the full render" cmp -s "$T/got" "$T/tick"
+# ... one cell less, and row 1 would keep 2: the list goes under its line.
+prepare minimal "$PAY/minimal.json"; ag_two
+render "$PAY/minimal.json" - COLUMNS=32 AGENTLINE_LAYOUT="model / clock / agents"; normalize "$T/out" "$T/got"
+check "column: one cell too narrow falls back to rows" \
+  [ "$(tr '\n' '|' < "$T/got")" = 'Sonnet 5|HH:MM:SS|🤖 codex/gpt-6-astra|🤖 agy/gemini-3-pro|' ]
+# No live width (AGENTLINE_WIDTH alone): rows, however wide.
+prepare minimal "$PAY/minimal.json"; ag_two
+render "$PAY/minimal.json" 200 AGENTLINE_LAYOUT="model / clock / agents"; normalize "$T/out" "$T/got"
+check "column: AGENTLINE_WIDTH alone gives rows" \
+  [ "$(tr '\n' '|' < "$T/got")" = 'Sonnet 5|HH:MM:SS|🤖 codex/gpt-6-astra|🤖 agy/gemini-3-pro|' ]
+# More entries than rows: rows.
+prepare minimal "$PAY/minimal.json"; ag_reg "codex${US1}1" "agy${US1}2" "arb${US1}3"
+render "$PAY/minimal.json" - COLUMNS=200 AGENTLINE_LAYOUT="model / clock / agents"; normalize "$T/out" "$T/got"
+check "column: more entries than rows gives rows" [ "$(n_rows "$T/got")" = 5 ]
+# The default layout, the full fixture: two entries beside lines 1 and 2,
+# every row within the budget, and the tick the same.
+prepare full "$PAY/full.json"; render "$PAY/full.json" - COLUMNS=202; normalize "$T/out" "$T/got"
+if msg=$(col_check "$T/got" 200 2 2>&1); then pass; else fail "column (full @202): $msg"; fi
+if msg=$(rows_fit "$T/got" 200 2>&1); then pass; else fail "column (full @202): rows_fit: $msg"; fi
+check "column (full @202): the entries" sh -c "head -n 2 '$T/got' | grep -c '   🤖 \(code review\|run the whole integrat...\)$' | grep -qx 2"
+render "$PAY/full.json" - COLUMNS=202; normalize "$T/out" "$T/tick"
+check "column (full @202): a cached tick is the full render" cmp -s "$T/got" "$T/tick"
+# A line 1 with no room for its entry moves the column down, onto the
+# first rows that all have room, instead of dropping it to rows.
+prepare full "$PAY/full.json"; render "$PAY/full.json" - COLUMNS=150; normalize "$T/out" "$T/got"
+check "column (full @150): not beside a full line 1" sh -c "! head -n 1 '$T/got' | grep -q '🤖'"
+check "column (full @150): beside the next two rows" sh -c "sed -n '2,3p' '$T/got' | grep -c '   🤖 \\(code review\\|run the whole integrat...\\)\$' | grep -qx 2"
+check "column (full @150): no list rows of its own" sh -c "! grep -q '^🤖' '$T/got'"
+if msg=$(rows_fit "$T/got" 148 2>&1); then pass; else fail "column (full @150): rows_fit: $msg"; fi
+# The prompt-cache countdown prints narrower as it runs down (1m00s, 58s),
+# but the column beside it does not move: the padding takes up the slack.
+printf '{"session_id":"agcol-0001","cwd":"%s","model":{"id":"claude-sonnet-5"},"prompt_cache":{"warm":true,"ttl":"5m","expires_at":%s}}\n' \
+  "$WORK" "$(( TNOW + 60 ))" > "$T/agcol.json"
+prepare minimal "$T/agcol.json"; ag_two
+render "$T/agcol.json" - COLUMNS=60 AGENTLINE_LAYOUT="model,cache / clock / agents"; normalize "$T/out" "$T/got"
+check "column: the countdown row holds 1m00s" grep -qF '↻1m00s' "$T/got"
+if msg=$(col_check "$T/got" 58 2 2>&1); then pass; else fail "column (countdown, full render): $msg"; fi
+render "$T/agcol.json" - COLUMNS=60 AGENTLINE_LAYOUT="model,cache / clock / agents" AGENTLINE_NOW=$(( TNOW + 2 ))
+normalize "$T/out" "$T/tick"
+check "column: the tick's countdown is 58s" grep -qF '↻58s ' "$T/tick"
+if msg=$(col_check "$T/tick" 58 2 2>&1); then pass; else fail "column (countdown, tick): $msg"; fi
+if grep -q 'AGENTLINE_PCEXP' "$T/out"; then fail "column: the padding token leaked"; else pass; fi
 rm -f "$AF"
 
 # --- The secret heuristic at the registry boundary (J9d) ----------------------
@@ -4536,7 +4780,38 @@ check "subagents: the rest of a running row" \
   grep -qxF "w-codex$TAB⠋ task w-codex │ Haiku 4.5 │ 📊 12% │ ⏱️ 5m │ → codex/gpt-6-astra ⏳2m │ ▃▅▆▇█▆" "$T/srows"
 # No command text, prompt, description, query or key ever reaches a row.
 check "subagents: no raw command text" sh -c "! grep -qE 'SECRET|review the diff|owned|prompt|messages' '$T/sout'"
-check "subagents: workers in the worker colour" grep -qF '\u001b[1;38;5;208m→ codex/gpt-6-astra' "$T/sout"
+# Each worker in its own colour, agentline.sh's agent-list table, not bold.
+scolour() {  # scolour <id> <r;g;b> — the row's activity opens in that colour
+  python3 - "$T/sout" "$1" "$2" <<'PYEOF'
+import json, sys
+rows = {o['id']: o['content'] for o in map(json.loads, open(sys.argv[1], encoding='utf-8'))}
+sys.exit(0 if '\x1b[38;2;%sm→ ' % sys.argv[3] in rows.get(sys.argv[2], '') else 1)
+PYEOF
+}
+SUB_COLOURS="w-codex 169;112;255 123;63;228
+w-agy 66;133;244 26;99;214
+w-hetzner 213;12;45 192;10;40
+w-deepseek 118;185;0 78;122;0
+w-nvidia 118;185;0 78;122;0
+w-arb 43;181;168 15;118;110
+w-arbctl 43;181;168 15;118;110
+w-jev 240;107;168 191;47;110
+w-bayrak 168;168;168 102;102;102
+w-ssh 168;168;168 102;102;102"
+while read -r sid_ dark light; do
+  check "subagents: $sid_ in its worker colour ($dark)" scolour "$sid_" "$dark"
+done <<EOF
+$SUB_COLOURS
+EOF
+check "subagents: no worker is bold" sh -c "! grep -q 'u001b\[1;38;[0-9;]*m→' '$T/sout'"
+check "subagents: a tool that is no worker has no colour" sh -c "! grep -q 'u001b\[38;2;[0-9;]*m→ Bash' '$T/sout'"
+SENV="AGENTLINE_THEME=light"; srun "$SPAY/workers.json"; SENV=""
+while read -r sid_ dark light; do
+  check "subagents light: $sid_ in its light colour ($light)" scolour "$sid_" "$light"
+done <<EOF
+$SUB_COLOURS
+EOF
+srun "$SPAY/workers.json"
 # The Hetzner endpoint also counts by the host in HETZNER_INFERENCE_BASE_URL.
 cls() { run_env $SENV "$TEST_BASH" "$SUBS" --classify -- "$@" 2>&1; }
 SENV="HETZNER_INFERENCE_BASE_URL=https://inf.example.net/v1"
@@ -5175,11 +5450,27 @@ jcheck "install: no subagentStatusLine without the flag" "$S" "'subagentStatusLi
 install_run --with-subagents
 check "install --with-subagents: exit 0 (got $irc)" [ "$irc" = 0 ]
 jcheck "install --with-subagents: set" "$S" "d['subagentStatusLine']" "{\"type\":\"command\",\"command\":\"$AL/agentline-subagents.sh\"}"
+# The panel lists Claude's subagents now: the main line keeps to the rest.
+jcheck "install --with-subagents: AGENTLINE_AGENTS=external" "$S" "d['env']['AGENTLINE_AGENTS']" '"external"'
 cp "$S" "$T/before.json"; before=$(n_backups)
 install_run --with-subagents
 check "install --with-subagents: idempotent" cmp -s "$S" "$T/before.json"
 check "install --with-subagents: no new backup" [ "$(n_backups)" = "$before" ]
 check "install --with-subagents: says left as-is" grep -q 'subagentStatusLine left as-is' "$T/iout"
+check "install --with-subagents: env already set" grep -q 'env AGENTLINE_AGENTS already external' "$T/iout"
+# A value the user chose is kept, and said so; the rest of the env block too.
+inst_home sub-userval
+printf '%s\n' '{"env":{"AGENTLINE_AGENTS":"all","AGENTLINE_TZ":"UTC"}}' > "$S"
+install_run --with-subagents
+check "install --with-subagents, user value: exit 0 (got $irc)" [ "$irc" = 0 ]
+jcheck "install --with-subagents, user value: kept" "$S" "d['env']" '{"AGENTLINE_AGENTS":"all","AGENTLINE_TZ":"UTC"}'
+check "install --with-subagents, user value: said so" grep -q 'env AGENTLINE_AGENTS left as-is: all' "$T/iout"
+# An env block that is no object is refused before anything is written.
+inst_home sub-badenv
+printf '%s\n' '{"env":[1]}' > "$S"; cp "$S" "$T/before.json"
+install_run --with-subagents
+check "install --with-subagents, env not an object: exit 1 (got $irc)" [ "$irc" = 1 ]
+check "install --with-subagents, env not an object: untouched" cmp -s "$S" "$T/before.json"
 # Someone else's subagent line: left alone, exit 3, unless --force.
 inst_home sub-foreign
 printf '%s\n' '{"subagentStatusLine":{"type":"command","command":"/opt/other/rows.sh"}}' > "$S"
@@ -5187,10 +5478,12 @@ install_run --with-subagents
 check "install foreign subagent line: exit 3 (got $irc)" [ "$irc" = 3 ]
 jcheck "install foreign subagent line: kept" "$S" "d['subagentStatusLine']['command']" '"/opt/other/rows.sh"'
 check "install foreign subagent line: snippet printed" grep -q '"subagentStatusLine"' "$T/iout"
+jcheck "install foreign subagent line: no AGENTLINE_AGENTS" "$S" "'AGENTLINE_AGENTS' in d.get('env', {})" 'false'
 jcheck "install foreign subagent line: statusLine still set" "$S" "d['statusLine']['command']" "\"$H/.claude/agentline/agentline.sh\""
 install_run --with-subagents --force
 check "install foreign subagent line --force: exit 0 (got $irc)" [ "$irc" = 0 ]
 jcheck "install foreign subagent line --force: replaced" "$S" "d['subagentStatusLine']['command']" "\"$H/.claude/agentline/agentline-subagents.sh\""
+jcheck "install foreign subagent line --force: AGENTLINE_AGENTS=external" "$S" "d['env']['AGENTLINE_AGENTS']" '"external"'
 check "install foreign subagent line --force: backed up" [ "$(n_backups)" -ge 1 ]
 # Ours at a custom path: upgraded in place, setting untouched.
 inst_home sub-custom
@@ -5206,6 +5499,7 @@ printf '%s\n' '{"statusLine":{"type":"command","command":"npx -y ccstatusline@la
 install_run --with-subagents
 check "install foreign statusLine + --with-subagents: exit 3" [ "$irc" = 3 ]
 jcheck "install foreign statusLine: subagent line not set" "$S" "'subagentStatusLine' in d" 'false'
+jcheck "install foreign statusLine: no AGENTLINE_AGENTS" "$S" "'env' in d" 'false'
 # --link-bin: a symlink into the install, never over something else.
 inst_home sub-bin
 install_run --link-bin

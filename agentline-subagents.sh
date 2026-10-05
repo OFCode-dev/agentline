@@ -763,6 +763,37 @@ v = rgb_val(env.get('AGENTLINE_COLOR_ORANGE'))
 if v:
     ORANGE = sgr('1;38;2;%d;%d;%d' % v)
 
+# Worker colours: an external worker on a row is drawn in the hue of its own
+# brand, not bold, the same as on agentline.sh's agent list. The key is the
+# worker label's first word (codex/gpt-6-astra -> codex); '*' is anything
+# else, a neutral grey. "r;g;b" for the dark theme, then for light (at least
+# 4.5:1 on white). The same table sits in agentline.sh (_worker_rgb), and
+# tests/run.sh checks that the two agree.
+# (worker colours)
+WORKER_RGB = {
+    'claude': ('217;119;87', '176;78;44'),
+    'codex': ('169;112;255', '123;63;228'),
+    'agy': ('66;133;244', '26;99;214'),
+    'antigravity': ('66;133;244', '26;99;214'),
+    'gemini': ('66;133;244', '26;99;214'),
+    'nvidia': ('118;185;0', '78;122;0'),
+    'nim': ('118;185;0', '78;122;0'),
+    'deepseek': ('118;185;0', '78;122;0'),
+    'hetzner': ('213;12;45', '192;10;40'),
+    'arb': ('43;181;168', '15;118;110'),
+    'jev': ('240;107;168', '191;47;110'),
+    'jevk5': ('240;107;168', '191;47;110'),
+    'bayrak': ('168;168;168', '102;102;102'),
+    'ssh': ('168;168;168', '102;102;102'),
+    '*': ('168;168;168', '102;102;102'),
+}
+# (end of worker colours)
+
+def worker_colour(label):
+    word = re.split(r'[/ ]', label, maxsplit=1)[0]
+    dark, light = WORKER_RGB.get(word, WORKER_RGB['*'])
+    return sgr('38;2;' + (light if THEME == 'light' else dark))
+
 if ASCII:
     G = dict(sep='|', spin='.oOo', done='ok', fail='x', stop='-', wait='o', other='?',
              low='', med='', high='', xhigh='', effort='effort:', fable='* ', ctx='ctx:',
@@ -1039,7 +1070,7 @@ def activity(pending):
     text, worker = tool_text(name, inp)
     if not text:
         return '', ''
-    short = (ORANGE if worker else '') + G['act'] + text + (RESET if worker else '')
+    short = (worker_colour(text) if worker else '') + G['act'] + text + (RESET if worker else '')
     out = short
     start = iso_epoch(ts)
     if start is not None:

@@ -47,6 +47,41 @@
   directory, and deleting `claude_api.lock` or `claude_agents.txt.lock`
   while a writer held it let the next writer walk past the holder. (J11a)
 
+- The 🤖 agent list is vertical, one entry per row, and no longer bold
+  yellow. Each entry is in its worker's colour, read from the label's
+  first word: codex purple, agy/Gemini blue, NVIDIA (DeepSeek, NIM) green,
+  Hetzner red, Claude orange, arb teal, jev pink, anything else grey, each
+  with a `light` variant of 4.5:1 or more on white; `mono`/`NO_COLOR`
+  strips them, the `✓label` flash stays green and `+N` is dim. When the
+  live width is known (`COLUMNS`) and every entry fits beside a row with 3
+  cells to spare, the list is a column at the right edge, padded with
+  spaces, entry 1 beside row 1. Otherwise (no `COLUMNS`, a row too long,
+  more entries than rows) it is rows of its own under line 3 and before
+  line 4, which is then not merged into line 3. A prompt-cache countdown
+  beside the column is padded to its widest form, so the column does not
+  move as it counts down. If the layout pass fails, bash joins the entries
+  on one line as before. (J11c)
+- `AGENTLINE_AGENTS=external` leaves Claude's own subagents off the main
+  line: Claude Code's subagent panel (`agentline-subagents.sh`) already
+  lists each of them. External workers registered through `agentline-run`
+  or the registry helper stay, since the panel never shows them. The
+  default `all` shows both, and any other value means `all`. It is part of
+  the render-cache key. `bash install.sh --with-subagents` writes it into
+  `settings.json`'s `env` block when the subagent line is agentline's (not
+  on exit 3), and keeps a value you set yourself. To tell the rows apart
+  the agent-tracker hook now ends its labels with a hidden mark (`\x1fc`,
+  like `agentline-run`'s pid); the registry helper keeps nothing after a
+  `\x1f` but a pid or that mark. Rows written by an older tracker carry no
+  mark and count as external until they age out (at most 5 minutes; a
+  dispatch row 2 minutes). An agent started under the older tracker still
+  has its row removed on its stop. (J11c)
+- The worker on a subagent row (`→ codex/gpt-6-astra ⏳2m`) uses the same
+  per-worker colours, not bold, instead of one bold orange for every
+  worker; `AGENTLINE_COLOR_ORANGE` no longer applies to it. The suite checks
+  that the colour tables in `agentline.sh` and `agentline-subagents.sh`
+  agree. The column starts on the first rows that all have room for
+  their entry, so a full line 1 moves it down instead of off. (J11c)
+
 - One secret check for everything agentline shows that it did not write
   itself. Claude Code already shows its subagents' descriptions, tools and
   commands, and agentline must not add a secret to them. A worker's model,

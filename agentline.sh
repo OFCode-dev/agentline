@@ -85,6 +85,9 @@ CACHE_TTL="${AGENTLINE_CACHE_TTL:-5}"
 # records for the layout pass (see "Layout"). Like the \x02 above, no cleaned
 # display string can contain them.
 _US=$'\x1f'; _RS=$'\x1e'
+# And the group separator: between the rows of the agent list, one segment
+# the layout pass prints as a column or one row per entry (see "Layout").
+_GS=$'\x1d'
 
 # The UTF-8 encoding of a C1 control (U+0080-U+009F) is the byte C2 followed
 # by 80-9F. Spelled as byte variables once here so the display sanitizer
@@ -286,8 +289,13 @@ _anim_frame() {
 # clock, so a cached tick counts the cache down without a fork. Past the
 # expiry it holds at 0s: Claude Code re-runs the status line itself when a
 # warm cache reaches expires_at, and that new payload says cold.
+#
+# A row with the agent column beside it (see "Layout") also holds
+# "${PCEXP_TOKEN}<epoch>:<cells>@@" in the padding before the column: it
+# becomes the spaces the countdown's widest form (<cells>) has over what it
+# prints now, so the column stays where it is while the countdown shortens.
 _pc_fill() {
-  local s="$1" e rem sec
+  local s="$1" e rem sec w pad=""
   _pc_out="$s"
   e="${s#*"$PCEXP_TOKEN"}"; e="${e%%@@*}"
   case "$e" in ''|*[!0-9]*) return ;; esac
@@ -295,6 +303,12 @@ _pc_fill() {
   sec=$(( rem % 60 )); [ "$sec" -lt 10 ] && sec="0$sec"
   if [ "$rem" -ge 60 ]; then rem="$(( rem / 60 ))m${sec}s"; else rem="${rem}s"; fi
   _pc_out="${s//"${PCEXP_TOKEN}${e}@@"/$rem}"
+  case "$_pc_out" in
+    *"${PCEXP_TOKEN}${e}:"*)
+      w="${_pc_out#*"${PCEXP_TOKEN}${e}:"}"; w="${w%%@@*}"
+      case "$w" in [0-9]|[0-9][0-9]) while [ "${#pad}" -lt $(( 10#$w - ${#rem} )) ]; do pad="$pad "; done ;; esac
+      _pc_out="${_pc_out//"${PCEXP_TOKEN}${e}:${w}@@"/$pad}" ;;
+  esac
 }
 
 _tick_now
@@ -303,14 +317,15 @@ _tick_now
 # terminal resize — and it is not in the payload, so without it a resize kept
 # serving the old width's render until the TTL ran out. `+set:` tells an
 # empty AGENTLINE_DROP (drop nothing) from an unset one (the default list).
-# The theme, glyph set, colour overrides, the opt-in >200k tag and how many
+# The theme, glyph set, colour overrides, the opt-in >200k tag,
+# AGENTLINE_AGENTS (which rows the agent list shows) and how many
 # agents and API providers are named (AGENTLINE_AGENT_SHOW,
 # AGENTLINE_API_SHOW) change the render too, and so
 # does a multiplexer: under tmux, screen or zellij the OSC-8 links are left
 # out (see "Hyperlinks"), and without their presence in the key a render
 # made outside one was replayed, links and all, inside one for up to
 # $AGENTLINE_CACHE_TTL. Only presence counts, as it does there.
-_cache_key="${input}${_US}${COLUMNS-}|${AGENTLINE_WIDTH-}|${AGENTLINE_LAYOUT-}|${AGENTLINE_DROP+set:}${AGENTLINE_DROP-}|${AGENTLINE_LINKS-}|${_AL_THEME}|${AGENTLINE_GLYPHS-}|${AGENTLINE_COLOR_FABLE_FROM-}|${AGENTLINE_COLOR_FABLE_TO-}|${AGENTLINE_COLOR_GOLD-}|${AGENTLINE_COLOR_ORANGE-}|${TMUX:+t}${STY:+s}${ZELLIJ:+z}|${AGENTLINE_TAG_200K-}|${AGENTLINE_API_SHOW-}|${AGENTLINE_AGENT_SHOW-}"
+_cache_key="${input}${_US}${COLUMNS-}|${AGENTLINE_WIDTH-}|${AGENTLINE_LAYOUT-}|${AGENTLINE_DROP+set:}${AGENTLINE_DROP-}|${AGENTLINE_LINKS-}|${_AL_THEME}|${AGENTLINE_GLYPHS-}|${AGENTLINE_COLOR_FABLE_FROM-}|${AGENTLINE_COLOR_FABLE_TO-}|${AGENTLINE_COLOR_GOLD-}|${AGENTLINE_COLOR_ORANGE-}|${TMUX:+t}${STY:+s}${ZELLIJ:+z}|${AGENTLINE_TAG_200K-}|${AGENTLINE_API_SHOW-}|${AGENTLINE_AGENT_SHOW-}|${AGENTLINE_AGENTS-}"
 # The cache files are read with the `read` builtin, not `$(<file)`: bash 5
 # serves `$(<file)` in-process, but bash 3.2 (macOS) forks a subshell for
 # each, which cost this path two forks a second.
@@ -1314,15 +1329,23 @@ fi
 #   - a finished one ("✓<label>", written on SubagentStop) is shown for 10
 #     seconds after it stopped, the newest two at most, so a finish reads as
 #     a flash rather than as a row that vanished.
-# It prints "<running><US><finished>", split below, because the two get
-# different colours and the colours cannot ride inside the text (cleaning
-# strips the escapes). The joins happen in awk: no trailing separator to trim
-# and no sed (BSD sed aborted on a label with an invalid byte). The time is
-# $_now_epoch, set at startup: the `date +%s` this used to run was a fork per
-# full render for a number the script already had.
-active_agents=""
-agents_done=""
+#   - a row the tracker hook wrote carries the mark of a Claude subagent
+#     (\x1fc after the label, see agentline-agent.sh). With
+#     AGENTLINE_AGENTS=external those rows are left out: Claude Code's
+#     subagent panel (agentline-subagents.sh) already lists every one of
+#     them, and the main line keeps the work the panel never shows, the
+#     external workers agentline-run and other scripts register.
+#     install.sh --with-subagents sets it. The default, all, shows both.
+# It prints one entry per line, "<kind><text>": c a Claude subagent, e any
+# other running row, n the "+N" count, d a finished one. The kind picks the
+# colour (see "Agent rows" below), and the colours cannot ride inside the
+# text (cleaning strips the escapes). The joins happen in awk: no sed (BSD
+# sed aborted on a label with an invalid byte). The time is $_now_epoch, set
+# at startup: the `date +%s` this used to run was a fork per full render for
+# a number the script already had.
+_ag_raw=""
 case "${AGENTLINE_AGENT_SHOW-}" in ''|*[!0-9]*|???*) _ag_show=4 ;; *) _ag_show=$(( 10#$AGENTLINE_AGENT_SHOW )) ;; esac
+case "${AGENTLINE_AGENTS-}" in external) _ag_ext=1 ;; *) _ag_ext=0 ;; esac
 # Only a regular file of ours, not a symlink, like the legacy one: -f alone
 # refuses a FIFO (which would hang awk's open, and so the render, every
 # second) but follows a link to anyone's file, and a CLAUDE_AGENTS_FILE may
@@ -1333,7 +1356,7 @@ _ag_files=()
 [ -f "$AGENTS_FILE" ] && [ ! -L "$AGENTS_FILE" ] && [ -O "$AGENTS_FILE" ] && _ag_files=("$AGENTS_FILE")
 [ -n "$_agents_legacy" ] && _ag_files[${#_ag_files[@]}]="$_agents_legacy"
 if [ "${#_ag_files[@]}" -gt 0 ]; then
-  active_agents=$(awk -v now="$_now_epoch" -v show="$_ag_show" -v us="$_US" '
+  _ag_raw=$(awk -v now="$_now_epoch" -v show="$_ag_show" -v ext="$_ag_ext" '
     function cut(s) { if (length(s) > 25) s = substr(s, 1, 22) "..."; return s }
     NR > 512 { exit }
     {
@@ -1341,25 +1364,25 @@ if [ "${#_ag_files[@]}" -gt 0 ]; then
       if ($1 !~ /^[0-9]+$/ || age < 0) next
       label = substr($0, index($0, $2))
       # A key may carry a run id after a unit separator (agentline-run: one
-      # row per run); it is not shown, and runs of one label count as one.
+      # row per run), or the mark of a Claude subagent; neither is shown,
+      # and runs of one label count as one.
+      claude = (label ~ /\037c$/)
       sub(/\037.*/, "", label)
+      if (claude && ext) next
       if (index(label, "✓") == 1) {
-        if (age < 10) done[nd++] = "✓" cut(substr(label, length("✓") + 1))
+        if (age < 10) done[nd++] = cut(substr(label, length("✓") + 1))
       } else if (age < 300 && label != "") {
-        if (!(label in cnt)) ord[n++] = label
-        cnt[label]++
+        key = (claude ? "c" : "e") label
+        if (!(key in cnt)) ord[n++] = key
+        cnt[key]++
       }
     }
     END {
       for (i = 0; i < n && i < show; i++)
-        live = live (i ? " · " : "") cut(ord[i]) (cnt[ord[i]] > 1 ? " ×" cnt[ord[i]] : "")
-      if (n > show) live = live (show ? " · " : "") "+" (n - show)
-      out = ""
-      for (i = (nd > 2 ? nd - 2 : 0); i < nd; i++) out = out (out == "" ? "" : " · ") done[i]
-      printf "%s%s%s", live, us, out
+        printf "%s%s%s\n", substr(ord[i], 1, 1), cut(substr(ord[i], 2)), (cnt[ord[i]] > 1 ? " ×" cnt[ord[i]] : "")
+      if (n > show) printf "n+%d\n", n - show
+      for (i = (nd > 2 ? nd - 2 : 0); i < nd; i++) printf "d%s\n", done[i]
     }' "${_ag_files[@]}")
-  agents_done="${active_agents#*"$_US"}"
-  active_agents="${active_agents%%"$_US"*}"
 fi
 [ -n "$_AL_DOCTOR" ] && _dt_mark agents
 
@@ -1570,7 +1593,7 @@ _clean() {  # _clean <varname> -- strip control characters and backslashes
   v="${v//\\/}"
   printf -v "$1" '%s' "$v"
 }
-for _v in git_branch git_repo git_url git_ab git_dirty folder active_mcps active_agents agents_done dev_ports; do
+for _v in git_branch git_repo git_url git_ab git_dirty folder active_mcps dev_ports; do
   _clean "$_v"
 done
 
@@ -1668,9 +1691,66 @@ if [ "$_AL_GLYPHS" = ascii ]; then
   git_dirty="${git_dirty//±/~}"; git_dirty="${git_dirty//✖/!}"
   svc_panel="${svc_panel//✓/ok}"; svc_panel="${svc_panel//✗/FAIL}"; svc_panel="${svc_panel//·//}"
   active_mcps="${active_mcps//·//}"
-  active_agents="${active_agents//·//}"
-  agents_done="${agents_done//·//}"; agents_done="${agents_done//✓/ok:}"
 fi
+
+# === Agent rows ===
+# The 🤖 list, one entry per row (the layout pass prints it as a column at
+# the right edge, or as rows under line 3), each in its worker's colour: the
+# hue the worker's own brand uses, not bold, so a glance tells codex from a
+# Hetzner run from Claude's own subagents. The worker is the label's first
+# word, up to a "/" or a space: the classifier's codex/gpt-6-astra or
+# arb/qwen3.6, or the first word of a --label or a script's own label
+# ("codex round 1"). Rows the tracker hook marked are Claude's, whatever
+# their text; anything this table does not know is a neutral grey. Each
+# colour is "r;g;b" for the dark theme, then for light (at least 4.5:1 on
+# white); mono strips them with every other colour. The same table sits in
+# agentline-subagents.sh (WORKER_RGB), for the activity on a subagent row,
+# and tests/run.sh checks that the two agree. A case: no fork.
+# (worker colours)
+_worker_rgb() {  # _worker_rgb <worker word> -> $_wrgb "r;g;b"
+  case "$1" in
+    claude)               _wrgb="217;119;87 176;78;44" ;;
+    codex)                _wrgb="169;112;255 123;63;228" ;;
+    agy|antigravity|gemini) _wrgb="66;133;244 26;99;214" ;;
+    nvidia|nim|deepseek)  _wrgb="118;185;0 78;122;0" ;;
+    hetzner)              _wrgb="213;12;45 192;10;40" ;;
+    arb)                  _wrgb="43;181;168 15;118;110" ;;
+    jev|jevk5)            _wrgb="240;107;168 191;47;110" ;;
+    bayrak|ssh)           _wrgb="168;168;168 102;102;102" ;;
+    *)                    _wrgb="168;168;168 102;102;102" ;;
+  esac
+  # (end of worker colours)
+  if [ "$_AL_THEME" = light ]; then _wrgb="${_wrgb#* }"; else _wrgb="${_wrgb% *}"; fi
+}
+# $_ag_raw (the reader's "<kind><text>" lines) -> $_ag_rows, the coloured
+# entries joined by $_GS, plus $active_agents and $agents_done, the plain
+# texts, for --doctor and for local.sh (blank both to drop the segment).
+# Each text is cleaned on its own, like every host-derived string (see
+# "Display sanitization"). A finished one is green, the "+N" dim.
+_ag_rows=""; active_agents=""; agents_done=""
+_ag_nl=$'\n'
+_ag_rest="$_ag_raw"
+while [ -n "$_ag_rest" ]; do
+  _ag_l="${_ag_rest%%"$_ag_nl"*}"
+  case "$_ag_rest" in *"$_ag_nl"*) _ag_rest="${_ag_rest#*"$_ag_nl"}" ;; *) _ag_rest="" ;; esac
+  _ag_k="${_ag_l:0:1}"; _ag_t="${_ag_l#?}"
+  _clean _ag_t
+  [ -n "$_ag_t" ] || continue
+  case "$_ag_k" in
+    d) _ag_e="\033[32m${G_DONE}${_ag_t}${RESET}"
+       agents_done="${agents_done:+${agents_done} ${G_DOT} }${G_DONE}${_ag_t}" ;;
+    n) _ag_e="${DIM}${_ag_t}${RESET}"
+       active_agents="${active_agents:+${active_agents} ${G_DOT} }${_ag_t}" ;;
+    c|e)
+       _ag_w=claude
+       [ "$_ag_k" = e ] && _ag_w="${_ag_t%%[/ ]*}"
+       _worker_rgb "$_ag_w"
+       _ag_e="\033[38;2;${_wrgb}m${_ag_t}${RESET}"
+       active_agents="${active_agents:+${active_agents} ${G_DOT} }${_ag_t}" ;;
+    *) continue ;;
+  esac
+  _ag_rows="${_ag_rows:+${_ag_rows}${_GS}}${G_AGENTS}${_ag_e}"
+done
 
 # === Number helpers ===
 # A full render used to fork ~18 small awk/date programs (a colour here, a
@@ -2926,9 +3006,11 @@ _seg clock "${CYAN}${time_str}${RESET}"
 
 # Line 3 — Claude layer: MCP servers + active agents + resume command
 [ -n "$active_mcps" ]   && _seg mcp "${G_MCP}${DIM}${active_mcps}${RESET}"
-# Running agents in yellow, then the ones that just finished in green.
+# One entry per row, each in its worker's colour (see "Agent rows"), then
+# the ones that just finished in green. The rows are joined by $_GS: the
+# layout pass sets them in a column of their own.
 if [ -n "$active_agents$agents_done" ]; then
-  _seg agents "${G_AGENTS}${active_agents:+${YELLOW}${active_agents}${RESET}}${active_agents:+${agents_done:+ ${DIM}${G_DOT}${RESET} }}${agents_done:+${GREEN}${agents_done}${RESET}}"
+  _seg agents "$_ag_rows"
 fi
 # External APIs this session used (see "API meter").
 [ -n "$api_body" ] && _seg api "${G_API}${api_body}"
@@ -3040,6 +3122,9 @@ grad_re = re.compile(re.escape(sys.argv[10]) + '(.*?)' + re.escape(sys.argv[11])
 # default windows, "12m00s" for AGENTLINE_CACHE_WARN=720).
 pcexp_re = re.compile(re.escape(sys.argv[12]) + '[0-9]*@@')
 pc_meas = sys.argv[14]
+# The live terminal width is known (COLUMNS): the agent list may take a
+# column at the right edge (see the end of this program).
+live = sys.argv[17] == '1'
 # The segment records come on stdin (a here-string: one trailing newline).
 segs = sys.stdin.buffer.read().decode('utf-8', 'surrogateescape')
 if segs.endswith('\n'):
@@ -3184,26 +3269,84 @@ if not any(lines):
 is_default = lines == parse(default_layout)
 if 'warn' in seg:
     lines[0].insert(0, 'warn')
+# The agent list (🤖) is no member of its line: it is a list of rows, one
+# entry each, joined by \x1d. It goes where its line names it, below.
+ag_line, ag = None, []
+for i, names in enumerate(lines):
+    if 'agents' in names:
+        names.remove('agents')
+        ag = [r for r in seg.get('agents', '').split('\x1d') if r]
+        ag_line = i if ag else None
+        break
 texts = [fit(names) for names in lines]
 
-rows = []
-if is_default:
-    # Lines 1 and 2 are always printed, as they always were, and are only
-    # measured in fit mode; lines 3 and 4 merge when they fit together, wrap
-    # when they do not, and vanish when empty.
-    for t in texts[:2]:
-        rows += (wrap(t) if fitting else []) or [sep.join(t)]
-    l3, l4 = texts[2], texts[3]
-    if l3 and l4 and vis(sep.join(l3 + l4)) <= width:
-        rows.append(sep.join(l3 + l4))
+def build(merge):
+    """The rows, and after each layout line how many rows there are."""
+    rows, ends = [], []
+    if is_default:
+        # Lines 1 and 2 are always printed, as they always were, and are only
+        # measured in fit mode; lines 3 and 4 merge when they fit together,
+        # wrap when they do not, and vanish when empty.
+        for t in texts[:2]:
+            rows += (wrap(t) if fitting else []) or [sep.join(t)]
+            ends.append(len(rows))
+        l3, l4 = texts[2], texts[3]
+        if merge and l3 and l4 and vis(sep.join(l3 + l4)) <= width:
+            rows.append(sep.join(l3 + l4))
+            ends += [len(rows)] * 2
+        else:
+            rows += wrap(l3)
+            ends.append(len(rows))
+            rows += wrap(l4)
+            ends.append(len(rows))
     else:
-        rows += wrap(l3) + wrap(l4)
-else:
-    # A custom layout: empty lines collapse, and the same rule decides what
-    # is measured — every line in fit mode, the third line on otherwise.
-    for i, t in enumerate(texts):
-        if t:
-            rows += wrap(t) if fitting or i >= 2 else [sep.join(t)]
+        # A custom layout: empty lines collapse, and the same rule decides
+        # what is measured — every line in fit mode, the third line on
+        # otherwise.
+        for i, t in enumerate(texts):
+            if t:
+                rows += wrap(t) if fitting or i >= 2 else [sep.join(t)]
+            ends.append(len(rows))
+    return rows, ends
+
+# The agent list as a column at the right edge: the entries beside
+# consecutive rows, from the first row on which all of them have room (a
+# long line 1 moves the column down rather than off), padded with spaces
+# so each ends at the width, at least 3 cells from the row's own text. Claude Code prints a status line as plain lines, so
+# spaces are the only way to place it. Only with the live width (COLUMNS):
+# padded to a guessed width, the column would land mid-screen or wrap. When
+# a row has no room for its entry, or there are more entries than rows, it
+# is no column at all. A row holding the prompt-cache countdown is measured
+# at the countdown's widest form; the countdown prints narrower as it runs
+# down, so the padding carries a token that bash fills (_pc_fill) with the
+# difference, and the column does not move while it counts.
+def column(rows):
+    if not live or len(ag) > len(rows):
+        return None
+    for top in range(len(rows) - len(ag) + 1):
+        out = list(rows)
+        for i, e in enumerate(ag):
+            r = rows[top + i]
+            gap = width - vis(r) - vis(e)
+            if gap < 3:
+                break
+            m = pcexp_re.search(r)
+            pad = ' ' * gap + (m.group(0)[:-2] + ':%d@@' % len(pc_meas) if m else '')
+            out[top + i] = r + pad + e
+        else:
+            return out
+    return None
+
+rows, ends = build(True)
+if ag:
+    # Else: one row per entry, right after the rows of the line that names
+    # it (the default: under line 3, the Claude layer, before line 4's
+    # system layer, which is then never merged into line 3).
+    out = column(rows) or column(build(False)[0])
+    if out is None:
+        rows, ends = build(False)
+        out = rows[:ends[ag_line]] + ag + rows[ends[ag_line]:]
+    rows = out
 sys.stdout.buffer.write(os.fsencode('\\n'.join(rows)))
 PYEOF
 # The segments go in on stdin, not as an argument: one argv string is capped
@@ -3213,7 +3356,7 @@ PYEOF
 out=$(python3 -I -c "$_AL_PY" "$STATUSLINE_WIDTH" "$P" "${AGENTLINE_LAYOUT:-$_lay_def}" \
   "$_lay_def" "$_fit" "${AGENTLINE_DROP-$AGENTLINE_DROP_DEFAULT}" \
   "$CLOCK_TOKEN" "$ANIM_MAX_TOKEN" "$ANIM_ULTRA_TOKEN" "$GRAD_OPEN" "$GRAD_CLOSE" "$PCEXP_TOKEN" "$_WARNED" "$pc_meas" \
-  "$FABLE_FROM" "$FABLE_TO" <<< "$SEGS")
+  "$FABLE_FROM" "$FABLE_TO" "${_cols:+1}" <<< "$SEGS")
 _layout_rc=$?
 [ -n "$_AL_DOCTOR" ] && _dt_mark layout
 
@@ -3243,6 +3386,7 @@ if [ "$_layout_rc" != 0 ] && [ -z "$out" ] && [ -n "$SEGS" ]; then
         *"${_RS}${_n}${_US}"*)
           _t="${_all#*"${_RS}${_n}${_US}"}"; _t="${_t%%"${_RS}"*}"
           _t="${_t//"$GRAD_OPEN"/}"; _t="${_t//"$GRAD_CLOSE"/}"
+          _t="${_t//"$_GS"/ ${DIM}${G_DOT}${RESET} }"
           _row="${_row:+${_row}${P}}${_t}" ;;
       esac
     done
