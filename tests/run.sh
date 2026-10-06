@@ -125,7 +125,9 @@ ESC=$(printf '\033')
 # === Reporting ===
 n_pass=0; n_fail=0; n_skip=0
 pass() { n_pass=$((n_pass + 1)); }
-fail() { n_fail=$((n_fail + 1)); echo "FAIL: $*"; }
+# Under GitHub Actions a failure is also an annotation, which the public API
+# serves without a login (the raw job log needs one).
+fail() { n_fail=$((n_fail + 1)); echo "FAIL: $*"; [ -n "${GITHUB_ACTIONS-}" ] && printf '::error::%s\n' "$*" | head -c 900 && echo; return 0; }
 skip() { n_skip=$((n_skip + 1)); echo "SKIP: $*"; }
 check() {  # check <name> <command...> — pass when the command succeeds
   local name="$1"; shift
