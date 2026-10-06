@@ -139,8 +139,16 @@ check() {  # check <name> <command...> — pass when the command succeeds
 # that never reached the summary (an abort, with the check it followed).
 ci_exit() {
   [ -n "${GITHUB_ACTIONS-}" ] || return 0
-  if [ -z "${DONE-}" ]; then printf '::error::run.sh stopped early after check: %s\n' "${LAST_CHECK:0:300}"; fi
+  if [ -z "${DONE-}" ]; then
+    printf '::error::run.sh stopped early after check: %s\n' "${LAST_CHECK:0:300}"
+    [ -s "${CI_ERR-}" ] && printf '::error::run.sh stderr tail: %s\n' "$(tail -n 6 "$CI_ERR" | tr '\n' '|' | head -c 800)"
+  fi
+  return 0
 }
+if [ -n "${GITHUB_ACTIONS-}" ]; then
+  CI_ERR="${TMPDIR:-/tmp}/agentline-ci-stderr.$$"
+  exec 2> >(tee -a "$CI_ERR" >&2)
+fi
 
 # === Helpers ===
 # The script renders under LC_ALL=C unless AGENTLINE_TEST_LC names another
@@ -4719,7 +4727,7 @@ for line in open(sys.argv[1], encoding='utf-8'):
 open(sys.argv[2], 'w', encoding='utf-8').write(''.join(r + '\n' for r in rows))
 PYEOF
 }
-srow() { sed -n "s/^$1$TAB//p" "$T/srows"; }       # srow <id> -> its plain row
+srow() { LAST_CHECK="srow $1"; sed -n "s/^$1$TAB//p" "$T/srows"; }       # srow <id> -> its plain row
 shas() { srow "$1" | grep -qF -- "$2"; }            # shas <id> <text>
 sgot() { if shas "$1" "$2"; then pass; else fail "subagents: $1 has '$2' (got: $(srow "$1"))"; fi; }
 snot() { if shas "$1" "$2"; then fail "subagents: $1 has no '$2' (got: $(srow "$1"))"; else pass; fi; }
