@@ -89,7 +89,7 @@ TNOW=$(date +%s)
 umask 022
 T=$(mktemp -d "${TMPDIR:-/tmp}/agentline-test.XXXXXX") || exit 1
 T=$(cd "$T" && pwd -P)
-trap 'rm -rf "$T"' EXIT
+trap 'ci_exit; rm -rf "$T"' EXIT
 
 HOME_F="$T/home"            # fixture HOME
 WORK="$HOME_F/work"         # cwd of every render; shown as ~/work
@@ -129,9 +129,17 @@ pass() { n_pass=$((n_pass + 1)); }
 # serves without a login (the raw job log needs one).
 fail() { n_fail=$((n_fail + 1)); echo "FAIL: $*"; [ -n "${GITHUB_ACTIONS-}" ] && printf '::error::%s\n' "$*" | head -c 900 && echo; return 0; }
 skip() { n_skip=$((n_skip + 1)); echo "SKIP: $*"; }
+LAST_CHECK=""
 check() {  # check <name> <command...> — pass when the command succeeds
   local name="$1"; shift
+  LAST_CHECK="$name"
   if "$@"; then pass; else fail "$name"; fi
+}
+# Under GitHub Actions the outcome is an annotation too, and so is an exit
+# that never reached the summary (an abort, with the check it followed).
+ci_exit() {
+  [ -n "${GITHUB_ACTIONS-}" ] || return 0
+  if [ -z "${DONE-}" ]; then printf '::error::run.sh stopped early after check: %s\n' "${LAST_CHECK:0:300}"; fi
 }
 
 # === Helpers ===
@@ -1740,17 +1748,6 @@ PYEOF
   fi
   check "full render: at most 8 forks besides date (got $full_forks, $ndate date: $full_progs)" [ $(( full_forks - ndate )) -le 8 ]
   check "fast path: at most $max_forks fork(s), got $tick_forks ($tick_progs)" [ "$tick_forks" -le "$max_forks" ]
-  # The API meter's reader is builtins only (J11a): the api-meter fixture
-  # renders with its ledger and without it in the same forks and execs.
-  fill "$FIX/payloads/api-meter.json" "$PAY/api-meter.json"
-  prepare api-meter "$PAY/api-meter.json"
-  strace_render "$PAY/api-meter.json" "$T/st-api1"
-  prepare api-meter "$PAY/api-meter.json"; rm -f "$SIDE"/claude_api.*
-  strace_render "$PAY/api-meter.json" "$T/st-api0"
-  read -r api1_forks api1_progs <<< "$(count_procs "$T/st-api1")"
-  read -r api0_forks api0_progs <<< "$(count_procs "$T/st-api0")"
-  check "api meter: the same forks with a ledger and without ($api1_forks vs $api0_forks)" [ "$api1_forks" = "$api0_forks" ]
-  check "api meter: the same execs ([$api1_progs] vs [$api0_progs])" [ "$api1_progs" = "$api0_progs" ]
   bad=""
   for prog in ${tick_progs//,/ }; do
     case " $allowed " in *" $prog "*) ;; *) bad="$bad $prog" ;; esac
@@ -1762,6 +1759,19 @@ PYEOF
       "$TEST_BASH" "$ROOT/agentline.sh" < "$p" > /dev/null 2>&1 )
   n_reads=$(grep -c 'read(' "$T/st-read")
   check "fast path: buffered reads, got $n_reads read(2) calls" [ "$n_reads" -lt 200 ]
+  # (After the read count: prepare clears the render cache, and the read
+  # count is the cached tick's.)
+  # The API meter's reader is builtins only (J11a): the api-meter fixture
+  # renders with its ledger and without it in the same forks and execs.
+  fill "$FIX/payloads/api-meter.json" "$PAY/api-meter.json"
+  prepare api-meter "$PAY/api-meter.json"
+  strace_render "$PAY/api-meter.json" "$T/st-api1"
+  prepare api-meter "$PAY/api-meter.json"; rm -f "$SIDE"/claude_api.*
+  strace_render "$PAY/api-meter.json" "$T/st-api0"
+  read -r api1_forks api1_progs <<< "$(count_procs "$T/st-api1")"
+  read -r api0_forks api0_progs <<< "$(count_procs "$T/st-api0")"
+  check "api meter: the same forks with a ledger and without ($api1_forks vs $api0_forks)" [ "$api1_forks" = "$api0_forks" ]
+  check "api meter: the same execs ([$api1_progs] vs [$api0_progs])" [ "$api1_progs" = "$api0_progs" ]
   # The seeded probe cache must keep every host probe from running.
   leaked=""
   for prog in ${full_progs//,/ }; do
@@ -2387,7 +2397,7 @@ EOF
 # Started from a subshell, so it is not a job of this shell: the registry
 # tests below use a bare `wait`, which would otherwise wait on it forever.
 USRV=$( python3 "$T/fakeusage.py" "$T/fetches" "$T/usage-port" > "$T/fakeusage.err" 2>&1 < /dev/null & echo $! )
-trap 'kill "$USRV" 2>/dev/null; rm -rf "$T"' EXIT
+trap 'ci_exit; kill "$USRV" 2>/dev/null; rm -rf "$T"' EXIT
 # The server skips HTTPServer's reverse DNS lookup of its own address, which
 # on macOS runners outlasted the old 5 s wait, and the wait is generous now
 # too (a cold python start on a CI runner can take seconds). Should the
@@ -5547,4 +5557,6 @@ rm -rf "$HOME_F/.claude/agentline" "$HOME_F/.claude/settings.json"
 
 # ===========================================================================
 echo "agentline tests (bash $TEST_BASH_MAJOR): $n_pass passed, $n_fail failed, $n_skip skipped"
+DONE=1
+[ -n "${GITHUB_ACTIONS-}" ] && echo "::notice::agentline tests (bash $TEST_BASH_MAJOR): $n_pass passed, $n_fail failed, $n_skip skipped"
 [ "$n_fail" = 0 ]
