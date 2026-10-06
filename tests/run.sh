@@ -141,15 +141,10 @@ ci_exit() {
   [ -n "${GITHUB_ACTIONS-}" ] || return 0
   if [ -z "${DONE-}" ]; then
     printf '::error::run.sh stopped early after check: %s\n' "${LAST_CHECK:0:300}"
-    [ -s "${CI_ERR-}" ] && printf '::error::run.sh stderr tail: %s\n' "$(tail -n 6 "$CI_ERR" | tr '\n' '|' | head -c 800)"
   fi
-  rm -f "${CI_ERR-}"
   return 0
 }
-if [ -n "${GITHUB_ACTIONS-}" ]; then
-  CI_ERR="${TMPDIR:-/tmp}/agentline-ci-stderr.$$"
-  exec 2> >(tee -a "$CI_ERR" >&2)
-fi
+
 
 # === Helpers ===
 # The script renders under LC_ALL=C unless AGENTLINE_TEST_LC names another
