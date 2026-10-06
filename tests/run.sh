@@ -143,6 +143,7 @@ ci_exit() {
     printf '::error::run.sh stopped early after check: %s\n' "${LAST_CHECK:0:300}"
     [ -s "${CI_ERR-}" ] && printf '::error::run.sh stderr tail: %s\n' "$(tail -n 6 "$CI_ERR" | tr '\n' '|' | head -c 800)"
   fi
+  rm -f "${CI_ERR-}"
   return 0
 }
 if [ -n "${GITHUB_ACTIONS-}" ]; then
@@ -453,6 +454,31 @@ for s in apostrophe dquote backtick paren earlier case; do
   if python3 "$T/heredoc_guard.py" "$G/$s.sh" > /dev/null 2>&1; then fail "heredoc guard misses: $s"; else pass; fi
 done
 if msg=$(python3 "$T/heredoc_guard.py" "$G/clean.sh" 2>&1); then pass; else fail "heredoc guard false alarm: $msg"; fi
+
+# A variable name followed directly by a non-ASCII character must be
+# braced: macOS's bash 3.2 in a UTF-8 locale reads the character's first
+# byte as part of the name ($TAB written before a braille spinner became
+# the unbound "TAB\xe2" and ended
+# the whole suite under set -u on CI only; review of J11, stage J11c).
+cat > "$T/brace_lint.py" <<"PYEOF"
+import re, sys
+bad = []
+for path in sys.argv[1:]:
+    for n, line in enumerate(open(path, encoding="utf-8"), 1):
+        if re.search("[$][A-Za-z_][A-Za-z0-9_]*[^\x00-\x7f]", line):
+            bad.append("%s:%d" % (path.rsplit("/", 1)[-1], n))
+print(" ".join(bad))
+sys.exit(1 if bad else 0)
+PYEOF
+if msg=$(python3 "$T/brace_lint.py" "$ROOT/agentline.sh" "$ROOT/agentline-subagents.sh" "$ROOT/agentline-run" \
+     "$ROOT/install.sh" "$ROOT"/hooks/*.sh "$TESTS/run.sh" "$ROOT"/bench/*.sh 2>&1); then
+  pass
+else
+  fail "unbraced variable before a non-ASCII character: $msg"
+fi
+printf 'x="$A\342\240\213"\n' > "$G/brace-bad.sh"; printf 'x="${A}\342\240\213 $B x"\n' > "$G/brace-ok.sh"
+if python3 "$T/brace_lint.py" "$G/brace-bad.sh" > /dev/null 2>&1; then fail "brace lint misses \$A before a non-ASCII byte"; else pass; fi
+if msg=$(python3 "$T/brace_lint.py" "$G/brace-ok.sh" 2>&1); then pass; else fail "brace lint false alarm: $msg"; fi
 
 # Portability lint: every sed, grep and tr the runtime runs must carry an
 # LC_ALL=C prefix. Under a UTF-8 locale BSD sed and tr abort at the first
@@ -4797,7 +4823,7 @@ w-plain|Bash git
 w-escape|codex
 EOF
 check "subagents: the rest of a running row" \
-  grep -qxF "w-codex$TAB⠋ task w-codex │ Haiku 4.5 │ 📊 12% │ ⏱️ 5m │ → codex/gpt-6-astra ⏳2m │ ▃▅▆▇█▆" "$T/srows"
+  grep -qxF "w-codex${TAB}⠋ task w-codex │ Haiku 4.5 │ 📊 12% │ ⏱️ 5m │ → codex/gpt-6-astra ⏳2m │ ▃▅▆▇█▆" "$T/srows"
 # No command text, prompt, description, query or key ever reaches a row.
 check "subagents: no raw command text" sh -c "! grep -qE 'SECRET|review the diff|owned|prompt|messages' '$T/sout'"
 # Each worker in its own colour, agentline.sh's agent-list table, not bold.
