@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 983 278" width="983" height="278" role="img" aria-label="agentline agent column rendered in a terminal window">
+<rect x="0.5" y="0.5" width="982" height="277" rx="10" fill="#15171e" stroke="#2c3040"/>
+<path d="M0.5 40 H982.5" stroke="#2c3040"/>
+<circle cx="24" cy="20" r="5.5" fill="#ff5f57"/>
+<circle cx="44" cy="20" r="5.5" fill="#febc2e"/>
+<circle cx="64" cy="20" r="5.5" fill="#28c840"/>
+<text x="491" y="24" text-anchor="middle" font-family="SFMono-Regular, Menlo, Consolas, 'DejaVu Sans Mono', 'Noto Color Emoji', monospace" font-size="12" fill="#6f7484">agentline — agents at work</text>
+<text x="22" y="70" xml:space="preserve" font-family="SFMono-Regular, Menlo, Consolas, 'DejaVu Sans Mono', 'Noto Color Emoji', monospace" font-size="13.0"><tspan fill="#56d4dd" font-weight="600">Sonnet 5</tspan></text>
+<text x="22" y="94" xml:space="preserve" font-family="SFMono-Regular, Menlo, Consolas, 'DejaVu Sans Mono', 'Noto Color Emoji', monospace" font-size="13.0"><tspan fill="#6cb6ff" font-weight="600">~/work</tspan><tspan fill="#c8ccd4"> </tspan><tspan fill="#7d828f">│</tspan><tspan fill="#c8ccd4"> </tspan><tspan fill="#7d828f">10/10/2026 Sat</tspan><tspan fill="#c8ccd4"> </tspan><tspan fill="#7d828f">│</tspan><tspan fill="#c8ccd4"> </tspan><tspan fill="#56d4dd" font-weight="600">12:34:59</tspan></text>
+<text x="22" y="118" xml:space="preserve" font-family="SFMono-Regular, Menlo, Consolas, 'DejaVu Sans Mono', 'Noto Color Emoji', monospace" font-size="13.0"><tspan fill="#c8ccd4">♻️ </tspan><tspan fill="#7d828f">claude --resume agents-0001</tspan></text>
+<text x="22" y="142" xml:space="preserve" font-family="SFMono-Regular, Menlo, Consolas, 'DejaVu Sans Mono', 'Noto Color Emoji', monospace" font-size="13.0"><tspan fill="#c8ccd4">🤖 </tspan><tspan fill="#a8a8a8">explore the repo</tspan></text>
+<text x="22" y="166" xml:space="preserve" font-family="SFMono-Regular, Menlo, Consolas, 'DejaVu Sans Mono', 'Noto Color Emoji', monospace" font-size="13.0"><tspan fill="#c8ccd4">🤖 </tspan><tspan fill="#a8a8a8">review #a1b2c3</tspan></text>
+<text x="22" y="190" xml:space="preserve" font-family="SFMono-Regular, Menlo, Consolas, 'DejaVu Sans Mono', 'Noto Color Emoji', monospace" font-size="13.0"><tspan fill="#c8ccd4">🤖 </tspan><tspan fill="#a8a8a8">fork</tspan></text>
+<text x="22" y="214" xml:space="preserve" font-family="SFMono-Regular, Menlo, Consolas, 'DejaVu Sans Mono', 'Noto Color Emoji', monospace" font-size="13.0"><tspan fill="#c8ccd4">🤖 </tspan><tspan fill="#a970ff">codex round 1</tspan></text>
+<text x="22" y="238" xml:space="preserve" font-family="SFMono-Regular, Menlo, Consolas, 'DejaVu Sans Mono', 'Noto Color Emoji', monospace" font-size="13.0"><tspan fill="#c8ccd4">🤖 </tspan><tspan fill="#7d828f">+2</tspan></text>
+<text x="22" y="262" xml:space="preserve" font-family="SFMono-Regular, Menlo, Consolas, 'DejaVu Sans Mono', 'Noto Color Emoji', monospace" font-size="13.0"><tspan fill="#c8ccd4">🤖 </tspan><tspan fill="#5ef78d">✓code review</tspan></text>
+</svg>

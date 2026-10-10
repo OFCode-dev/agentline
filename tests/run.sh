@@ -4,6 +4,9 @@
 #   bash tests/run.sh            run every check
 #   bash tests/run.sh --update   rewrite tests/golden/ from the current output
 #                                (review the diff before committing it)
+#   bash tests/run.sh --preview <dir>
+#                                render a few fixtures in colour into <dir>
+#                                (tools/make-previews.sh turns them into SVGs)
 #
 # The suite runs the real agentline.sh, install.sh and hooks as black boxes,
 # under whichever bash runs this file: `/bin/bash tests/run.sh` on macOS tests
@@ -56,14 +59,18 @@ WIDTHS="120 80 40"
 
 UPDATE=0
 ENV_SELFTEST=0
+PREVIEW=
 case "${1:-}" in
   '') ;;
   --update) UPDATE=1 ;;
+  # Render fixtures in colour for docs/ instead of running the checks.
+  --preview) PREVIEW="${2:-}"
+    [ -n "$PREVIEW" ] || { echo "usage: bash tests/run.sh --preview <out-dir>" >&2; exit 2; } ;;
   # Internal: the suite re-runs itself this way under a polluted caller
   # environment (see "Environment hygiene" at the end of section 2).
   --env-selftest) ENV_SELFTEST=1 ;;
   -h|--help) sed -n '2,6p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
-  *) echo "usage: bash tests/run.sh [--update]" >&2; exit 2 ;;
+  *) echo "usage: bash tests/run.sh [--update|--preview <dir>]" >&2; exit 2 ;;
 esac
 
 TEST_BASH="${AGENTLINE_TEST_BASH:-$BASH}"
@@ -317,6 +324,39 @@ if [ "$ENV_SELFTEST" = 1 ]; then
   p="$PAY/full.json"; fill "$FIX/payloads/full.json" "$p"; prepare full "$p"
   render "$p" -; normalize "$T/out" "$T/got"
   cmp -s "$T/got" "$GOLD/full.w120.txt" || { echo "full.w120 differs:"; diff "$GOLD/full.w120.txt" "$T/got" | head -n 6; exit 1; }
+  exit 0
+fi
+
+# --preview <dir>: the pictures in docs/ are renders of the suite's own
+# fixtures, not of anyone's session. Every value below comes from
+# tests/fixtures (a pinned clock, invented numbers, a fake project dir), so a
+# preview cannot carry a real path, repo, account or session id. The output is
+# raw ANSI, one file per scenario; tools/make-previews.sh turns each into an
+# SVG. Rendering happens here, inside the hermetic harness, because that is
+# what already knows how to seed probes, side files and the clock.
+if [ -n "$PREVIEW" ]; then
+  mkdir -p "$PREVIEW"
+  for _pname in full agents-overflow api-meter; do
+    _pp="$PAY/$_pname.json"
+    fill "$FIX/payloads/$_pname.json" "$_pp"
+    prepare "$_pname" "$_pp"
+    render "$_pp" 120
+    cp "$T/out" "$PREVIEW/line-$_pname.ansi"
+  done
+  # Subagent rows, from the generated transcripts under the fixtures' own
+  # clock, narrowed to the same 120 columns as the lines above.
+  mkdir -p "$T/sub"
+  python3 "$FIX/subagents/make.py" "$T/sub/proj" sess-0001 1790000000 "$T/sub/pay"
+  python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); d["columns"]=120; json.dump(d, open(sys.argv[2],"w"))' \
+    "$T/sub/pay/golden.json" "$T/sub/pay/golden120.json"
+  ( cd "$WORK" && run_env AGENTLINE_NOW=1790000000 "$TEST_BASH" "$ROOT/agentline-subagents.sh" \
+      < "$T/sub/pay/golden120.json" > "$T/sout" 2> "$T/serr" )
+  python3 - "$T/sout" "$PREVIEW/sub-golden.ansi" <<'PREVIEW_PY'
+import json, sys
+rows = [json.loads(l)['content'] for l in open(sys.argv[1], encoding='utf-8') if l.strip()]
+open(sys.argv[2], 'w', encoding='utf-8').write('\n'.join(rows) + '\n')
+PREVIEW_PY
+  for _f in "$PREVIEW"/*.ansi; do printf '%s  %s bytes\n' "${_f##*/}" "$(wc -c < "$_f")"; done
   exit 0
 fi
 
