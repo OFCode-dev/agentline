@@ -34,14 +34,26 @@
   change shows at once. `install.sh` copies the meter; `--link-bin` also
   links `~/.local/bin/agentline-meter`. `--doctor` reports the ledger and
   the install. (J11a)
-- The weekly reset date is its own segment, `reset`: a dim, zero-padded
-  `↻05/10` right after the compaction counter, where it used to close the
-  `W:` segment as `↻5/10`. It is hidden when the reset time is missing, not
-  an epoch in seconds, or already past, and it is never dropped for width.
-  **Upgrade note:** a custom `AGENTLINE_LAYOUT` shows only the segments it
-  names, so one that names `week` but not `reset` no longer shows the
-  reset date. Add `reset` (and `api`) to a custom `AGENTLINE_LAYOUT`.
-  (J11a)
+- The weekly reset date closes the `W:` segment, now zero-padded:
+  `W:58% ⇡8% F:12% ↻05/10`, where it used to read `↻5/10`. It is hidden
+  when the reset time is missing, not an epoch in seconds, or already
+  past, and like the rest of the segment it is never dropped for width.
+  It was briefly a segment of its own, `reset`; that name is gone again
+  and a layout naming it loses nothing but the name. (J11a)
+- Usage credits. A new `💳` segment beside `💰` shows what the account can
+  still spend past its plan limits and the day that allowance rolls over:
+  `💳 $84.21 ↻01/11`, read from `rate_limits.spend_limit` — `limit_usd`
+  minus `used_usd` on an account that bills in USD, otherwise the
+  bucket's own `used_percentage`. Colored by how much is gone, 70/90 like
+  the limits, because a balance only matters as it runs out. Claude Code
+  sends the bucket only for an account with a spend limit enabled, so the
+  segment is absent for everyone else. **Upgrade note:** add `credit`
+  (and `api`) to a custom `AGENTLINE_LAYOUT`.
+- `F:` has no payload source any more. Claude Code 2.1.29x rebuilds
+  `rate_limits` for the status line from `five_hour`, `seven_day` and
+  `spend_limit` alone, so neither `seven_day_overage_included` nor
+  `seven_day_opus` reaches it and the premium-model share needs
+  `AGENTLINE_USAGE_API=1`. The README promised otherwise.
 - The daily cache prune keeps `*.lock` files whatever their age. Without
   an `XDG_RUNTIME_DIR` the cache directory is also the hooks' side
   directory, and deleting `claude_api.lock` or `claude_agents.txt.lock`

@@ -951,8 +951,8 @@ check "pace: 5h over pace ⇡30%, before the reset" grep -qF 'S:80% ⇡30% ↻2h
 check "pace: 5h ⇡ red from 15 points" grep -q "${ESC}\[1;31m⇡30%" "$T/out"
 check "pace: week over pace ⇡8%, yellow" grep -q "${ESC}\[1;33m⇡8%" "$T/out"
 check "pace: week arrow sits after W:" grep -qF 'W:58% ⇡8%' "$T/pl"
-check "pace: the reset date is no longer inside W:" sh -c "! grep -qF 'W:58% ⇡8% ↻' '$T/pl'"
-check "pace: the reset date is its own segment before S:" grep -qE '↻[0-9]{2}/[0-9]{2} │ S:80%' "$T/pl"
+check "pace: the reset date closes W:, after the arrow" grep -qE 'W:58% ⇡8% ↻[0-9]{2}/[0-9]{2}' "$T/pl"
+check "pace: no reset date of its own before S:" sh -c "! grep -qE '↻[0-9]{2}/[0-9]{2} │ S:80%' '$T/pl'"
 check "pace: S: keeps its absolute colour" grep -q "${ESC}\[1;33mS:80%" "$T/out"
 pace "{\"used_percentage\":20,\"resets_at\":$((pnow + 3600))}" "{\"used_percentage\":94,\"resets_at\":$((pnow + 3600))}"
 check "pace: 5h under pace ⇣60%, dim" grep -q "${ESC}\[2m⇣60%" "$T/out"
@@ -1474,46 +1474,93 @@ for p in 59.99 60 79.9 80 80.0 99.5 0012 1e-05 \
     check "ctx icon: $p warns" grep -qF '⚠️' "$T/nb"
   elif grep -qF '⚠️' "$T/nb"; then fail "ctx icon: $p does not warn"; else pass; fi
 done
-# The weekly reset date (its own segment since J11a, zero-padded DD/MM)
-# and the date segment, against date itself, in UTC and in two other zones
+# The weekly reset date (zero-padded DD/MM, closing the week segment) and
+# the date segment, against date itself, in UTC and in two other zones
 # (a half-hour offset, and New York on both sides of its 2027 DST changes:
 # 01:30 local on 14/03 and on 07/11). The resets are in the future, as a
-# reset date must be; the week segment carries no date any more.
+# reset date must be. The date rides inside W:, so every check below reads
+# it out of that segment and none of them may find it anywhere else.
+#
+# These timestamps are fixed, so the clock is fixed with them (RNOW): on the
+# real clock the DST dates would fall into the past in 2027 and every check
+# below would go red, for nothing the code did. The date segment's own check
+# keeps the real clock, since it is compared against today's date.
+RNOW=1790000000   # 2026-09-21; the 2027 literals below stay ahead of it
 exp_date() {  # exp_date <epoch> <fmt>
   if date -r 0 >/dev/null 2>&1; then date -r "$1" "+$2"; else date -d "@$1" "+$2"; fi
 }
 for z in UTC Asia/Kolkata America/New_York; do
-  for ts in 1799088300 1805005800 1825565400 4107888000 $(( TNOW + 3600 )); do
-    nb "\"rate_limits\":{\"seven_day\":{\"used_percentage\":5,\"resets_at\":$ts}}" reset AGENTLINE_TZ="$z"
+  for ts in 1799088300 1805005800 1825565400 4107888000 $(( RNOW + 3600 )); do
+    nb "\"rate_limits\":{\"seven_day\":{\"used_percentage\":5,\"resets_at\":$ts}}" week AGENTLINE_TZ="$z" AGENTLINE_NOW=$RNOW AGENTLINE_PACE=0
     e=$(TZ="$z" exp_date "$ts" '%d/%m')
-    check "reset date [$z $ts]: ↻$e (got $(cat "$T/nb"))" [ "$(cat "$T/nb")" = "↻$e" ]
+    check "reset date [$z $ts]: ↻$e (got $(cat "$T/nb"))" [ "$(cat "$T/nb")" = "W:5% ↻$e" ]
   done
   nb '"model":{"id":"claude-opus-5"}' date AGENTLINE_TZ="$z"
   e=$(TZ="$z" LC_ALL=C date "+%d/%m/%Y %a")
   # Raw output: normalize masks the date.
   check "date [$z]: $e" grep -qF -- "$e" "$T/out"
 done
-# Zero-padded, dim, and never twice: the week segment has no date of its own.
-nb '"rate_limits":{"seven_day":{"used_percentage":5,"resets_at":1799088300}}' reset AGENTLINE_TZ=UTC
-check "reset date: zero-padded (↻04/01)" [ "$(cat "$T/nb")" = "↻04/01" ]
+# Zero-padded, dim, and never twice: it closes the week segment and has no
+# segment of its own, so `reset` in a layout produces nothing.
+nb '"rate_limits":{"seven_day":{"used_percentage":5,"resets_at":1799088300}}' week AGENTLINE_TZ=UTC AGENTLINE_NOW=$RNOW
+check "reset date: zero-padded, inside W: (↻04/01)" [ "$(cat "$T/nb")" = "W:5% ↻04/01" ]
 check "reset date: dim" grep -qF "${ESC}[2m↻04/01" "$T/out"
-nb '"rate_limits":{"seven_day":{"used_percentage":5,"resets_at":1799088300}}' week AGENTLINE_TZ=UTC
-check "reset date: not in the week segment ($(cat "$T/nb"))" [ "$(cat "$T/nb")" = "W:5%" ]
-nb '"rate_limits":{"seven_day":{"used_percentage":5,"resets_at":1799088300}}' "" AGENTLINE_TZ=UTC
-check "reset date: default layout, before S:/W: on line 1" sh -c "head -n 1 '$T/nb' | grep -qF '↻04/01 │ W:5%'"
+nb '"model":{"id":"claude-opus-5"},"rate_limits":{"seven_day":{"used_percentage":5,"resets_at":1799088300}}' "model,reset" AGENTLINE_TZ=UTC AGENTLINE_NOW=$RNOW
+check "reset date: reset is not a segment name any more ($(cat "$T/nb"))" [ "$(cat "$T/nb")" = "Opus 5" ]
+nb '"rate_limits":{"seven_day":{"used_percentage":5,"resets_at":1799088300}}' "" AGENTLINE_TZ=UTC AGENTLINE_NOW=$RNOW
+check "reset date: default layout, closing W: on line 1" sh -c "head -n 1 '$T/nb' | grep -qF 'W:5% ↻04/01'"
 check "reset date: shown once" [ "$(grep -o '↻04/01' "$T/nb" | wc -l | tr -d ' ')" = 1 ]
-# With no compaction too, and without a percentage: the date stands alone.
-nb '"rate_limits":{"seven_day":{"resets_at":1799088300}}' "compact,reset,week" AGENTLINE_TZ=UTC
-check "reset date: shown without compactions or W: ($(cat "$T/nb"))" [ "$(cat "$T/nb")" = "↻04/01" ]
+# Without a weekly percentage the whole segment goes, the date with it: a
+# bare date beside the compaction counter said nothing about what it dated.
+nb '"rate_limits":{"seven_day":{"resets_at":1799088300}}' "compact,week" AGENTLINE_TZ=UTC AGENTLINE_NOW=$RNOW
+check "reset date: hidden without W: ($(cat "$T/nb"))" [ ! -s "$T/nb" ]
 # Hidden when missing, past, now, not an epoch in seconds (ISO, a float,
 # milliseconds, 13 digits), or no number at all.
 for ts in 0 1790208000 "$TNOW" "$(( TNOW - 1 ))" '"2027-01-04T18:45:00Z"' 1799088300.5 1799088300000 '"x"' null '"1799088300 "'; do
-  nb "\"rate_limits\":{\"seven_day\":{\"used_percentage\":5,\"resets_at\":$ts}}" "reset,week" AGENTLINE_TZ=UTC
+  nb "\"rate_limits\":{\"seven_day\":{\"used_percentage\":5,\"resets_at\":$ts}}" week AGENTLINE_TZ=UTC
   check "reset date: hidden for $ts ($(cat "$T/nb"))" [ "$(cat "$T/nb")" = "W:5%" ]
   check "reset date: $ts, stderr empty" [ ! -s "$T/err" ]
 done
-nb '"model":{"id":"claude-opus-5"}' "reset,model" AGENTLINE_TZ=UTC
+nb '"model":{"id":"claude-opus-5"}' "week,model" AGENTLINE_TZ=UTC
 check "reset date: hidden without rate_limits" [ "$(cat "$T/nb")" = "Opus 5" ]
+# Usage credits (💳). rate_limits.spend_limit is the only payload source for
+# the balance: Claude Code rebuilds rate_limits for the status line and the
+# usage endpoint's own extra_usage object is not among the buckets it keeps.
+# limit_usd/used_usd are already dollars and only an account billing in USD
+# carries them, so the bucket's own percentage is the documented fallback --
+# it answers the same question. The clock stays pinned (RNOW) with the reset
+# dates, exactly as above.
+nb '"rate_limits":{"spend_limit":{"used_percentage":66,"resets_at":1799088300,"used_usd":165.79,"limit_usd":250.0,"period":"monthly"}}' credit AGENTLINE_TZ=UTC AGENTLINE_NOW=$RNOW
+check "credit: dollars left and the rollover date ($(cat "$T/nb"))" [ "$(cat "$T/nb")" = "💳 \$84.21 ↻04/01" ]
+check "credit: 66% gone is green" grep -qF "${ESC}[1;32m\$84.21" "$T/out"
+nb '"rate_limits":{"spend_limit":{"used_percentage":75,"resets_at":1799088300}}' credit AGENTLINE_TZ=UTC AGENTLINE_NOW=$RNOW
+check "credit: 75% gone is yellow" grep -qF "${ESC}[1;33m75%" "$T/out"
+check "credit: the date is dim" grep -qF "${ESC}[2m↻04/01" "$T/out"
+nb '"rate_limits":{"spend_limit":{"used_percentage":93,"resets_at":1799088300}}' credit AGENTLINE_TZ=UTC AGENTLINE_NOW=$RNOW
+check "credit: no dollar figures, the percentage instead ($(cat "$T/nb"))" [ "$(cat "$T/nb")" = "💳 93% ↻04/01" ]
+check "credit: 93% gone is red" grep -qF "${ESC}[1;31m93%" "$T/out"
+nb '"rate_limits":{"spend_limit":{"used_percentage":12,"used_usd":30,"limit_usd":250}}' credit AGENTLINE_TZ=UTC AGENTLINE_NOW=$RNOW
+check "credit: green, and no date without resets_at ($(cat "$T/nb"))" [ "$(cat "$T/nb")" = "💳 \$220.00" ]
+check "credit: 12% gone is green" grep -qF "${ESC}[1;32m\$220.00" "$T/out"
+# A used figure past the limit would print a negative balance, so the
+# percentage stands in -- it is still true, and it is still the answer.
+nb '"rate_limits":{"spend_limit":{"used_percentage":104,"used_usd":260,"limit_usd":250}}' credit AGENTLINE_TZ=UTC AGENTLINE_NOW=$RNOW
+check "credit: past the limit shows no negative balance ($(cat "$T/nb"))" [ "$(cat "$T/nb")" = "💳 104%" ]
+# A reset already past, or not an epoch in seconds, drops the date and keeps
+# the balance: the two halves fail independently.
+for ts in $(( RNOW - 1 )) '"2027-01-04T18:45:00Z"' 1799088300000 null; do
+  nb "\"rate_limits\":{\"spend_limit\":{\"used_percentage\":66,\"resets_at\":$ts,\"used_usd\":165.79,\"limit_usd\":250.0}}" credit AGENTLINE_TZ=UTC AGENTLINE_NOW=$RNOW
+  check "credit: balance without a usable date [$ts] ($(cat "$T/nb"))" [ "$(cat "$T/nb")" = "💳 \$84.21" ]
+  check "credit: $ts, stderr empty" [ ! -s "$T/err" ]
+done
+# No bucket, no percentage, or a percentage that is not a number: no segment.
+for sl in 'null' '{}' '{"used_usd":165.79,"limit_usd":250.0}' '{"used_percentage":null}' '{"used_percentage":"x"}' '{"used_percentage":"66 "}'; do
+  nb "\"rate_limits\":{\"spend_limit\":$sl}" credit AGENTLINE_TZ=UTC AGENTLINE_NOW=$RNOW
+  check "credit: hidden for $sl ($(cat "$T/nb"))" [ ! -s "$T/nb" ]
+  check "credit: $sl, stderr empty" [ ! -s "$T/err" ]
+done
+nb '"rate_limits":{"seven_day":{"used_percentage":5,"resets_at":1799088300}}' credit AGENTLINE_TZ=UTC AGENTLINE_NOW=$RNOW
+check "credit: hidden without a spend limit" [ ! -s "$T/nb" ]
 # Word counts from the hook's file: the k rounding, and a zero shows none.
 for wc in "1050 1150" "999 1250" "0 2450" "007 99950"; do
   NB_WC="$wc" nb '"model":{"id":"claude-opus-5"}' words
@@ -3982,10 +4029,13 @@ api_render 'a c 1 0 0 0 0\nb c 1 0 0 0 0\nc c 1 0 0 0 0\nd c 1 0 0 0 0\ne h 1 0 
 api_is "cached: three named" "🔌 a 1 · b 1 · c 1 · +2"
 render "$T/apir.json" 300 AGENTLINE_LAYOUT=api AGENTLINE_API_SHOW=10; normalize "$T/out" "$T/got"
 api_is "AGENTLINE_API_SHOW=10 is not served the cached render" "🔌 a 1 · b 1 · c 1 · d 1 · e 1"
-# A custom layout naming week but not reset loses the reset date, by
+# A custom layout shows only the segments it names, so a new one needs
+# adding by hand; the upgrade note says which, by
 # design (no implicit segment); the upgrade note says so (review of J11a).
-check "docs: README tells a custom layout to add reset and api" grep -qF 'add `reset` (and `api`, for the 🔌 meter) to a custom `AGENTLINE_LAYOUT`' "$ROOT/README.md"
-check "docs: CHANGELOG carries the upgrade note" grep -qF 'Add `reset` (and `api`) to a custom `AGENTLINE_LAYOUT`.' "$ROOT/CHANGELOG.md"
+check "docs: README tells a custom layout to add credit and api" grep -qF 'Add `credit` (💳 usage credits) and `api` (the 🔌 meter) to a custom `AGENTLINE_LAYOUT`' "$ROOT/README.md"
+check "docs: CHANGELOG carries the upgrade note" grep -qF 'add `credit`' "$ROOT/CHANGELOG.md"
+check "docs: README documents the credit segment" grep -qF '`rate_limits.spend_limit`' "$ROOT/README.md"
+check "docs: README no longer sells F: as payload-borne" sh -c "! grep -qF 'Claude Code 2.1.x only forwards header-borne buckets' '$ROOT/README.md'"
 # Hidden by a layout that leaves it out; no ledger, no segment.
 api_render 'x c 1 0 0 0 0\n' AGENTLINE_LAYOUT=model,resume
 check "api reader: AGENTLINE_LAYOUT without api hides it" sh -c "! grep -q '🔌' '$T/got'"
@@ -4092,7 +4142,7 @@ printf '%s' '{"session_id":"doc-api","model":{"id":"claude-opus-5"},"rate_limits
 rm -f "$SIDE"/claude_api.*
 doctor "$T/docapi.json"
 check "doctor: api hidden, its ledger missing" dhas "^  api +hidden +API meter ledger: $SIDE/claude_api\.v1\.doc-api \(missing"
-check "doctor: reset shown" dhas '^  reset +shown +payload rate_limits\.seven_day\.resets_at'
+check "doctor: week names its reset source" dhas '^  week +shown +payload rate_limits\.seven_day\.used_percentage'
 printf 'jev c 1 0 0 0 0\n' > "$SIDE/claude_api.v1.doc-api"
 doctor "$T/docapi.json"
 check "doctor: api shown with its ledger" dhas "^  api +shown +API meter ledger: $SIDE/claude_api\.v1\.doc-api$"
@@ -4100,7 +4150,7 @@ check "doctor: the render has it" dhas '🔌 jev 1'
 printf '%s' '{"model":{"id":"claude-opus-5"}}' > "$T/docnosid.json"
 doctor "$T/docnosid.json"
 check "doctor: api without a session id" dhas '^  api +hidden +API meter: no ledger without a session_id'
-check "doctor: reset hidden, absent" dhas '^  reset +hidden +absent: rate_limits\.seven_day\.resets_at'
+check "doctor: credit hidden, absent" dhas '^  credit +hidden +absent: rate_limits\.spend_limit'
 rm -f "$SIDE"/claude_api.*
 # Missing git counts are explained (J10): every way out of the status gate
 # names itself on the "counts" row. The repositories are the C14 ones.

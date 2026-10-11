@@ -452,6 +452,17 @@ def num(v):
     except (OverflowError, ValueError):
         return ''
 
+# usd_left(limit, used) -> "84.21": what is left of a spend limit. The
+# subtraction happens here because bash has no float arithmetic, and this
+# path must not fork to awk for one sum. Either figure missing, or a used
+# figure past the limit (which would print a negative balance), gives ''.
+def usd_left(lim, used):
+    lim, used = num(lim), num(used)
+    if lim == '' or used == '':
+        return ''
+    d = float(lim) - float(used)
+    return '%.2f' % d if d >= 0 else ''
+
 # The final output goes through `printf %b`, which expands backslash escapes,
 # and the terminal interprets any raw control byte. A session name, model name
 # or version carrying "\033]0;..." or a literal ESC could therefore retitle
@@ -662,6 +673,19 @@ fields = {
         num(g('rate_limits', 'seven_day_opus', 'used_percentage'))),
     'five_hour_reset': g('rate_limits', 'five_hour', 'resets_at'),
     'seven_day_reset': g('rate_limits', 'seven_day', 'resets_at'),
+    # Usage credits: the monthly spend limit that covers the account once the
+    # plan's own limits are spent, and the day it rolls over. Claude Code does
+    # not forward the usage endpoint's object; it rebuilds rate_limits for the
+    # status line from three buckets -- five_hour, seven_day, and spend_limit
+    # on a gateway account with overage enabled (2.1.29x). The endpoint's own
+    # `extra_usage` is not among them, so the balance is read from here or not
+    # at all, and it needs no network call. The two dollar figures are already
+    # dollars, and only a USD account carries them; the percentage is always
+    # there when the bucket is.
+    'credit_pct': num(g('rate_limits', 'spend_limit', 'used_percentage')),
+    'credit_left': usd_left(g('rate_limits', 'spend_limit', 'limit_usd'),
+                            g('rate_limits', 'spend_limit', 'used_usd')),
+    'credit_reset': g('rate_limits', 'spend_limit', 'resets_at'),
     'effort_raw': clean(g('effort', 'level')),
     'cost': num(g('cost', 'total_cost_usd')),
     'duration_ms': num(g('cost', 'total_duration_ms')),
@@ -1247,7 +1271,7 @@ try:
         if not search:
             continue
         try:
-            r = subprocess.run(['pgrep', '-f', search], capture_output=True, text=True, timeout=1)
+            r = subprocess.run(['pgrep', '-f', '--', search], capture_output=True, text=True, timeout=1)
             if r.returncode == 0:
                 active.append(name)
         except Exception:
@@ -1664,7 +1688,7 @@ if [ "$_AL_GLYPHS" = ascii ]; then
   G_PR_DRAFT="draft "; G_PR_PENDING="review "; G_PR_CHANGES="changes "; G_PR_OK="approved "
   G_EMAIL="";     G_MCP="mcp:";    G_AGENTS="agents:"; G_DONE="ok:"; G_RESUME=""
   G_SVC="svc:";   G_SSH="";        G_CRON="";      G_PORTS="ports:"
-  G_API="api:"
+  G_API="api:";   G_CREDIT="bal:"
 else
   G_SEP="│";      G_DOT="·";       G_ALERT="⚠ ";   G_WARN="⚠️ "
   G_LOW="🟢";     G_MED="🟡";      G_HIGH="🟠";    G_XHIGH="🔴";   G_EFFORT="⚙️ "
@@ -1677,7 +1701,7 @@ else
   G_PR_DRAFT="📝 "; G_PR_PENDING="👀 "; G_PR_CHANGES="🔴 "; G_PR_OK="✅ "
   G_EMAIL="🤖 ";  G_MCP="⚙️ ";     G_AGENTS="🤖 "; G_DONE="✓";     G_RESUME="♻️ "
   G_SVC="🛡️ ";    G_SSH="🔐 ";     G_CRON="⏰ ";   G_PORTS="🌐 "
-  G_API="🔌 "
+  G_API="🔌 ";    G_CREDIT="💳 "
 fi
 # Glyphs inside values the probes built — cached for AGENTLINE_PROBE_TTL, in
 # the emoji spelling whatever the set — and inside the agent list are
@@ -2049,14 +2073,16 @@ case "${BASH_VERSINFO[0]:-0}.${BASH_VERSINFO[1]:-0}" in
   [5-9].*|[1-9][0-9]*.*|4.[2-9]*|4.[1-9][0-9]*) _ptime=1 ;;
 esac
 
-# fmt_reset <ts>: -> $_reset_out. A countdown for an epoch; a string that
-# is not one goes to date, which formats what it can (nothing, mostly).
+# fmt_reset <ts>: -> $_reset_out. A countdown for an epoch; anything else
+# hides the countdown. It used to hand a non-epoch to date, which cannot read
+# one either way (`date -d @<iso>` and `date -r <iso>` both fail), so that was
+# a fork for an answer that was always empty.
 fmt_reset() {
   local ts="$1" diff h m
   _reset_out=""
   [ -z "$ts" ] && return
   case "$ts" in
-    *[!0-9]*) _reset_out=$(fmt_epoch "$ts" "%H:%M"); return ;;
+    *[!0-9]*) return ;;
   esac
   # $_now_epoch is already set (_tick_now, at startup): a `date +%s` here
   # was one more fork on every full render for a number the script had.
@@ -2066,8 +2092,9 @@ fmt_reset() {
   if [ $h -gt 0 ]; then _reset_out="${h}h${m}m"; else _reset_out="${m}m"; fi
 }
 # fmt_reset_week <ts> -> $_reset_out: "05/10", the day and month the
-# weekly limit resets, zero-padded, for the reset segment (it used to close
-# the week segment, unpadded: "5/10"). Only an epoch in seconds, 1-12
+# weekly limit resets, zero-padded, closing the week segment (it was briefly
+# a segment of its own, where nothing else said what the date was about).
+# Only an epoch in seconds, 1-12
 # digits, still ahead of $_now_epoch is a reset date: a missing value, an
 # ISO string, milliseconds or a reset already past gives nothing, and the
 # segment hides rather than show a date that means nothing. bash >= 4.2
@@ -2101,7 +2128,7 @@ fmt_reset_week "$seven_day_reset"; seven_day_reset_fmt="$_reset_out"
 # 90/70 colour on S:/W: stays as it was.
 #
 # Only a window proven to be this one gets an arrow: resets_at all digits
-# (an ISO string, which fmt_reset still formats, gets none) and 0 < resets −
+# (an ISO string, which shows no countdown either, gets none) and 0 < resets −
 # now <= the window — a reset already past, or further off than a window
 # lasts, is a stale or foreign number. And none early on: in the first
 # <min_elapsed>% of a window (30 min of 5 h, ~5 h of 7 d) a single prompt is
@@ -2582,11 +2609,6 @@ elif [ "$compact_n" -gt 0 ] && [ -n "$compact_post" ] && [ "$compact_fresh" = 1 
   esac
 fi
 [ "$compact_n" -gt 0 ] && _seg compact "${DIM}${G_COMPACT}${compact_n}${RESET}"
-# The weekly limit's reset date, "↻05/10", dim, right after the compaction
-# counter, whether or not there were compactions. It used to close the week
-# segment; it is its own segment so a layout can place or drop it, and like
-# week it is never dropped for width (the layout pass's KEEP).
-[ -n "$seven_day_reset_fmt" ] && _seg reset "${DIM}${G_RESET}${seven_day_reset_fmt}${RESET}"
 if [ -n "$five_hour" ]; then
   _color_pct "$five_hour" 90 70
   reset_part=""; [ -n "$five_hour_reset_fmt" ] && reset_part="${DIM}${G_RESET}${five_hour_reset_fmt}${RESET}"
@@ -2752,9 +2774,9 @@ PYEOF
   fi
 fi
 # Weekly limits. The premium-model bucket rides inside the W segment as an
-# orange `F:` field after the account-wide percentage; the reset date is the
-# reset segment's (above), which belongs to both. It is its own colour on
-# purpose: the 70/90 thresholds answer "how close am I to
+# orange `F:` field, between the account-wide percentage and the reset marker,
+# so the reset date stays at the end where it reads as belonging to both. It
+# is its own colour on purpose: the 70/90 thresholds answer "how close am I to
 # the wall", while this answers "how much of that is the expensive model" —
 # a different question, so it does not share W's colour. Either half may be
 # missing; the segment renders whichever exist and disappears when neither do.
@@ -2773,7 +2795,10 @@ case "$seven_day_top" in
   *) printf -v _pct '%.0f' "$seven_day_top"
      week_body="${week_body:+${week_body} }${ORANGE}F:${_pct}%${RESET}" ;;
 esac
-[ -n "$week_body" ] && _seg week "$week_body"
+if [ -n "$week_body" ]; then
+  reset_part=""; [ -n "$seven_day_reset_fmt" ] && reset_part="${DIM}${G_RESET}${seven_day_reset_fmt}${RESET}"
+  _seg week "${week_body}${reset_part:+ }${reset_part}"
+fi
 
 # === Prompt cache ===
 # Whether the next turn pays full input price. A warm cache is the normal
@@ -2832,6 +2857,27 @@ if [ -n "$pc_state" ]; then
   [ -n "$pc_body" ] && _seg cache "${G_CACHE}${pc_body}"
 fi
 [ -n "$cost_fmt" ]       && _seg cost "${G_COST}\$${cost_fmt}"
+# Usage credits, "💳 $84.21 ↻01/11" — what the account can still spend past
+# its plan limits and the day that allowance rolls over. 💰 above is what
+# this session cost; this is the wall behind it. Only an account with the
+# spend limit enabled has the bucket at all, and only a USD one has the
+# dollar figures: with the percentage alone the segment shows that instead,
+# which is still the answer to "how much is left". The colour follows how
+# much is *gone*, since a balance only matters as it runs out, and the date
+# is the week segment's reset formatter — the same "an epoch still ahead, or
+# nothing" rule, so a rolled-over or malformed stamp shows no date.
+if [ -n "$credit_pct" ]; then
+  _color_pct "$credit_pct" 90 70
+  if [ -n "$credit_left" ]; then
+    credit_body="${c}\$${credit_left}${RESET}"
+  else
+    printf -v _pct '%.0f' "$credit_pct"
+    credit_body="${c}${_pct}%${RESET}"
+  fi
+  fmt_reset_week "$credit_reset"
+  [ -n "$_reset_out" ] && credit_body="${credit_body} ${DIM}${G_RESET}${_reset_out}${RESET}"
+  _seg credit "${G_CREDIT}${credit_body}"
+fi
 [ -n "$duration_fmt" ]   && _seg dur "${G_DUR}${duration_fmt}"
 [ -n "$tokens_in_fmt" ]  && _seg tok_in "${G_IN}${tokens_in_fmt}"
 [ -n "$tokens_out_fmt" ] && _seg tok_out "${G_OUT}${tokens_out_fmt}"
@@ -3082,7 +3128,7 @@ SEGS="${SEGS}${_LSEGS}"
 # the output is used as-is. It is written as bytes through os.fsencode, which
 # reverses exactly how python decoded argv: a byte the locale cannot decode
 # round-trips instead of raising on the way out.
-AGENTLINE_LAYOUT_DEFAULT="model,effort,fast,ctx,compact,reset,5h,week,cache,cost,dur,tok_in,tok_out,words,lines,cpu,mem,disk / version,dir,git,pr,worktree,session,email,date,clock / mcp,agents,api,resume / services,ssh,cron,ports"
+AGENTLINE_LAYOUT_DEFAULT="model,effort,fast,ctx,compact,5h,week,cache,cost,credit,dur,tok_in,tok_out,words,lines,cpu,mem,disk / version,dir,git,pr,worktree,session,email,date,clock / mcp,agents,api,resume / services,ssh,cron,ports"
 # cpu, mem and disk close the list: they are host readings, the least a line
 # about the session needs, and without them a busy line 1 at COLUMNS≈122
 # still overflowed by a few cells and wrapped them onto a row of their own.
@@ -3129,9 +3175,7 @@ live = sys.argv[17] == '1'
 segs = sys.stdin.buffer.read().decode('utf-8', 'surrogateescape')
 if segs.endswith('\n'):
     segs = segs[:-1]
-# reset is the week's reset date, which lived inside the never-dropped week
-# segment until it became a segment of its own.
-KEEP = ('warn', 'model', 'ctx', 'reset', '5h', 'week')
+KEEP = ('warn', 'model', 'ctx', '5h', 'week')
 # Plus whatever is in its warning state this render (_WARNED in bash).
 warned = set(sys.argv[13].split(','))
 drop = [n for n in re.split(r'[\s,]+', drop_spec) if n and n not in KEEP and n not in warned]
@@ -3498,45 +3542,6 @@ esac
 # that is missing. Claude Code version gates are only stated where the
 # statusline docs give one (prompt_cache); for every other field the report
 # says "absent in the payload" rather than guess at a version.
-IFS= read -r -d '' _AL_DOCTOR_PY <<'PYEOF'
-import json, re, sys
-path = sys.argv[1]
-def masked(cmd):
-    # A report is made to be pasted into an issue, and an inline
-    # `TOKEN=... bash agentline.sh` (or a --key=value) would carry a secret
-    # into it: every NAME=value word keeps its name, not its value.
-    return re.sub(r'''(^|[\s;&|(])(-{0,2}[A-Za-z_][A-Za-z0-9_-]*)=(?:"[^"]*"|'[^']*'|[^\s;&|)])*''',
-                  r'\1\2=***', str(cmd))
-try:
-    d = json.load(open(path))
-except FileNotFoundError:
-    print('  (no %s)' % path)
-    sys.exit()
-except Exception as e:
-    print('  %s does not parse: %s' % (path, e))
-    sys.exit()
-d = d if isinstance(d, dict) else {}
-sl = d.get('statusLine') if isinstance(d.get('statusLine'), dict) else {}
-print('  statusLine       %s' % (masked(sl.get('command')) if sl.get('command') else '(none)'))
-print('  refreshInterval  %s' % (sl.get('refreshInterval') if sl.get('refreshInterval') is not None
-                                 else 'unset: the clock only ticks on conversation events'))
-ssl = d.get('subagentStatusLine') if isinstance(d.get('subagentStatusLine'), dict) else {}
-cmd = ssl.get('command') if isinstance(ssl.get('command'), str) else ''
-print('  subagent rows    %s' % (masked(cmd) + ('' if 'agentline-subagents.sh' in cmd else ' (not agentline)')
-                                 if cmd else '(none: install.sh --with-subagents)'))
-hooks = d.get('hooks') if isinstance(d.get('hooks'), dict) else {}
-WANT = (('agent-tracker-hook.sh', ('PreToolUse', 'SubagentStart', 'SubagentStop', 'Stop')),
-        ('wordcount-hook.sh', ('PostToolUse', 'Stop')))
-for name, events in WANT:
-    got = []
-    for ev in events:
-        groups = hooks.get(ev) if isinstance(hooks.get(ev), list) else []
-        ok = any(name in str(h.get('command') or '')
-                 for g in groups if isinstance(g, dict)
-                 for h in (g.get('hooks') or []) if isinstance(h, dict))
-        got.append(ev + (' yes' if ok else ' NO'))
-    print('  %-16s %s' % (name, ', '.join(got)))
-PYEOF
 _ver_ge() {  # _ver_ge <have> <want> — dotted versions; 2 when <have> is no version
   local IFS=. i x y
   local -a a b
@@ -3558,9 +3563,9 @@ _dt_why() {  # _dt_why <segment> — where its data comes from
     fast)     echo "payload fast_mode" ;;
     ctx)      echo "payload context_window.used_percentage" ;;
     compact)  echo "compact_boundary lines in transcript_path (not counted by --doctor: it needs the cache)" ;;
-    reset)    echo "payload rate_limits.seven_day.resets_at (an epoch in seconds, still ahead)" ;;
     5h)       echo "payload rate_limits.five_hour.used_percentage" ;;
-    week)     echo "payload rate_limits.seven_day.used_percentage (F: seven_day_overage_included, or AGENTLINE_USAGE_API=1)" ;;
+    week)     echo "payload rate_limits.seven_day.used_percentage (↻: seven_day.resets_at, an epoch still ahead; F: seven_day_overage_included, or AGENTLINE_USAGE_API=1)" ;;
+    credit)   echo "payload rate_limits.spend_limit (only with a spend limit enabled; limit_usd minus used_usd on a USD account, else used_percentage)" ;;
     cache)
       if [ -n "$pc_state" ]; then echo "payload prompt_cache: hidden while warm and not about to expire"
       elif [ -n "$version" ] && _ver_ge "$version" 2.1.251; then echo "payload prompt_cache: absent (no API response yet, or no caching reported)"
@@ -3605,6 +3610,45 @@ _dt_why() {  # _dt_why <segment> — where its data comes from
   esac
 }
 if [ -n "$_AL_DOCTOR" ]; then
+IFS= read -r -d '' _AL_DOCTOR_PY <<'PYEOF'
+import json, re, sys
+path = sys.argv[1]
+def masked(cmd):
+    # A report is made to be pasted into an issue, and an inline
+    # `TOKEN=... bash agentline.sh` (or a --key=value) would carry a secret
+    # into it: every NAME=value word keeps its name, not its value.
+    return re.sub(r'''(^|[\s;&|(])(-{0,2}[A-Za-z_][A-Za-z0-9_-]*)=(?:"[^"]*"|'[^']*'|[^\s;&|)])*''',
+                  r'\1\2=***', str(cmd))
+try:
+    d = json.load(open(path))
+except FileNotFoundError:
+    print('  (no %s)' % path)
+    sys.exit()
+except Exception as e:
+    print('  %s does not parse: %s' % (path, e))
+    sys.exit()
+d = d if isinstance(d, dict) else {}
+sl = d.get('statusLine') if isinstance(d.get('statusLine'), dict) else {}
+print('  statusLine       %s' % (masked(sl.get('command')) if sl.get('command') else '(none)'))
+print('  refreshInterval  %s' % (sl.get('refreshInterval') if sl.get('refreshInterval') is not None
+                                 else 'unset: the clock only ticks on conversation events'))
+ssl = d.get('subagentStatusLine') if isinstance(d.get('subagentStatusLine'), dict) else {}
+cmd = ssl.get('command') if isinstance(ssl.get('command'), str) else ''
+print('  subagent rows    %s' % (masked(cmd) + ('' if 'agentline-subagents.sh' in cmd else ' (not agentline)')
+                                 if cmd else '(none: install.sh --with-subagents)'))
+hooks = d.get('hooks') if isinstance(d.get('hooks'), dict) else {}
+WANT = (('agent-tracker-hook.sh', ('PreToolUse', 'SubagentStart', 'SubagentStop', 'Stop')),
+        ('wordcount-hook.sh', ('PostToolUse', 'Stop')))
+for name, events in WANT:
+    got = []
+    for ev in events:
+        groups = hooks.get(ev) if isinstance(hooks.get(ev), list) else []
+        ok = any(name in str(h.get('command') or '')
+                 for g in groups if isinstance(g, dict)
+                 for h in (g.get('hooks') or []) if isinstance(h, dict))
+        got.append(ev + (' yes' if ok else ' NO'))
+    print('  %-16s %s' % (name, ', '.join(got)))
+PYEOF
   echo "agentline doctor"
   echo
   echo "environment"
