@@ -264,6 +264,10 @@ normalize() {  # normalize <in> <out>
   if [ -s "$2" ] && [ -n "$(tail -c 1 "$2")" ]; then echo >> "$2"; fi
   return 0
 }
+# txt <fixed string>: is it in $T/out once the SGR codes are out? A model
+# name under a gradient carries a colour code between every two letters, so
+# "the name rendered" cannot be asked of the raw bytes.
+txt() { LC_ALL=C sed "s/${ESC}\[[0-9;]*m//g" "$T/out" | grep -qF -- "$1"; }
 
 # Wrap contract for lines 3+ (the Claude and system layers): rows break only
 # at " │ " boundaries — the narrow render's segments, in order, are exactly
@@ -779,7 +783,7 @@ check "AGENTLINE_TAG_200K=1 is not served a cached render without it" grep -qF '
 # Garbage in numeric fields hides those segments instead of printing "0%"
 # (stderr staying empty is already checked by the golden loop).
 ctx_raw bad-numbers
-if grep -qE '📊|⚠️ |💰|⏱️|📥|S:' "$T/out"; then
+if grep -qE '📊|⚠️ |💸|⏱️|📥|S:' "$T/out"; then
   fail "non-numeric fields leaked a segment"
 else
   pass
@@ -793,9 +797,9 @@ fi
 ctx_raw huge-numbers AGENTLINE_TAG_200K=1
 check "huge numbers: exit 0 (got $rc)" [ "$rc" = 0 ]
 check "huge numbers: stderr empty" [ ! -s "$T/err" ]
-check "huge numbers: model still parsed" grep -q 'Opus 5' "$T/out"
+check "huge numbers: model still parsed" txt 'Opus 5'
 check "huge numbers: huge window gets the opt-in >200k tag" grep -q "${ESC}\[1;32m📊 25%${ESC}\[0m ${ESC}\[2m>200k" "$T/out"
-if grep -qE 'S:|W:|💰|⏱️|📥' "$T/out"; then fail "huge numbers: a bad or absurd field leaked a segment"; else pass; fi
+if grep -qE 'S:|W:|💸|⏱️|📥' "$T/out"; then fail "huge numbers: a bad or absurd field leaked a segment"; else pass; fi
 check "huge numbers: a sane field next to them still shows" grep -q '📤 5.0k' "$T/out"
 # An integer literal past 4300 digits made json.loads itself raise on Python
 # 3.11+, which lost the whole payload ("⚠ payload"). It is dropped alone now.
@@ -805,7 +809,7 @@ printf '{"session_id":"bigint-0001","cwd":"%s","model":{"id":"claude-opus-5"},"c
 prepare minimal "$T/bigint.json"
 render "$T/bigint.json" 120
 check "5000-digit int: exit 0 (got $rc)" [ "$rc" = 0 ]
-check "5000-digit int: payload still parsed" grep -q 'Opus 5' "$T/out"
+check "5000-digit int: payload still parsed" txt 'Opus 5'
 check "5000-digit int: field next to it still shows" grep -q '📤 5.0k' "$T/out"
 if grep -qE '⚠ payload|📥' "$T/out"; then fail "5000-digit int: payload lost or the int leaked"; else pass; fi
 
@@ -1180,6 +1184,9 @@ cmp_render() {  # cmp_render [used_pct-json] -> raw $T/out, line 1 in $T/l1
   normalize "$T/out" "$T/cn"; head -n 1 "$T/cn" > "$T/l1"
 }
 CCACHE="$CACHE_DIR/compact.cmp-0001"
+# The count is no segment now; it is read from the cache, "inode offset count ...".
+cn() { [ "$(cut -d' ' -f3 "$CCACHE" 2>/dev/null)" = "$1" ]; }
+cboth() { grep -qF "$1" "$T/l1" && cn "$2"; }
 # 0 boundaries: no segment, no estimate.
 filler 1 > "$TR"
 printf '{"session_id":"cmp-0001"}\n' > "$T/cmp.json"
@@ -1187,43 +1194,43 @@ prepare minimal "$T/cmp.json"
 cmp_render
 check "compact: exit 0 (got $rc)" [ "$rc" = 0 ]
 check "compact: stderr empty" [ ! -s "$T/err" ]
-if grep -qE '🔄|📊' "$T/l1"; then fail "compact: no boundary, no segment"; else pass; fi
+if grep -qF '📊' "$T/l1"; then fail "compact: no boundary, no estimate"; else pass; fi
 check "compact: cache written" [ -f "$CCACHE" ]
 # 1 boundary, appended: counted from the new bytes; estimate from postTokens.
 bnd 20000 >> "$TR"
 cmp_render
-check "compact: one boundary shows 🔄 1" grep -qF '🔄 1' "$T/l1"
-check "compact: null used% shows the dim estimate ~10%" grep -qF '📊 ~10% │ 🔄 1' "$T/l1"
+check "compact: one boundary shows count 1" cn 1
+check "compact: null used% shows the dim estimate ~10%" cboth '📊 ~10%' 1
 check "compact: the estimate is dim" grep -q "${ESC}\[2m📊 ~10%" "$T/out"
 # Growth to 3: only the appended bytes are read; the latest postTokens wins.
 { filler 2; bnd 30000; filler 3; bnd 41000; } >> "$TR"
 cmp_render
-check "compact: three boundaries show 🔄 3" grep -qF '🔄 3' "$T/l1"
+check "compact: three boundaries show count 3" cn 3
 check "compact: latest postTokens drives the estimate (~21%)" grep -qF '📊 ~21%' "$T/l1"
 # Same size: served from the cache, the file is not read. Blank the
 # boundaries in place, same length; the count must not move.
 LC_ALL=C sed 's/compact_boundary/compact_xxxxxxxx/' "$TR" > "$TR.same"; cat "$TR.same" > "$TR"
 cmp_render
-check "compact: same size is not re-read" grep -qF '🔄 3' "$T/l1"
+check "compact: same size is not re-read" cn 3
 # A real figure replaces the estimate; the counter stays.
 bnd 5000 > "$TR.new"; mv "$TR.new" "$TR"
 cmp_render 47
-check "compact: real used% wins over the estimate" grep -qF '📊 47% │ 🔄 1' "$T/l1"
+check "compact: real used% wins over the estimate" cboth '📊 47%' 1
 # Replaced (new inode, here also smaller): a full rescan, not an addition.
-check "compact: a replaced transcript is rescanned (🔄 1, not 4)" grep -qF '🔄 1' "$T/l1"
+check "compact: a replaced transcript is rescanned (count 1, not 4)" cn 1
 # Truncated in place (same inode, smaller): rescanned too.
 filler 5 > "$TR"
 cmp_render
-if grep -q '🔄' "$T/l1"; then fail "compact: truncated in place rescans to 0"; else pass; fi
+check "compact: truncated in place rescans to 0" cn 0
 # Missing transcript, or garbage in the cache: no segment, no error.
 rm -f "$TR"
 cmp_render
 check "compact: missing transcript, exit 0 (got $rc)" [ "$rc" = 0 ]
 check "compact: missing transcript, stderr empty" [ ! -s "$T/err" ]
-if grep -q '🔄' "$T/l1"; then fail "compact: missing transcript shows nothing"; else pass; fi
+if grep -qF '📊 ~' "$T/l1"; then fail "compact: missing transcript shows nothing"; else pass; fi
 bnd 9000 > "$TR"; printf 'x y $(touch %s) z\n' "$T/cmp-pwned" > "$CCACHE"
 cmp_render
-check "compact: a garbage cache is rebuilt" grep -qF '🔄 1' "$T/l1"
+check "compact: a garbage cache is rebuilt" cn 1
 check "compact: cache contents never run" [ ! -e "$T/cmp-pwned" ]
 # An absurd postTokens (> window) gives no estimate, only the counter.
 bnd 999999 > "$TR.new"; mv "$TR.new" "$TR"
@@ -1234,10 +1241,10 @@ if grep -q '📊' "$T/l1"; then fail "compact: estimate over 100% is dropped"; e
 { bnd 20000; filler 6; bnd 30000; } > "$T/transcript-target.jsonl"
 rm -f "$TR"; ln -s "$T/transcript-target.jsonl" "$TR"; rm -f "$CCACHE"
 cmp_render
-check "compact: a symlinked transcript counts its target (🔄 2)" grep -qF '🔄 2' "$T/l1"
+check "compact: a symlinked transcript counts its target (count 2)" cn 2
 bnd 40000 >> "$T/transcript-target.jsonl"
 cmp_render
-check "compact: growth behind a symlink is counted (🔄 3)" grep -qF '🔄 3' "$T/l1"
+check "compact: growth behind a symlink is counted (count 3)" cn 3
 rm -f "$TR"
 # A render reads at most 8 MB of transcript (H0d): the first scan of a 4 GB
 # sparse file took 5.3 s, and a killed render never saved its progress. A
@@ -1252,11 +1259,11 @@ with open(sys.argv[1], "wb") as f:
 rm -f "$CCACHE"
 cmp_render
 check "compact: first render stops at 8 MB" [ "$(cut -d' ' -f2 "$CCACHE")" = 8388608 ]
-if grep -q '🔄' "$T/l1"; then fail "compact: nothing counted before the scan gets there"; else pass; fi
+check "compact: nothing counted before the scan gets there" cn 0
 cmp_render
 check "compact: second render carries on to 16 MB" [ "$(cut -d' ' -f2 "$CCACHE")" = 16777216 ]
 cmp_render
-check "compact: third render reaches the end (🔄 2)" grep -qF '🔄 2' "$T/l1"
+check "compact: third render reaches the end (count 2)" cn 2
 check "compact: third render reaches the end, ~15% from the last postTokens" grep -qF '📊 ~15%' "$T/l1"
 rm -f "$TR"
 # A boundary line caught half-written (H0e): the offset used to move past
@@ -1266,19 +1273,19 @@ rm -f "$TR"
 half=$(bnd 40000); printf '%s' "${half%%compact_boundary*}compact_bo" >> "$TR"
 rm -f "$CCACHE"
 cmp_render
-check "compact: a half-written boundary is not counted yet (🔄 3)" grep -qF '🔄 3' "$T/l1"
+check "compact: a half-written boundary is not counted yet (count 3)" cn 3
 check "compact: a half-written boundary leaves the estimate at ~15%" grep -qF '📊 ~15%' "$T/l1"
 printf '%s\n' "undary${half#*compact_boundary}" >> "$TR"
 cmp_render
-check "compact: once complete it is counted (🔄 4)" grep -qF '🔄 4' "$T/l1"
+check "compact: once complete it is counted (count 4)" cn 4
 check "compact: once complete its postTokens counts (~20%)" grep -qF '📊 ~20%' "$T/l1"
 # Cut after the pattern: counted once, with the postTokens of the full line.
 printf '%s' "${half%%postTokens*}" >> "$TR"
 cmp_render
-check "compact: a line cut after its subtype is not counted early (🔄 4)" grep -qF '🔄 4' "$T/l1"
+check "compact: a line cut after its subtype is not counted early (count 4)" cn 4
 printf '%s\n' "postTokens${half#*postTokens}" | LC_ALL=C sed 's/40000/50000/' >> "$TR"
 cmp_render
-check "compact: ... and counted once when complete (🔄 5, ~25%)" grep -qF '📊 ~25% │ 🔄 5' "$T/l1"
+check "compact: ... and counted once when complete (count 5, ~25%)" cboth '📊 ~25%' 5
 rm -f "$TR"
 # The estimate only stands while the compaction is the latest event (H0g):
 # an assistant turn after the boundary ends it (a resumed session with a
@@ -1287,13 +1294,13 @@ rm -f "$TR"
 SUMMARY='{"type":"user","isCompactSummary":true,"message":{"role":"user","content":"summary"}}'
 { bnd 20000; filler 1; } > "$TR"; rm -f "$CCACHE"
 cmp_render
-check "compact: resumed (an assistant turn after the boundary) keeps 🔄 1" grep -qF '🔄 1' "$T/l1"
+check "compact: resumed (an assistant turn after the boundary) keeps count 1" cn 1
 if grep -q '📊' "$T/l1"; then fail "compact: resumed session shows no stale estimate"; else pass; fi
 { bnd 20000; printf '%s\n' "$SUMMARY"; } > "$TR"; rm -f "$CCACHE"
 cmp_render
-check "compact: the summary line after the boundary keeps the estimate" grep -qF '📊 ~10% │ 🔄 1' "$T/l1"
+check "compact: the summary line after the boundary keeps the estimate" cboth '📊 ~10%' 1
 cmp_render
-check "compact: the estimate is replayed from the cache" grep -qF '📊 ~10% │ 🔄 1' "$T/l1"
+check "compact: the estimate is replayed from the cache" cboth '📊 ~10%' 1
 filler 2 >> "$TR"
 cmp_render
 if grep -q '📊' "$T/l1"; then fail "compact: an appended assistant turn ends the estimate"; else pass; fi
@@ -1302,11 +1309,11 @@ cmp_render
 if grep -q '📊' "$T/l1"; then fail "compact: a later user line does not revive the estimate"; else pass; fi
 bnd 30000 >> "$TR"
 cmp_render
-check "compact: a new boundary brings it back (~15%, 🔄 2)" grep -qF '📊 ~15% │ 🔄 2' "$T/l1"
+check "compact: a new boundary brings it back (~15%, count 2)" cboth '📊 ~15%' 2
 # A cache from before (four fields, no fresh flag) is rebuilt, not misread.
 printf '%s\n' "1 1 7 30000" > "$CCACHE"
 cmp_render
-check "compact: an old four-field cache is rebuilt" grep -qF '📊 ~15% │ 🔄 2' "$T/l1"
+check "compact: an old four-field cache is rebuilt" cboth '📊 ~15%' 2
 rm -f "$TR"
 
 # Git ahead/behind and dirty counts (C14), against a real repository: the
@@ -1511,8 +1518,8 @@ nb '"rate_limits":{"seven_day":{"used_percentage":5,"resets_at":1799088300}}' ""
 check "reset date: default layout, closing W: on line 1" sh -c "head -n 1 '$T/nb' | grep -qF 'W:5% ↻04/01'"
 check "reset date: shown once" [ "$(grep -o '↻04/01' "$T/nb" | wc -l | tr -d ' ')" = 1 ]
 # Without a weekly percentage the whole segment goes, the date with it: a
-# bare date beside the compaction counter said nothing about what it dated.
-nb '"rate_limits":{"seven_day":{"resets_at":1799088300}}' "compact,week" AGENTLINE_TZ=UTC AGENTLINE_NOW=$RNOW
+# bare date beside the next segment said nothing about what it dated.
+nb '"rate_limits":{"seven_day":{"resets_at":1799088300}}' "resets,week" AGENTLINE_TZ=UTC AGENTLINE_NOW=$RNOW
 check "reset date: hidden without W: ($(cat "$T/nb"))" [ ! -s "$T/nb" ]
 # Hidden when missing, past, now, not an epoch in seconds (ISO, a float,
 # milliseconds, 13 digits), or no number at all.
@@ -1523,7 +1530,7 @@ for ts in 0 1790208000 "$TNOW" "$(( TNOW - 1 ))" '"2027-01-04T18:45:00Z"' 179908
 done
 nb '"model":{"id":"claude-opus-5"}' "week,model" AGENTLINE_TZ=UTC
 check "reset date: hidden without rate_limits" [ "$(cat "$T/nb")" = "Opus 5" ]
-# Usage credits (💳). rate_limits.spend_limit is the only payload source for
+# Usage credits (💰). rate_limits.spend_limit is the only payload source for
 # the balance: Claude Code rebuilds rate_limits for the status line and the
 # usage endpoint's own extra_usage object is not among the buckets it keeps.
 # limit_usd/used_usd are already dollars and only an account billing in USD
@@ -1531,26 +1538,26 @@ check "reset date: hidden without rate_limits" [ "$(cat "$T/nb")" = "Opus 5" ]
 # it answers the same question. The clock stays pinned (RNOW) with the reset
 # dates, exactly as above.
 nb '"rate_limits":{"spend_limit":{"used_percentage":66,"resets_at":1799088300,"used_usd":165.79,"limit_usd":250.0,"period":"monthly"}}' credit AGENTLINE_TZ=UTC AGENTLINE_NOW=$RNOW
-check "credit: dollars left and the rollover date ($(cat "$T/nb"))" [ "$(cat "$T/nb")" = "💳 \$84.21 ↻04/01" ]
+check "credit: dollars left and the rollover date ($(cat "$T/nb"))" [ "$(cat "$T/nb")" = "💰 \$84.21 ↻04/01" ]
 check "credit: 66% gone is green" grep -qF "${ESC}[1;32m\$84.21" "$T/out"
 nb '"rate_limits":{"spend_limit":{"used_percentage":75,"resets_at":1799088300}}' credit AGENTLINE_TZ=UTC AGENTLINE_NOW=$RNOW
 check "credit: 75% gone is yellow" grep -qF "${ESC}[1;33m75%" "$T/out"
 check "credit: the date is dim" grep -qF "${ESC}[2m↻04/01" "$T/out"
 nb '"rate_limits":{"spend_limit":{"used_percentage":93,"resets_at":1799088300}}' credit AGENTLINE_TZ=UTC AGENTLINE_NOW=$RNOW
-check "credit: no dollar figures, the percentage instead ($(cat "$T/nb"))" [ "$(cat "$T/nb")" = "💳 93% ↻04/01" ]
+check "credit: no dollar figures, the percentage instead ($(cat "$T/nb"))" [ "$(cat "$T/nb")" = "💰 93% ↻04/01" ]
 check "credit: 93% gone is red" grep -qF "${ESC}[1;31m93%" "$T/out"
 nb '"rate_limits":{"spend_limit":{"used_percentage":12,"used_usd":30,"limit_usd":250}}' credit AGENTLINE_TZ=UTC AGENTLINE_NOW=$RNOW
-check "credit: green, and no date without resets_at ($(cat "$T/nb"))" [ "$(cat "$T/nb")" = "💳 \$220.00" ]
+check "credit: green, and no date without resets_at ($(cat "$T/nb"))" [ "$(cat "$T/nb")" = "💰 \$220.00" ]
 check "credit: 12% gone is green" grep -qF "${ESC}[1;32m\$220.00" "$T/out"
 # A used figure past the limit would print a negative balance, so the
 # percentage stands in -- it is still true, and it is still the answer.
 nb '"rate_limits":{"spend_limit":{"used_percentage":104,"used_usd":260,"limit_usd":250}}' credit AGENTLINE_TZ=UTC AGENTLINE_NOW=$RNOW
-check "credit: past the limit shows no negative balance ($(cat "$T/nb"))" [ "$(cat "$T/nb")" = "💳 104%" ]
+check "credit: past the limit shows no negative balance ($(cat "$T/nb"))" [ "$(cat "$T/nb")" = "💰 104%" ]
 # A reset already past, or not an epoch in seconds, drops the date and keeps
 # the balance: the two halves fail independently.
 for ts in $(( RNOW - 1 )) '"2027-01-04T18:45:00Z"' 1799088300000 null; do
   nb "\"rate_limits\":{\"spend_limit\":{\"used_percentage\":66,\"resets_at\":$ts,\"used_usd\":165.79,\"limit_usd\":250.0}}" credit AGENTLINE_TZ=UTC AGENTLINE_NOW=$RNOW
-  check "credit: balance without a usable date [$ts] ($(cat "$T/nb"))" [ "$(cat "$T/nb")" = "💳 \$84.21" ]
+  check "credit: balance without a usable date [$ts] ($(cat "$T/nb"))" [ "$(cat "$T/nb")" = "💰 \$84.21" ]
   check "credit: $ts, stderr empty" [ ! -s "$T/err" ]
 done
 # No bucket, no percentage, or a percentage that is not a number: no segment.
@@ -1561,6 +1568,27 @@ for sl in 'null' '{}' '{"used_usd":165.79,"limit_usd":250.0}' '{"used_percentage
 done
 nb '"rate_limits":{"seven_day":{"used_percentage":5,"resets_at":1799088300}}' credit AGENTLINE_TZ=UTC AGENTLINE_NOW=$RNOW
 check "credit: hidden without a spend limit" [ ! -s "$T/nb" ]
+# Opus has a gradient of its own, lavender to rose (dark) or violet to plum
+# (light), and no glyph, so its width is what flat magenta took; mono drops
+# the paint. The painter takes one pair of endpoints per render, so an Opus
+# override must leave Fable's amber alone.
+nb '"model":{"id":"claude-opus-5-5"}' model
+check "opus: the name alone, no glyph ($(cat "$T/nb"))" [ "$(cat "$T/nb")" = "Opus 5.5" ]
+check "opus: dark gradient starts lavender" grep -qF "38;2;200;170;255mO" "$T/out"
+check "opus: dark gradient ends rose" grep -qF "38;2;255;120;200m5" "$T/out"
+check "opus: no flat magenta any more" sh -c "! grep -qF '${ESC}[1;35m' '$T/out'"
+nb '"model":{"id":"claude-opus-5-5"}' model AGENTLINE_THEME=light
+check "opus: light gradient starts violet" grep -qF "38;2;105;60;190mO" "$T/out"
+check "opus: light gradient ends plum" grep -qF "38;2;175;40;120m5" "$T/out"
+nb '"model":{"id":"claude-opus-5-5"}' model AGENTLINE_THEME=mono
+check "opus: mono paints nothing" sh -c "! grep -q '38;2;' '$T/out'"
+nb '"model":{"id":"claude-opus-5-5"}' model AGENTLINE_COLOR_OPUS_FROM=10,20,30 AGENTLINE_COLOR_OPUS_TO=40,50,60
+check "override: Opus gradient from" grep -qF "38;2;10;20;30m" "$T/out"
+check "override: Opus gradient to" grep -qF "38;2;40;50;60m" "$T/out"
+nb '"model":{"id":"claude-opus-5-5"}' model AGENTLINE_COLOR_OPUS_FROM=300,0,0
+check "override: bad Opus colour ignored" grep -qF "38;2;200;170;255m" "$T/out"
+nb '"model":{"id":"claude-fable-5"}' model AGENTLINE_COLOR_OPUS_FROM=10,20,30
+check "override: an Opus colour leaves Fable amber" grep -qF "38;2;255;215;90m✦" "$T/out"
 # Word counts from the hook's file: the k rounding, and a zero shows none.
 for wc in "1050 1150" "999 1250" "0 2450" "007 99950"; do
   NB_WC="$wc" nb '"model":{"id":"claude-opus-5"}' words
@@ -1773,7 +1801,7 @@ check "tick serves the cached body" grep -Eq '^CACHED [0-9]{2}:[0-9]{2}:[0-9]{2}
 # Expired (epoch 0) -> full render again.
 printf '%s\n%s' 0 "CACHED $CLOCK_TOK" > "$render_file"
 render "$p" 120
-check "expired cache re-renders" grep -q 'Opus 5' "$T/out"
+check "expired cache re-renders" txt 'Opus 5'
 # A changed payload invalidates on the spot, whatever the cache age.
 printf '%s\n%s' "$(date +%s)" "CACHED $CLOCK_TOK" > "$render_file"
 sed 's/"used_percentage":42.4/"used_percentage":43/' "$p" > "$T/changed.json"
@@ -1786,7 +1814,7 @@ rm -f "$(cbase "$sid")".*
 printf '%s' "$(cat "$p")" > "$CACHE_DIR/render_$sid.payload"
 printf '%s\n%s' "$(date +%s)" 'OLD @@AGENTLINE_CLOCK@@' > "$CACHE_DIR/render_$sid.render"
 render "$p" 120
-check "old-format render cache is ignored" sh -c "! grep -q 'OLD' '$T/out' && grep -q 'Opus 5' '$T/out'"
+if ! grep -q 'OLD' "$T/out" && txt 'Opus 5'; then pass; else fail "old-format render cache is ignored"; fi
 rm -f "$CACHE_DIR/render_$sid".*
 # The cache files are read a line at a time (bash 3.2 reads byte by byte
 # with -d ''). A file with more after its first line never matches: an extra
@@ -1795,10 +1823,10 @@ prepare full "$p"; render "$p" 120
 printf '\nextra' >> "$(cbase "$sid").payload"
 printf '%s\n%s' "$(date +%s)" "CACHED $CLOCK_TOK" > "$render_file"
 render "$p" 120
-check "payload key with a trailing line is no match" grep -q 'Opus 5' "$T/out"
+check "payload key with a trailing line is no match" txt 'Opus 5'
 printf '%s\n%s\n%s' "$(date +%s)" "CACHED $CLOCK_TOK" "MORE" > "$render_file"
 render "$p" 120
-check "render body with a second line is not served" sh -c "! grep -q 'CACHED' '$T/out' && grep -q 'Opus 5' '$T/out'"
+if ! grep -q 'CACHED' "$T/out" && txt 'Opus 5'; then pass; else fail "render body with a second line is not served"; fi
 # A pretty-printed (multi-line) payload keeps the verbatim read, and hits.
 python3 -c 'import json, sys; print(json.dumps(json.load(open(sys.argv[1])), indent=2))' "$p" > "$T/pretty.json"
 prepare full "$T/pretty.json"; render "$T/pretty.json" 120
@@ -1977,7 +2005,7 @@ done
 # COLUMNS=80: line 1 takes two rows either way, so the second row gets the
 # duration, output tokens, lines and host readings back.
 prepare full "$p"; render "$p" - COLUMNS=80; normalize "$T/out" "$T/got"
-check "layout: COLUMNS=80 line 1 is two rows" sh -c "sed -n 2p '$T/got' | grep -q '^💰'"
+check "layout: COLUMNS=80 line 1 is two rows" sh -c "sed -n 2p '$T/got' | grep -q '^⏱️'"
 for want in '⏱️' '📤' '📝' '🔥' '💽'; do
   check "layout: COLUMNS=80 wrapped line 1 re-gains $want" sh -c "sed -n 2p '$T/got' | grep -qF '$want'"
 done
@@ -2046,7 +2074,7 @@ done
 # segments of line 1 happen to pack at this width.
 prepare full "$p"; render "$p" 20 AGENTLINE_DROP="model,ctx,5h,week,cost" AGENTLINE_LAYOUT="model,ctx,5h,week,cost"
 normalize "$T/out" "$T/got"
-if has "$T/got" '💰'; then fail "layout: AGENTLINE_DROP=cost kept cost"; else pass; fi
+if has "$T/got" '💸'; then fail "layout: AGENTLINE_DROP=cost kept cost"; else pass; fi
 # AGENTLINE_DROP="" asks for fit mode without dropping: every segment of the
 # unconstrained render is still there, wrapped to fit.
 prepare full "$p"; render "$p" 60 AGENTLINE_DROP=; normalize "$T/out" "$T/got"
@@ -2065,7 +2093,7 @@ prepare full "$p"; render "$p" 120 AGENTLINE_LAYOUT="clock,model / / ctx, resume
 check "layout: custom layout has two rows (got $(n_rows "$T/got"))" [ "$(n_rows "$T/got")" = 2 ]
 check "layout: custom order kept" grep -q '^HH:MM:SS │ Opus 5 🧠$' "$T/got"
 check "layout: custom second line" grep -q '^📊 42% │ ♻️ claude --resume full-0001$' "$T/got"
-if has "$T/got" 'v3.0.24' || has "$T/got" '💰'; then fail "layout: omitted segment still shown"; else pass; fi
+if has "$T/got" 'v3.0.24' || has "$T/got" '💸'; then fail "layout: omitted segment still shown"; else pass; fi
 
 # Placeholders are measured at their printed width, not their token length:
 # a line exactly as wide as its rendered text stays one row in fit mode.
@@ -2130,10 +2158,10 @@ printf '%s\n%s' "$(date +%s)" "CACHED" > "$(cbase "$sid").render"
 render "$p" - COLUMNS=202
 check "layout: same COLUMNS serves the cache" grep -qx 'CACHED' "$T/out"
 render "$p" - COLUMNS=62
-check "layout: changed COLUMNS bypasses the cache" grep -q 'Opus 5' "$T/out"
+check "layout: changed COLUMNS bypasses the cache" txt 'Opus 5'
 printf '%s\n%s' "$(date +%s)" "CACHED" > "$(cbase "$sid").render"
 render "$p" - COLUMNS=62 AGENTLINE_LAYOUT="model"
-check "layout: changed AGENTLINE_LAYOUT bypasses the cache" grep -q 'Opus 5' "$T/out"
+check "layout: changed AGENTLINE_LAYOUT bypasses the cache" txt 'Opus 5'
 rm -f "$(cbase "$sid")".*
 
 # ===========================================================================
@@ -2477,14 +2505,37 @@ log, portfile = sys.argv[1], sys.argv[2]
 class H(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
         with open(log + '.all', 'a') as f:
-            f.write('GET %s auth=%s\n' % (self.path, self.headers.get('Authorization') is not None))
+            f.write('GET %s auth=%s ua=%s\n' % (self.path, self.headers.get('Authorization') is not None,
+                                               self.headers.get('User-Agent')))
         if self.headers.get('Authorization') == 'Bearer fake-token':
             with open(log, 'a') as f:
                 f.write('fetch\n')
         q = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
         time.sleep(float(q.get('delay', ['0'])[0]))
-        body = json.dumps({'limits': [{'kind': 'weekly_scoped',
-            'scope': {'model': {'display_name': 'Fable'}}, 'percent': 63}]}).encode()
+        reply = {'limits': [{'kind': 'weekly_scoped',
+            'scope': {'model': {'display_name': 'Fable'}}, 'percent': 63}]}
+        # ?cedar=<mode>: limit-reset grants, dated from now.
+        iso = lambda days: time.strftime('%Y-%m-%dT%H:%M:%S+00:00', time.gmtime(time.time() + days * 86400))
+        grants = {
+            'mix': [{'resets_left': 2, 'ends_at': iso(2)}, {'resets_left': 1, 'ends_at': iso(20)},
+                    {'resets_left': 5, 'ends_at': iso(9), 'paused': True},
+                    {'resets_left': 7, 'ends_at': iso(-1)}, {'resets_left': '4', 'ends_at': iso(3)},
+                    {'resets_left': 0, 'ends_at': iso(1)}, 'junk'],
+            'far': [{'resets_left': 1, 'ends_at': iso(20)}],
+            'nodate': [{'resets_left': 1, 'ends_at': None}],
+            'none': [],
+        }.get(q.get('cedar', [''])[0])
+        if grants is not None:
+            reply['cedar_ember'] = {'eligible': bool(grants), 'grants': grants}
+        # ?bal=<mode>: the prepaid balance under its codename.
+        bal = {
+            'ok': {'limit_dollars': 250, 'used_dollars': 37.5, 'remaining_dollars': 212.5, 'resets_at': iso(9)},
+            'red': {'limit_dollars': 250, 'used_dollars': 240, 'remaining_dollars': 10, 'resets_at': iso(9)},
+            'junk': {'limit_dollars': 250, 'used_dollars': 0, 'remaining_dollars': '250'},
+        }.get(q.get('bal', [''])[0])
+        if bal is not None:
+            reply['iguana_necktie'] = bal
+        body = json.dumps(reply).encode()
         self.send_response(200)
         self.send_header('Content-Type', 'application/json')
         self.send_header('Content-Length', str(len(body)))
@@ -2580,6 +2631,68 @@ ucheck "usage:claim dropped after the fetch" wait_for 2 [ ! -e "$UCLAIM" ]
 prepare minimal "$p"
 urender
 ucheck "usage:fresh result rendered" grep -q 'F:63%' "$T/out"
+
+# Limit resets ride the same fetch, sent as the CLI (claude-cli/<the
+# payload's version>): unpaused, unexpired grants add up, the earliest
+# ends_at is the date, yellow inside three days of it.
+sed 's/"model"/"version":"2.1.296","model"/' "$p" > "$T/rsv.json"
+rsrender() {  # rsrender <cedar mode> [payload]: fetch that reply, render from the cache
+  local rp="${2:-$T/rsv.json}"
+  prepare minimal "$rp"; rm -f "$UCLAIM" "$UCACHE" "$T/fetches.all"
+  render "$rp" 120 AGENTLINE_NOW= AGENTLINE_USAGE_API=1 AGENTLINE_USAGE_URL="$UURL?cedar=$1"
+  wait_for 8 [ -f "$UCACHE" ]; wait_for 2 [ ! -e "$UCLAIM" ]
+  prepare minimal "$rp"
+  render "$rp" 120 AGENTLINE_NOW= AGENTLINE_TZ=UTC AGENTLINE_USAGE_API=1 AGENTLINE_USAGE_URL="$UURL?cedar=$1"
+}
+day() { python3 -c 'import sys, time; print(time.strftime("%d/%m", time.gmtime(time.time() + int(sys.argv[1]) * 86400)))' "$1"; }
+rsrender mix
+ucheck "resets: grants add up, earliest date first" txt "🎟️ 3 ◔$(day 2)"
+ucheck "resets: cache line F|resets|epoch" grep -qE '^63\|3\|[0-9]{10}$' "$UCACHE"
+ucheck "resets: yellow inside three days" grep -q "🎟️ ${ESC}\[1;33m3" "$T/out"
+ucheck "resets: F: still shown beside them" txt 'F:63%'
+ucheck "resets: asked as claude-cli/<version>" grep -qF 'ua=claude-cli/2.1.296 (external, cli)' "$T/fetches.all"
+rsrender far
+ucheck "resets: one grant, its date" txt "🎟️ 1 ◔$(day 20)"
+ucheck "resets: not yellow weeks out" sh -c "! grep -q '${ESC}\[1;33m1' '$T/out'"
+rsrender nodate
+ucheck "resets: no ends_at, count alone" txt '🎟️ 1'
+ucheck "resets: no ends_at, no date" sh -c "! grep -qF '◔' '$T/out'"
+rsrender none
+ucheck "resets: none left, cache holds F: alone" cache_is 63
+ucheck "resets: none left, hidden" sh -c "! grep -qF '🎟️' '$T/out'"
+rsrender far "$p"
+ucheck "resets: no payload version, no claude-cli agent" sh -c "! grep -qF 'ua=claude-cli' '$T/fetches.all'"
+# The prepaid balance rides the same fetch and fills 💰 when the payload has
+# no spend_limit bucket; the payload's own figure wins when it has one.
+rsrender 'none&bal=ok'
+ucheck "balance: /usage balance and its renewal date" txt "💰 \$212.50 ↻$(day 9)"
+ucheck "balance: cache line F|||balance|share|epoch" grep -qE '^63\|\|\|212\.50\|15\.0\|[0-9]{10}$' "$UCACHE"
+ucheck "balance: green while little is gone" grep -q "💰 ${ESC}\[1;32m\\\$212.50" "$T/out"
+rsrender 'none&bal=red'
+ucheck "balance: red when nearly gone" grep -q "💰 ${ESC}\[1;31m\\\$10.00" "$T/out"
+rsrender 'none&bal=junk'
+ucheck "balance: a non-number shows nothing" sh -c "! grep -qF '💰' '$T/out'"
+ucheck "balance: a non-number is not cached" cache_is 63
+sed 's/"model"/"rate_limits":{"spend_limit":{"used_percentage":10,"limit_usd":100,"used_usd":10}},"model"/' "$T/rsv.json" > "$T/rsp.json"
+rsrender 'none&bal=ok' "$T/rsp.json"
+ucheck "balance: the payload's spend_limit wins" txt '💰 $90.00'
+ucheck "balance: ... and the /usage one is not shown" sh -c "! grep -qF '212.50' '$T/out'"
+for line in '63|||2x.00|1|' '63|||250.00|1.2.3|' '63|||$(touch '"$T"'/bal-pwned)|0|' '63|||.5|0|'; do
+  prepare minimal "$p"; printf '%s' "$line" > "$UCACHE"; rm -f "$UCLAIM"
+  urender
+  ucheck "balance: bad cache line $line hidden" sh -c "! grep -qF '💰' '$T/out'"
+done
+ucheck "balance: cache line never runs" [ ! -e "$T/bal-pwned" ]
+# A cache line is data: anything but digits shows nothing and runs nothing.
+for line in '63|2x|9' '63|$(touch '"$T"'/rs-pwned)|1' '63|0|1999999999' '63|00000|1'; do
+  prepare minimal "$p"; printf '%s' "$line" > "$UCACHE"; rm -f "$UCLAIM"
+  urender
+  ucheck "resets: bad cache line $line hidden" sh -c "! grep -qF '🎟️' '$T/out'"
+done
+ucheck "resets: cache line never runs" [ ! -e "$T/rs-pwned" ]
+prepare minimal "$p"; printf '63|2|' > "$UCACHE"; rm -f "$UCLAIM"
+urender
+ucheck "resets: cached count without a date" txt '🎟️ 2'
 
 # The URL override is honoured for loopback only: the request carries the
 # OAuth token. Both proxies point at the fake server, so an honoured
@@ -4032,7 +4145,7 @@ api_is "AGENTLINE_API_SHOW=10 is not served the cached render" "🔌 a 1 · b 1 
 # A custom layout shows only the segments it names, so a new one needs
 # adding by hand; the upgrade note says which, by
 # design (no implicit segment); the upgrade note says so (review of J11a).
-check "docs: README tells a custom layout to add credit and api" grep -qF 'Add `credit` (💳 usage credits) and `api` (the 🔌 meter) to a custom `AGENTLINE_LAYOUT`' "$ROOT/README.md"
+check "docs: README tells a custom layout to add credit and api" grep -qF 'Add `credit` (💰 balance) and `api` (the 🔌 meter) to a custom `AGENTLINE_LAYOUT`' "$ROOT/README.md"
 check "docs: CHANGELOG carries the upgrade note" grep -qF 'add `credit`' "$ROOT/CHANGELOG.md"
 check "docs: README documents the credit segment" grep -qF '`rate_limits.spend_limit`' "$ROOT/README.md"
 check "docs: README no longer sells F: as payload-borne" sh -c "! grep -qF 'Claude Code 2.1.x only forwards header-borne buckets' '$ROOT/README.md'"

@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+- Session cost is `💸` now and the balance `💰` (was `💳`), in the order
+  `💰 balance │ ⏱️ │ 💸 spent`. Without the payload's `spend_limit`, the
+  opt-in `/usage` fetch fills `💰` from the prepaid balance it reports as
+  `iguana_necktie` (`remaining_dollars`, renewing at `resets_at`).
+- `🎟️ 2 ◔22/10`: the limit resets left to spend with `/limit-reset` and
+  the date the first of them lapses, yellow inside three days of it. It
+  rides the opt-in `/usage` fetch (`AGENTLINE_USAGE_API=1`), now asked with
+  `?cedar_ember=1` and as `claude-cli/<version>`, and it is fetched even
+  when the payload has its own `F:`. The cache line becomes `F|resets|epoch`
+  while a reset is left; a plain figure reads as before. Hidden at 0.
+- The `compact` segment (`🔄 2`) is gone: next to the `↻` reset dates it
+  read as a reset count. `resets` takes its place in the default layout and
+  a layout naming `compact` just skips it. The count is still kept, for the
+  post-compaction `📊 ~16%` estimate.
+- Opus gets a model-name gradient of its own, lavender to rose (violet to
+  plum on the light theme), in place of flat magenta, painted by the same
+  layout pass as Fable's amber with no extra fork. No glyph, so line 1 is
+  no wider. `AGENTLINE_COLOR_OPUS_FROM` / `_TO` set the endpoints like
+  Fable's overrides do.
 - API meter. A new `🔌` segment on line 3 shows what the session spent on
   external model APIs and workers: `🔌 hetzner 12·51.0k · jev 303·69.7k ·
   codex 4 · $0.01` (calls, tokens, a red `!N` for errors, the total cost).

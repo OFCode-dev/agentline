@@ -325,7 +325,7 @@ _tick_now
 # out (see "Hyperlinks"), and without their presence in the key a render
 # made outside one was replayed, links and all, inside one for up to
 # $AGENTLINE_CACHE_TTL. Only presence counts, as it does there.
-_cache_key="${input}${_US}${COLUMNS-}|${AGENTLINE_WIDTH-}|${AGENTLINE_LAYOUT-}|${AGENTLINE_DROP+set:}${AGENTLINE_DROP-}|${AGENTLINE_LINKS-}|${_AL_THEME}|${AGENTLINE_GLYPHS-}|${AGENTLINE_COLOR_FABLE_FROM-}|${AGENTLINE_COLOR_FABLE_TO-}|${AGENTLINE_COLOR_GOLD-}|${AGENTLINE_COLOR_ORANGE-}|${TMUX:+t}${STY:+s}${ZELLIJ:+z}|${AGENTLINE_TAG_200K-}|${AGENTLINE_API_SHOW-}|${AGENTLINE_AGENT_SHOW-}|${AGENTLINE_AGENTS-}"
+_cache_key="${input}${_US}${COLUMNS-}|${AGENTLINE_WIDTH-}|${AGENTLINE_LAYOUT-}|${AGENTLINE_DROP+set:}${AGENTLINE_DROP-}|${AGENTLINE_LINKS-}|${_AL_THEME}|${AGENTLINE_GLYPHS-}|${AGENTLINE_COLOR_FABLE_FROM-}|${AGENTLINE_COLOR_FABLE_TO-}|${AGENTLINE_COLOR_OPUS_FROM-}|${AGENTLINE_COLOR_OPUS_TO-}|${AGENTLINE_COLOR_GOLD-}|${AGENTLINE_COLOR_ORANGE-}|${TMUX:+t}${STY:+s}${ZELLIJ:+z}|${AGENTLINE_TAG_200K-}|${AGENTLINE_API_SHOW-}|${AGENTLINE_AGENT_SHOW-}|${AGENTLINE_AGENTS-}"
 # The cache files are read with the `read` builtin, not `$(<file)`: bash 5
 # serves `$(<file)` in-process, but bash 3.2 (macOS) forks a subshell for
 # each, which cost this path two forks a second.
@@ -1638,10 +1638,17 @@ ORANGE="\033[1;38;5;208m"
 # The Fable/Mythos gradient's endpoints, "r,g,b", painted by the layout pass.
 FABLE_FROM="255,215,90"
 FABLE_TO="255,125,25"
+# Opus has one of its own, lavender to rose: the other flagship, told apart
+# from Fable's amber at a glance rather than by a flat magenta.
+OPUS_FROM="200,170,255"
+OPUS_TO="255,120,200"
 if [ "$_AL_THEME" = light ]; then
   # Darker amber to burnt orange, about 4-5:1 on white against 1.4-2.6:1.
   FABLE_FROM="180,110,0"
   FABLE_TO="190,70,0"
+  # Deep violet to plum, the same 4-5:1 on white.
+  OPUS_FROM="105,60,190"
+  OPUS_TO="175,40,120"
   GOLD="\033[1;38;5;136m"
   ORANGE="\033[1;38;5;166m"
 fi
@@ -1664,6 +1671,8 @@ _rgb_val "${AGENTLINE_COLOR_GOLD-}"       && GOLD="\033[1;38;2;${_rgb}m"
 _rgb_val "${AGENTLINE_COLOR_ORANGE-}"     && ORANGE="\033[1;38;2;${_rgb}m"
 _rgb_val "${AGENTLINE_COLOR_FABLE_FROM-}" && FABLE_FROM="${_rgb//;/,}"
 _rgb_val "${AGENTLINE_COLOR_FABLE_TO-}"   && FABLE_TO="${_rgb//;/,}"
+_rgb_val "${AGENTLINE_COLOR_OPUS_FROM-}"  && OPUS_FROM="${_rgb//;/,}"
+_rgb_val "${AGENTLINE_COLOR_OPUS_TO-}"    && OPUS_TO="${_rgb//;/,}"
 
 # === Glyphs ===
 # AGENTLINE_GLYPHS=emoji (default) | ascii. Every icon comes from this one
@@ -1680,7 +1689,7 @@ if [ "$_AL_GLYPHS" = ascii ]; then
   G_SEP="|";      G_DOT="/";       G_ALERT="! ";   G_WARN="!"
   G_LOW="";       G_MED="";        G_HIGH="";      G_XHIGH="";     G_EFFORT=""
   G_THINK="think"; G_FAST="";      G_FABLE="* "
-  G_CTX="ctx:";   G_COMPACT="compact:"; G_RESET="~"; G_UP="+";     G_DOWN="-"
+  G_CTX="ctx:";   G_RESETS="resets:"; G_EXPIRE="by "; G_RESET="~"; G_UP="+";     G_DOWN="-"
   G_CACHE="cache:"; G_COST="";     G_DUR="dur:";   G_IN="in:";     G_OUT="out:"
   G_WORDS="words:"; G_ARR_UP="^";  G_ARR_DN="v";   G_LINES=""
   G_CPU="cpu:";   G_MEM="mem:";    G_DISK="disk:"
@@ -1693,15 +1702,15 @@ else
   G_SEP="│";      G_DOT="·";       G_ALERT="⚠ ";   G_WARN="⚠️ "
   G_LOW="🟢";     G_MED="🟡";      G_HIGH="🟠";    G_XHIGH="🔴";   G_EFFORT="⚙️ "
   G_THINK="🧠";   G_FAST="⚡";     G_FABLE="✦ "
-  G_CTX="📊 ";    G_COMPACT="🔄 "; G_RESET="↻";    G_UP="⇡";       G_DOWN="⇣"
-  G_CACHE="🗄️ ";  G_COST="💰 ";    G_DUR="⏱️ ";    G_IN="📥 ";     G_OUT="📤 "
+  G_CTX="📊 ";    G_RESETS="🎟️ "; G_EXPIRE="◔"; G_RESET="↻";    G_UP="⇡";       G_DOWN="⇣"
+  G_CACHE="🗄️ ";  G_COST="💸 ";    G_DUR="⏱️ ";    G_IN="📥 ";     G_OUT="📤 "
   G_WORDS="🔤 ";  G_ARR_UP="↑";    G_ARR_DN="↓";   G_LINES="📝 "
   G_CPU="🔥 ";    G_MEM="💾 ";     G_DISK="💽 "
   G_BACK="↖ ";    G_GIT="🌿 ";     G_PR="🔀 ";     G_TREE="🌳 ";   G_SESSION="🏷️ "
   G_PR_DRAFT="📝 "; G_PR_PENDING="👀 "; G_PR_CHANGES="🔴 "; G_PR_OK="✅ "
   G_EMAIL="🤖 ";  G_MCP="⚙️ ";     G_AGENTS="🤖 "; G_DONE="✓";     G_RESUME="♻️ "
   G_SVC="🛡️ ";    G_SSH="🔐 ";     G_CRON="⏰ ";   G_PORTS="🌐 "
-  G_API="🔌 ";    G_CREDIT="💳 "
+  G_API="🔌 ";    G_CREDIT="💰 "
 fi
 # Glyphs inside values the probes built — cached for AGENTLINE_PROBE_TTL, in
 # the emoji spelling whatever the set — and inside the agent list are
@@ -2164,8 +2173,10 @@ pace_arrow() {  # pace_arrow <used%> <resets_epoch> <window_secs> <min_elapsed%>
 }
 
 # === Compaction ===
-# How many times this session's context has been compacted: "🔄 2" on line
-# 1, hidden at 0. Claude Code writes one line per compaction into the
+# How many times this session's context has been compacted. It is no
+# segment of its own any more (a count nobody acted on, and "🔄" read as a
+# reset beside the real ones); it backs the post-compaction estimate below.
+# Claude Code writes one line per compaction into the
 # session transcript — {"type":"system","subtype":"compact_boundary",
 # "compactMetadata":{"trigger":…,"preTokens":…,"postTokens":…}} — and a
 # session keeps the same .jsonl across compactions, so the count of those
@@ -2321,13 +2332,19 @@ model_color="$CYAN"
 # cleaned payload string can open or close one.
 GRAD_OPEN="@@${_AL_TOK}AGENTLINE_GRAD@@"
 GRAD_CLOSE="@@${_AL_TOK}AGENTLINE_GRAD_END@@"
+# A render shows one model, so the painter takes that model's two endpoints.
+GRAD_FROM="$FABLE_FROM"; GRAD_TO="$FABLE_TO"
 case "$model_raw" in
   claude-fable*|claude-mythos*)
     if [ "$_AL_THEME" = mono ]; then model="${G_FABLE}${model}"
     else model="${GRAD_OPEN}${G_FABLE}${model}${GRAD_CLOSE}"
     fi
     model_color="" ;;
-  claude-opus*)  model_color="$MAGENTA" ;;
+  # Opus is painted but carries no glyph: the name alone, so line 1 is no
+  # wider than it was in flat magenta.
+  claude-opus*)
+    [ "$_AL_THEME" = mono ] || { model="${GRAD_OPEN}${model}${GRAD_CLOSE}"; GRAD_FROM="$OPUS_FROM"; GRAD_TO="$OPUS_TO"; }
+    model_color="" ;;
   claude-sonnet*) model_color="$CYAN" ;;
   claude-haiku*) model_color="$GREEN" ;;
 esac
@@ -2608,7 +2625,6 @@ elif [ "$compact_n" -gt 0 ] && [ -n "$compact_post" ] && [ "$compact_fresh" = 1 
       fi ;;
   esac
 fi
-[ "$compact_n" -gt 0 ] && _seg compact "${DIM}${G_COMPACT}${compact_n}${RESET}"
 if [ -n "$five_hour" ]; then
   _color_pct "$five_hour" 90 70
   reset_part=""; [ -n "$five_hour_reset_fmt" ] && reset_part="${DIM}${G_RESET}${five_hour_reset_fmt}${RESET}"
@@ -2641,7 +2657,19 @@ fi
 _cfg_dir="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
 _cfg_dir="${_cfg_dir%/}"
 _acct_key="${_cfg_dir//[!A-Za-z0-9]/_}"
-if [ -z "$seven_day_top" ] && [ "${AGENTLINE_USAGE_API:-0}" = "1" ] && [ -n "$CACHE_BASE" ]; then
+#
+# The same request carries the limit resets Claude Code offers through
+# /limit-reset (`cedar_ember`, asked for with ?cedar_ember=1): how many are
+# left and when they lapse. The server words that block for the CLI only,
+# by User-Agent, so the fetch sends claude-cli/<the payload's version>.
+# It also carries the prepaid balance (see "Usage credits"). The cache line
+# is "F|resets|epoch|balance|balance%|epoch", empty trailing fields left
+# off, so a plain figure reads as before. It is fetched even when the
+# payload has its own F: — the resets exist nowhere else.
+api_f=""; api_resets=""; api_resets_end=""
+api_bal=""; api_bal_pct=""; api_bal_end=""
+_usage_read() { IFS='|' read -r api_f api_resets api_resets_end api_bal api_bal_pct api_bal_end 2>/dev/null < "$usage_cache" || :; }
+if [ "${AGENTLINE_USAGE_API:-0}" = "1" ] && [ -n "$CACHE_BASE" ]; then
   usage_cache="${CACHE_DIR}/usage.${_acct_key}"
   usage_ttl="${AGENTLINE_USAGE_TTL:-300}"
   usage_age=999999
@@ -2653,7 +2681,7 @@ if [ -z "$seven_day_top" ] && [ "${AGENTLINE_USAGE_API:-0}" = "1" ] && [ -n "$CA
     usage_age=$(( _now_epoch - mtime ))
   fi
   if [ "$usage_age" -lt "$usage_ttl" ]; then
-    seven_day_top=$(<"$usage_cache")
+    _usage_read
   else
     # The refresh runs detached from the render. Claude Code cancels an
     # in-flight status-line script whenever a new update is due — with
@@ -2690,7 +2718,7 @@ if [ -z "$seven_day_top" ] && [ "${AGENTLINE_USAGE_API:-0}" = "1" ] && [ -n "$CA
     # result instead hides `F:` for one TTL and does not retry every render.
     # If fetches never land at all, the grace runs out and `F:` hides too.
     if [ -f "$usage_cache" ] && [ "$usage_age" -lt $(( usage_ttl + 60 )) ]; then
-      seven_day_top=$(<"$usage_cache")
+      _usage_read
     fi
     usage_claim="${usage_cache}.claim"
     claimed_at=0
@@ -2703,15 +2731,16 @@ if [ -z "$seven_day_top" ] && [ "${AGENTLINE_USAGE_API:-0}" = "1" ] && [ -n "$CA
     if [ $(( _now_epoch - claimed_at )) -ge 30 ] &&
        printf '%s\n' "$_now_epoch" 2>/dev/null > "$usage_claim"; then
       { trap '' HUP INT TERM
-        exec python3 -I - "$_cfg_dir" "$usage_cache" "$usage_claim" >/dev/null 2>&1 <<'PYEOF'
-import json, os, re, signal, sys, urllib.request
+        exec python3 -I - "$_cfg_dir" "$usage_cache" "$usage_claim" "$version" >/dev/null 2>&1 <<'PYEOF'
+import json, os, re, signal, sys, time, urllib.request
+from datetime import datetime
 try:
     os.setsid()
 except OSError:
     pass
 for _sig in (signal.SIGHUP, signal.SIGINT, signal.SIGTERM):
     signal.signal(_sig, signal.SIG_DFL)
-cfg, cache, claim = sys.argv[1:4]
+cfg, cache, claim, ver = sys.argv[1:5]
 # AGENTLINE_USAGE_URL is the test seam (tests/run.sh points it at a local fake
 # server; -I closed the old PYTHONPATH one). It is honoured for a loopback
 # http URL only: the request carries the account OAuth token, and a project
@@ -2719,7 +2748,7 @@ cfg, cache, claim = sys.argv[1:4]
 # here would hand that token to whoever wrote the project settings. The
 # override also ignores any http_proxy: it is plain http, and a proxy would
 # see the token in the clear (the real endpoint only ever tunnels TLS).
-url, fetch = 'https://api.anthropic.com/api/oauth/usage', urllib.request.urlopen
+url, fetch = 'https://api.anthropic.com/api/oauth/usage?cedar_ember=1&skip_spend=1', urllib.request.urlopen
 _override = os.environ.get('AGENTLINE_USAGE_URL', '')
 if re.match(r'http://(127\.0\.0\.1|localhost|\[::1\])(:[0-9]+)?/', _override):
     url = _override
@@ -2731,11 +2760,14 @@ signal.alarm(20)
 out = ''
 try:
     cred = json.load(open(os.path.join(os.path.expanduser(cfg), '.credentials.json')))['claudeAiOauth']
-    req = urllib.request.Request(url, headers={
+    hdr = {
         'Authorization': 'Bearer ' + cred['accessToken'],
         'anthropic-beta': 'oauth-2025-04-20',
         'Accept': 'application/json',
-    })
+    }
+    if re.fullmatch(r'[0-9]{1,4}(\.[0-9]{1,6}){1,3}', ver):
+        hdr['User-Agent'] = 'claude-cli/%s (external, cli)' % ver
+    req = urllib.request.Request(url, headers=hdr)
     d = json.load(fetch(req, timeout=10))
     scoped = [l for l in d.get('limits', []) if isinstance(l, dict) and l.get('kind') == 'weekly_scoped']
     for want in ('fable', 'opus'):
@@ -2746,6 +2778,41 @@ try:
                 break
         if out:
             break
+    def epoch(v):
+        try:
+            return int(datetime.fromisoformat(str(v).replace('Z', '+00:00')).timestamp())
+        except Exception:
+            return 0
+    def dollars(v):
+        return type(v) in (int, float) and 0 <= v < 1e7
+    # Unpaused grants still running: their resets add up, the earliest
+    # ends_at is the date to use them by. A grant whose date will not parse
+    # still counts, it only gives no date.
+    left, end, now = 0, 0, time.time()
+    for g in (d.get('cedar_ember') or {}).get('grants') or []:
+        n = g.get('resets_left') if isinstance(g, dict) else None
+        if type(n) is not int or n <= 0 or g.get('paused') is True:
+            continue
+        t = epoch(g.get('ends_at'))
+        if 0 < t <= now:
+            continue
+        left += n
+        if t and (not end or t < end):
+            end = t
+    # The prepaid balance sits under a codename the CLI itself never reads,
+    # `iguana_necktie`: limit_dollars, used_dollars, remaining_dollars and
+    # resets_at. Dollars left, the share gone, the renewal date.
+    bal = bpct = bend = ''
+    ig = d.get('iguana_necktie')
+    if isinstance(ig, dict) and dollars(ig.get('remaining_dollars')):
+        bal = '%.2f' % ig['remaining_dollars']
+        lim, used = ig.get('limit_dollars'), ig.get('used_dollars')
+        bpct = '%.1f' % min(used * 100.0 / lim, 999) if dollars(lim) and lim > 0 and dollars(used) else '0'
+        bend = epoch(ig.get('resets_at')) or ''
+    f = [out, min(left, 9999) if left else '', end if left and end else '', bal, bpct, bend]
+    while len(f) > 1 and f[-1] == '':
+        f.pop()
+    out = '|'.join(map(str, f))
 except Exception:
     pass
 signal.alarm(0)
@@ -2773,6 +2840,15 @@ PYEOF
     fi
   fi
 fi
+[ -z "$seven_day_top" ] && seven_day_top="$api_f"
+# Limit resets, "🎟️ 2 ◔22/10": resets left to spend with /limit-reset and
+# the date the first of them lapses; yellow inside three days of it.
+case "$api_resets" in
+  ''|0|*[!0-9]*|?????*) ;;
+  *) fmt_reset_week "$api_resets_end"; rs_c=""
+     [ -n "$_reset_out" ] && [ $(( 10#$api_resets_end - _now_epoch )) -lt 259200 ] && rs_c="$YELLOW"
+     _seg resets "${G_RESETS}${rs_c}$(( 10#$api_resets ))${rs_c:+$RESET}${_reset_out:+ ${DIM}${G_EXPIRE}${_reset_out}${RESET}}" ;;
+esac
 # Weekly limits. The premium-model bucket rides inside the W segment as an
 # orange `F:` field, between the account-wide percentage and the reset marker,
 # so the reset date stays at the end where it reads as belonging to both. It
@@ -2857,15 +2933,23 @@ if [ -n "$pc_state" ]; then
   [ -n "$pc_body" ] && _seg cache "${G_CACHE}${pc_body}"
 fi
 [ -n "$cost_fmt" ]       && _seg cost "${G_COST}\$${cost_fmt}"
-# Usage credits, "💳 $84.21 ↻01/11" — what the account can still spend past
-# its plan limits and the day that allowance rolls over. 💰 above is what
-# this session cost; this is the wall behind it. Only an account with the
+# Usage credits, "💰 $84.21 ↻01/11" — what the account can still spend past
+# its plan limits and the day that allowance rolls over. 💸 is what this
+# session cost; this is the wall behind it. Only an account with the
 # spend limit enabled has the bucket at all, and only a USD one has the
 # dollar figures: with the percentage alone the segment shows that instead,
 # which is still the answer to "how much is left". The colour follows how
 # much is *gone*, since a balance only matters as it runs out, and the date
 # is the week segment's reset formatter — the same "an epoch still ahead, or
 # nothing" rule, so a rolled-over or malformed stamp shows no date.
+# Without the payload's bucket, the prepaid balance the /usage fetch found
+# (AGENTLINE_USAGE_API=1) stands in, "123.45" dollars and a "0.0" share.
+if [ -z "$credit_pct" ]; then
+  case "$api_bal|$api_bal_pct" in
+    *[!0-9.\|]*|*.*.*\|*|*\|*.*.*|.*|*.\|*|\|*|*\||*\|.*|*.|??????????????*) ;;
+    *) credit_left="$api_bal"; credit_pct="$api_bal_pct"; credit_reset="$api_bal_end" ;;
+  esac
+fi
 if [ -n "$credit_pct" ]; then
   _color_pct "$credit_pct" 90 70
   if [ -n "$credit_left" ]; then
@@ -3128,13 +3212,13 @@ SEGS="${SEGS}${_LSEGS}"
 # the output is used as-is. It is written as bytes through os.fsencode, which
 # reverses exactly how python decoded argv: a byte the locale cannot decode
 # round-trips instead of raising on the way out.
-AGENTLINE_LAYOUT_DEFAULT="model,effort,fast,ctx,compact,5h,week,cache,cost,credit,dur,tok_in,tok_out,words,lines,cpu,mem,disk / version,dir,git,pr,worktree,session,email,date,clock / mcp,agents,api,resume / services,ssh,cron,ports"
+AGENTLINE_LAYOUT_DEFAULT="model,effort,fast,ctx,resets,5h,week,cache,credit,dur,cost,tok_in,tok_out,words,lines,cpu,mem,disk / version,dir,git,pr,worktree,session,email,date,clock / mcp,agents,api,resume / services,ssh,cron,ports"
 # cpu, mem and disk close the list: they are host readings, the least a line
 # about the session needs, and without them a busy line 1 at COLUMNS≈122
 # still overflowed by a few cells and wrapped them onto a row of their own.
 # cache (the prompt-cache warning) goes last of all: it only shows when it
 # is about to cost something, and then it outranks any host reading.
-AGENTLINE_DROP_DEFAULT="tok_in,tok_out,words,compact,dur,date,version,email,lines,cpu,mem,disk,cache"
+AGENTLINE_DROP_DEFAULT="tok_in,tok_out,words,dur,resets,date,version,email,lines,cpu,mem,disk,cache"
 # The default layout this render: local.sh's segments close line 4 (its
 # last line), in call order. They are not on the default drop list — asked
 # for by name, they wrap with line 4 rather than vanish; AGENTLINE_DROP can
@@ -3180,9 +3264,10 @@ KEEP = ('warn', 'model', 'ctx', '5h', 'week')
 warned = set(sys.argv[13].split(','))
 drop = [n for n in re.split(r'[\s,]+', drop_spec) if n and n not in KEEP and n not in warned]
 
-# The Fable/Mythos model name arrives between GRAD_OPEN/GRAD_CLOSE markers
-# and is painted here, one truecolor step per character, amber to orange.
-# The endpoints come from bash as "r,g,b" (theme and overrides, see "Colors").
+# A Fable/Mythos or Opus model name arrives between GRAD_OPEN/GRAD_CLOSE
+# markers and is painted here, one truecolor step per character: amber to
+# orange, or lavender to rose. The endpoints come from bash as "r,g,b", the
+# model's own (theme and overrides, see "Colors").
 def rgb(v, default):
     try:
         t = tuple(int(x) for x in v.split(','))
@@ -3400,7 +3485,7 @@ PYEOF
 out=$(python3 -I -c "$_AL_PY" "$STATUSLINE_WIDTH" "$P" "${AGENTLINE_LAYOUT:-$_lay_def}" \
   "$_lay_def" "$_fit" "${AGENTLINE_DROP-$AGENTLINE_DROP_DEFAULT}" \
   "$CLOCK_TOKEN" "$ANIM_MAX_TOKEN" "$ANIM_ULTRA_TOKEN" "$GRAD_OPEN" "$GRAD_CLOSE" "$PCEXP_TOKEN" "$_WARNED" "$pc_meas" \
-  "$FABLE_FROM" "$FABLE_TO" "${_cols:+1}" <<< "$SEGS")
+  "$GRAD_FROM" "$GRAD_TO" "${_cols:+1}" <<< "$SEGS")
 _layout_rc=$?
 [ -n "$_AL_DOCTOR" ] && _dt_mark layout
 
@@ -3562,10 +3647,10 @@ _dt_why() {  # _dt_why <segment> — where its data comes from
     effort)   echo "payload effort.level" ;;
     fast)     echo "payload fast_mode" ;;
     ctx)      echo "payload context_window.used_percentage" ;;
-    compact)  echo "compact_boundary lines in transcript_path (not counted by --doctor: it needs the cache)" ;;
+    resets)   echo "/usage cedar_ember.grants (AGENTLINE_USAGE_API=1; resets_left of unpaused grants, ◔ the earliest ends_at; hidden at 0)" ;;
     5h)       echo "payload rate_limits.five_hour.used_percentage" ;;
     week)     echo "payload rate_limits.seven_day.used_percentage (↻: seven_day.resets_at, an epoch still ahead; F: seven_day_overage_included, or AGENTLINE_USAGE_API=1)" ;;
-    credit)   echo "payload rate_limits.spend_limit (only with a spend limit enabled; limit_usd minus used_usd on a USD account, else used_percentage)" ;;
+    credit)   echo "payload rate_limits.spend_limit (only with a spend limit enabled; limit_usd minus used_usd on a USD account, else used_percentage), else /usage iguana_necktie.remaining_dollars (AGENTLINE_USAGE_API=1)" ;;
     cache)
       if [ -n "$pc_state" ]; then echo "payload prompt_cache: hidden while warm and not about to expire"
       elif [ -n "$version" ] && _ver_ge "$version" 2.1.251; then echo "payload prompt_cache: absent (no API response yet, or no caching reported)"
