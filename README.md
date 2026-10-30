@@ -76,7 +76,7 @@ A session on a 150-column terminal, with three external workers running and two 
 
 ```text
 ✦ Fable 5.1 │ 🔴xhigh │ 📊 42% │ 🎟️ 2 ◔22/10 │ S:31% ⇣19% ↻2h28m │ W:58% ↻08/10 │ ⏱️ 3h42m │ 💸 $12.47 │ 📝 +1204 -336 │ 🔥 37% │ 💾 6.2G │ 💽 41%
-v2.1.285 │ ~/work │ 🌿 OFCode-dev/agentline@main │ 🏷️ agentline │ 05/10/2026 Mon │ 18:24:55                                     🤖 codex/gpt-6.1-sol
+v2.1.285 │ 🖥️ devbox │ ~/work │ 🌿 OFCode-dev/agentline@main │ 🏷️ agentline │ 05/10/2026 Mon │ 18:24:55                         🤖 codex/gpt-6.1-sol
 ⚙️ context7 · playwright │ 🔌 hetzner 12·51.0k · jev 303·69.7k · codex 4 · +1 · <$0.01 │ ♻️ claude --resume demo-0001          🤖 agy/gemini-3.1-pro
 🛡️ Web ✓ · DB ✗ · Cache ✓ │ 🔐 ssh:2 │ ⏰ cron:5 │ 🌐 node(3000) vite(5173) python3(8000) postgres(5432) redis-server(6379)   🤖 hetzner/qwen3.6-fp8
 ```
@@ -86,7 +86,7 @@ The same session at 72 columns: the low-priority segments of line 1 step aside (
 ```text
 ✦ Fable 5.1 │ 🔴xhigh │ 📊 42% │ S:31% ⇣19% ↻2h28m │ W:58% ↻08/10
 ⏱️ 3h42m │ 💸 $12.47 │ 📝 +1204 -336 │ 🔥 37% │ 💾 6.2G │ 💽 41%
-~/work │ 🌿 OFCode-dev/agentline@main │ 🏷️ agentline │ 18:24:55
+🖥️ devbox │ ~/work │ 🌿 OFCode-dev/agentline@main │ 🏷️ agentline │ 18:24:55
 ⚙️ context7 · playwright
 🔌 hetzner 12·51.0k · jev 303·69.7k · codex 4 · +1 · <$0.01
 ♻️ claude --resume demo-0001
@@ -126,6 +126,7 @@ The same session at 72 columns: the low-priority segments of line 1 step aside (
 | Segment | Meaning | Details |
 |---|---|---|
 | `v3.0.24` | Claude Code version | Dim. |
+| `🖥️ devbox` | Host | The machine the session runs on, so a bar that looks the same on several hosts says which one this is. bash's own `$HOSTNAME` up to the first dot (no fork), kept to `[A-Za-z0-9._-]` and 20 characters. `AGENTLINE_HOST_NAME` shows a name of your choosing instead, `AGENTLINE_HOST=0` hides it. |
 | `~/projects/agentline` | Working directory | Blue; home-relative (`~` at `$HOME`), absolute outside your home. When the session has changed directory to somewhere outside where Claude Code was launched (`workspace.project_dir`), a dim breadcrumb with the launch folder's name leads it: `↖ agentline ~/src/other`. A subdirectory of the launch folder shows no breadcrumb, because the path already starts with it. Names past 24 characters are cut with `...`. |
 | `🌿 OFCode-dev/agentline@main` | Git branch | Branch in magenta, prefixed with the dim `owner/repo` its `origin` remote points at (SSH and HTTPS remotes both parsed) — so you always know *which* repo's `main` you are on. Repos without an origin show the branch alone; non-repos hide the segment. With an `https://` origin the `owner/repo` part is a clickable link (see `AGENTLINE_LINKS`). After the branch: `↑2↓1`, commits ahead of / behind its upstream, and a dim `±3 ?2 ✖1` for changed, untracked and conflicted files, each part hidden at zero (e.g. `🌿 OFCode-dev/agentline@main ↑2 ±3`). They come from one `git status --porcelain=v2 --branch`, run lock-free under a 1 s timeout and reused for `AGENTLINE_PROBE_TTL`, so they can trail an edit by up to 15 s. Without a `timeout` (or Homebrew `gtimeout`) binary the call is skipped and the branch shows alone; `AGENTLINE_GIT_UNTRACKED=0` skips the untracked scan (the slow part on a large repo), `AGENTLINE_GIT_STATUS=0` turns the counts off. A repository's own `.git/config` never gets to run a command: the call pins `core.fsmonitor` and hooks off, does not descend into submodules, and is skipped (branch alone) when the repo's config defines a filter, an include or a transport command, or when the repo is not yours — so `cd` into an unpacked tarball is safe. |
 | `🔀 ✅ #1234` | Pull request | From Claude Code's `pr` object: the review state (`📝` draft, `👀` pending, `🔴` changes requested, `✅` approved; none for any other state), then the number, a clickable link to the PR. A GitLab merge request shows as `!1234` (needs Claude Code ≥ 2.1.234). The footer already shows the PR number; the review state and the link are what this adds. Hidden when the branch has no PR. |
@@ -194,6 +195,8 @@ Everything is optional — agentline works with zero configuration.
 | `AGENTLINE_CACHE_TTL` | `5` | Seconds a cached render may serve clock ticks before the line is rebuilt |
 | `AGENTLINE_PROBE_TTL` | `15` | Seconds the host layer (CPU, RAM, disk, ports, services, MCP, git) may be reused. Independent of the render cache, and unaffected by payload changes — see below |
 | `AGENTLINE_USAGE_API` | unset | Set to `1` to fetch the Fable weekly share (`F:`, used when the payload carries no per-model bucket), the limit resets (`🎟️`) and the prepaid balance (`💰`, used when the payload has no `spend_limit`) from `https://api.anthropic.com/api/oauth/usage`. The server words the resets block for Claude Code only, so the request names itself `claude-cli/<the payload's version>`. This is the **only** network call agentline can make, and only when you opt in. Uses the OAuth token from `.credentials.json` in your profile directory (`$CLAUDE_CONFIG_DIR`, default `~/.claude`); the token never leaves the python helper. The result is cached per profile, so two profiles never show each other's figure. Once the cache expires, only one of your open sessions makes the request, in the background so the render never waits on the network (the previous figure stays up meanwhile, for at most a minute past the TTL); it gives up after 20 s. On macOS the token lives in the Keychain rather than in `.credentials.json`, so `F:`, `🎟️` and that balance stay hidden there |
+| `AGENTLINE_HOST` | unset | `0` hides the `🖥️` host segment |
+| `AGENTLINE_HOST_NAME` | unset | Shown in place of the hostname, for a box better known by another name (`AGENTLINE_HOST_NAME=ofb`) |
 | `AGENTLINE_USAGE_TTL` | `300` | Seconds a fetched `/usage` result is reused before the endpoint is asked again |
 | `AGENTLINE_LOCAL` | `~/.claude/agentline/local.sh` | Your override file, sourced on every full render if it exists (see [FAQ](#faq)) |
 | `AGENTLINE_TMP` | private, see note | Directory for the files the optional hooks, `agentline-run` and `agentline-meter` write (`claude_wordcount.txt`, `claude_agents.txt`, `claude_api.v1.<session>`). By default it belongs to you alone: `$XDG_RUNTIME_DIR/agentline` when that directory exists and is yours, else `${TMPDIR:-/tmp}/agentline-<uid>`. It is created mode 700 and used only when it is a real directory you own that nobody else can write to, and every file in it is mode 600. The writers apply the same test to a directory you name here or through `CLAUDE_AGENTS_FILE`, so a shared `/tmp` itself is refused, and so is a directory left group-writable (umask `002`); `chmod 700` it. The registry is read only when it is a regular file of yours, and only its first 256 KB and 512 lines. agentline and the writers resolve it by the same rule. If they run with different environments (a shell with another `TMPDIR`), set this for both |
@@ -211,7 +214,7 @@ Set them in the `env` block of `~/.claude/settings.json` so Claude Code passes t
 `AGENTLINE_LAYOUT` is one string: `/` starts a line, `,` separates segment names, and a segment you leave out is hidden. Order and grouping are exactly what you write; empty lines collapse, and unknown names are ignored. The default is today's four lines:
 
 ```
-model,effort,fast,ctx,resets,5h,week,cache,credit,dur,cost,tok_in,tok_out,words,lines,cpu,mem,disk / version,dir,git,pr,worktree,session,email,date,clock / mcp,agents,api,resume / services,ssh,cron,ports
+model,effort,fast,ctx,resets,5h,week,cache,credit,dur,cost,tok_in,tok_out,words,lines,cpu,mem,disk / version,host,dir,git,pr,worktree,session,email,date,clock / mcp,agents,api,resume / services,ssh,cron,ports
 ```
 
 | Name | Segment | Name | Segment |
@@ -231,7 +234,7 @@ model,effort,fast,ctx,resets,5h,week,cache,credit,dur,cost,tok_in,tok_out,words,
 | `cpu` / `mem` / `disk` | 🔥 / 💾 / 💽 | `pr` | 🔀 pull / merge request |
 | `resets` | 🎟️ limit resets left | `worktree` | 🌳 linked worktree |
 | `credit` | 💰 balance left | `api` | 🔌 external API use |
-| `local:<name>` | your own, from `local.sh` ([FAQ](#faq)) | | |
+| `host` | 🖥️ machine name | `local:<name>` | your own, from `local.sh` ([FAQ](#faq)) |
 
 A compact two-line bar, for example:
 

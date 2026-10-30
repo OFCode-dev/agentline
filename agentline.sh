@@ -325,7 +325,7 @@ _tick_now
 # out (see "Hyperlinks"), and without their presence in the key a render
 # made outside one was replayed, links and all, inside one for up to
 # $AGENTLINE_CACHE_TTL. Only presence counts, as it does there.
-_cache_key="${input}${_US}${COLUMNS-}|${AGENTLINE_WIDTH-}|${AGENTLINE_LAYOUT-}|${AGENTLINE_DROP+set:}${AGENTLINE_DROP-}|${AGENTLINE_LINKS-}|${_AL_THEME}|${AGENTLINE_GLYPHS-}|${AGENTLINE_COLOR_FABLE_FROM-}|${AGENTLINE_COLOR_FABLE_TO-}|${AGENTLINE_COLOR_OPUS_FROM-}|${AGENTLINE_COLOR_OPUS_TO-}|${AGENTLINE_COLOR_GOLD-}|${AGENTLINE_COLOR_ORANGE-}|${TMUX:+t}${STY:+s}${ZELLIJ:+z}|${AGENTLINE_TAG_200K-}|${AGENTLINE_API_SHOW-}|${AGENTLINE_AGENT_SHOW-}|${AGENTLINE_AGENTS-}"
+_cache_key="${input}${_US}${COLUMNS-}|${AGENTLINE_WIDTH-}|${AGENTLINE_LAYOUT-}|${AGENTLINE_DROP+set:}${AGENTLINE_DROP-}|${AGENTLINE_LINKS-}|${_AL_THEME}|${AGENTLINE_GLYPHS-}|${AGENTLINE_COLOR_FABLE_FROM-}|${AGENTLINE_COLOR_FABLE_TO-}|${AGENTLINE_COLOR_OPUS_FROM-}|${AGENTLINE_COLOR_OPUS_TO-}|${AGENTLINE_COLOR_GOLD-}|${AGENTLINE_COLOR_ORANGE-}|${TMUX:+t}${STY:+s}${ZELLIJ:+z}|${AGENTLINE_TAG_200K-}|${AGENTLINE_API_SHOW-}|${AGENTLINE_AGENT_SHOW-}|${AGENTLINE_AGENTS-}|${AGENTLINE_HOST-}|${AGENTLINE_HOST_NAME-}"
 # The cache files are read with the `read` builtin, not `$(<file)`: bash 5
 # serves `$(<file)` in-process, but bash 3.2 (macOS) forks a subshell for
 # each, which cost this path two forks a second.
@@ -1697,7 +1697,7 @@ if [ "$_AL_GLYPHS" = ascii ]; then
   G_PR_DRAFT="draft "; G_PR_PENDING="review "; G_PR_CHANGES="changes "; G_PR_OK="approved "
   G_EMAIL="";     G_MCP="mcp:";    G_AGENTS="agents:"; G_DONE="ok:"; G_RESUME=""
   G_SVC="svc:";   G_SSH="";        G_CRON="";      G_PORTS="ports:"
-  G_API="api:";   G_CREDIT="bal:"
+  G_API="api:";   G_CREDIT="bal:";  G_HOST="host:"
 else
   G_SEP="│";      G_DOT="·";       G_ALERT="⚠ ";   G_WARN="⚠️ "
   G_LOW="🟢";     G_MED="🟡";      G_HIGH="🟠";    G_XHIGH="🔴";   G_EFFORT="⚙️ "
@@ -1710,7 +1710,7 @@ else
   G_PR_DRAFT="📝 "; G_PR_PENDING="👀 "; G_PR_CHANGES="🔴 "; G_PR_OK="✅ "
   G_EMAIL="🤖 ";  G_MCP="⚙️ ";     G_AGENTS="🤖 "; G_DONE="✓";     G_RESUME="♻️ "
   G_SVC="🛡️ ";    G_SSH="🔐 ";     G_CRON="⏰ ";   G_PORTS="🌐 "
-  G_API="🔌 ";    G_CREDIT="💰 "
+  G_API="🔌 ";    G_CREDIT="💰 ";   G_HOST="🖥️ "
 fi
 # Glyphs inside values the probes built — cached for AGENTLINE_PROBE_TTL, in
 # the emoji spelling whatever the set — and inside the agent list are
@@ -2982,6 +2982,12 @@ if [ -n "$disk_pct" ]; then
 fi
 
 # Line 2: env info
+# The machine, "🖥️ nexus" — the same bar runs on several hosts, and nothing
+# else on it says which. bash's own $HOSTNAME, no fork, up to the first dot;
+# AGENTLINE_HOST_NAME names it instead (a hostname is often not what you
+# call the box), AGENTLINE_HOST=0 hides it. Kept to [A-Za-z0-9._-], 20 at most.
+_host="${AGENTLINE_HOST_NAME:-${HOSTNAME%%.*}}"; _host="${_host//[!A-Za-z0-9._-]/}"
+[ "${AGENTLINE_HOST-}" = 0 ] || [ -z "$_host" ] || _seg host "${G_HOST}${_host:0:20}"
 [ -n "$version" ]          && _seg version "${DIM}v${version}${RESET}"
 # Breadcrumb: when the session has cd'd away from where it was launched
 # (workspace.project_dir), the launch folder's name leads the path, dim:
@@ -3212,7 +3218,7 @@ SEGS="${SEGS}${_LSEGS}"
 # the output is used as-is. It is written as bytes through os.fsencode, which
 # reverses exactly how python decoded argv: a byte the locale cannot decode
 # round-trips instead of raising on the way out.
-AGENTLINE_LAYOUT_DEFAULT="model,effort,fast,ctx,resets,5h,week,cache,credit,dur,cost,tok_in,tok_out,words,lines,cpu,mem,disk / version,dir,git,pr,worktree,session,email,date,clock / mcp,agents,api,resume / services,ssh,cron,ports"
+AGENTLINE_LAYOUT_DEFAULT="model,effort,fast,ctx,resets,5h,week,cache,credit,dur,cost,tok_in,tok_out,words,lines,cpu,mem,disk / version,host,dir,git,pr,worktree,session,email,date,clock / mcp,agents,api,resume / services,ssh,cron,ports"
 # cpu, mem and disk close the list: they are host readings, the least a line
 # about the session needs, and without them a busy line 1 at COLUMNS≈122
 # still overflowed by a few cells and wrapped them onto a row of their own.
@@ -3666,6 +3672,7 @@ _dt_why() {  # _dt_why <segment> — where its data comes from
     cpu)      echo "probe: top" ;;
     mem)      [ "$OS" = Darwin ] && echo "probe: vm_stat + sysctl" || echo "probe: /proc/meminfo" ;;
     disk)     echo "probe: df -P /" ;;
+    host)     echo "\$HOSTNAME up to the first dot, or AGENTLINE_HOST_NAME (AGENTLINE_HOST=0 hides it)" ;;
     version)  echo "payload version" ;;
     dir)      echo "payload cwd, else pwd" ;;
     git)      echo "probe: .git/HEAD (git on the odd case); none outside a repo or on a detached HEAD" ;;

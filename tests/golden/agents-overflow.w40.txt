@@ -1,5 +1,5 @@
 Sonnet 5
-~/work │ DD/MM/YYYY Day │ HH:MM:SS
+🖥️ golden-host │ ~/work │ DD/MM/YYYY Day │ HH:MM:SS
 ♻️ claude --resume agents-0001
 🤖 explore the repo
 🤖 review #a1b2c3

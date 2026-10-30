@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- `🖥️ devbox` follows the version on line 2: the machine the session runs on, for a bar
+  installed on several hosts. bash's own `$HOSTNAME` up to the first dot,
+  no fork, kept to `[A-Za-z0-9._-]` and 20 characters.
+  `AGENTLINE_HOST_NAME` shows another name, `AGENTLINE_HOST=0` hides it.
 - Session cost is `💸` now and the balance `💰` (was `💳`), in the order
   `💰 balance │ ⏱️ │ 💸 spent`. Without the payload's `spend_limit`, the
   opt-in `/usage` fetch fills `💰` from the prepaid balance it reports as

@@ -158,7 +158,7 @@ ci_exit() {
 # locale (e.g. C.UTF-8): the suite also passes with the script in a UTF-8
 # locale, which is where most users run it.
 run_env() {  # run a command in the hermetic environment; extra VAR=val first
-  env -i PATH="$PATH_F" HOME="$HOME_F" TMPDIR="$TMP_F" AGENTLINE_TMP="$SIDE" \
+  env -i PATH="$PATH_F" HOME="$HOME_F" TMPDIR="$TMP_F" AGENTLINE_TMP="$SIDE" HOSTNAME=golden-host \
     TZ=UTC LC_ALL="${AGENTLINE_TEST_LC:-C}" AGENTLINE_PROBE_TTL=3600 AGENTLINE_NOW="$TNOW" "$@"
 }
 
@@ -344,7 +344,7 @@ if [ -n "$PREVIEW" ]; then
     _pp="$PAY/$_pname.json"
     fill "$FIX/payloads/$_pname.json" "$_pp"
     prepare "$_pname" "$_pp"
-    render "$_pp" 120
+    render "$_pp" 120 HOSTNAME=devbox
     cp "$T/out" "$PREVIEW/line-$_pname.ansi"
   done
   # Subagent rows, from the generated transcripts under the fixtures' own
@@ -2021,7 +2021,8 @@ check "probe cache seeded as valid UTF-8 in any harness locale" \
 # UTF-8 under a UTF-8 locale instead of copying it.
 LC_ALL=C sed "s#^git_branch=.*#git_branch=$long_branch#" "$(cbase "$(sid_of "$p")").probes" > "$T/probes.tmp"
 cat "$T/probes.tmp" > "$(cbase "$(sid_of "$p")").probes"
-render "$p" - COLUMNS=100; normalize "$T/out" "$T/got"
+# AGENTLINE_HOST=0: the row counts below were measured without the host.
+render "$p" - COLUMNS=100 AGENTLINE_HOST=0; normalize "$T/out" "$T/got"
 check "layout: COLUMNS=100 long branch shown" has "$T/got" "$long_branch"
 for want in 'v3.0.24' '🤖 o*****t@e*****e.com' 'DD/MM/YYYY Day'; do
   check "layout: COLUMNS=100 wrapped line 2 re-gains $want" has "$T/got" "$want"
@@ -2119,8 +2120,40 @@ chmod +x "$LSHIM/python3"
 prepare full "$p"; render "$p" 120 PATH="$LSHIM:$PATH_F"; normalize "$T/out" "$T/got"
 check "layout fallback: exit 0 (got $rc)" [ "$rc" = 0 ]
 check "layout fallback: line 1 joined" grep -q '^Opus 5 🧠 │ .*📊 42% │ S:71%' "$T/got"
-check "layout fallback: line 2 joined" grep -q '^v3.0.24 │ ~/work │ ' "$T/got"
+check "layout fallback: line 2 joined" grep -q '^v3.0.24 │ 🖥️ golden-host │ ~/work │ ' "$T/got"
 check "layout fallback: resume line" grep -qF 'claude --resume full-0001' "$T/got"
+
+# Host: $HOSTNAME up to the first dot, after the version on line 2 (the suite pins
+# HOSTNAME=golden-host); AGENTLINE_HOST_NAME renames it, AGENTLINE_HOST=0
+# hides it, and only [A-Za-z0-9._-] survives, 20 at most.
+hostline() {
+  prepare minimal "$PAY/minimal.json"
+  render "$PAY/minimal.json" 120 ${1+"$@"}; normalize "$T/out" "$T/got"
+}
+hostline
+check "host: leads line 2 without a version ($(sed -n 2p "$T/got"))" sh -c "sed -n 2p '$T/got' | grep -q '^🖥️ golden-host │'"
+prepare full "$PAY/full.json"; render "$PAY/full.json" 120; normalize "$T/out" "$T/got"
+check "host: right after the version" sh -c "sed -n 2p '$T/got' | grep -q '^v3.0.24 │ 🖥️ golden-host │ ~/work'"
+hostline HOSTNAME=box.example.com
+check "host: up to the first dot" has "$T/got" '🖥️ box │'
+hostline HOSTNAME=box.example.com AGENTLINE_HOST_NAME=ofb
+check "host: AGENTLINE_HOST_NAME renames it" has "$T/got" '🖥️ ofb │'
+hostline AGENTLINE_HOST=0
+if has "$T/got" '🖥️'; then fail "host: AGENTLINE_HOST=0 still shows it"; else pass; fi
+hostline AGENTLINE_HOST=1
+check "host: any other AGENTLINE_HOST shows it" has "$T/got" '🖥️ golden-host'
+hostline AGENTLINE_HOST_NAME="$(printf 'ev\033[31mil$(touch %s/host-pwned)' "$T")"
+check "host: escapes and shell characters dropped" has "$T/got" "🖥️ ev31miltouch"
+check "host: nothing ran" [ ! -e "$T/host-pwned" ]
+hostline AGENTLINE_HOST_NAME=abcdefghijklmnopqrstuvwxyz
+check "host: 20 characters at most" has "$T/got" '🖥️ abcdefghijklmnopqrst │'
+hostline HOSTNAME='☃☃' AGENTLINE_HOST_NAME=
+if has "$T/got" '🖥️'; then fail "host: nothing left after cleaning, hidden"; else pass; fi
+hostline AGENTLINE_GLYPHS=ascii
+check "host: ascii glyph" has "$T/got" 'host:golden-host'
+# A rename takes effect on the next tick: the render cache keys on it.
+render "$PAY/minimal.json" 120 AGENTLINE_HOST_NAME=renamed; normalize "$T/out" "$T/got"
+check "host: a rename bypasses the render cache" has "$T/got" '🖥️ renamed'
 fill "$FIX/payloads/fable-max.json" "$PAY/fable-max.json"
 prepare fable-max "$PAY/fable-max.json"; render "$PAY/fable-max.json" 120 PATH="$LSHIM:$PATH_F"
 check "layout fallback: Fable name shown plain" grep -qF '✦ Fable 5.1' "$T/out"
@@ -3335,7 +3368,8 @@ render "$PAY/full.json" - COLUMNS=202; normalize "$T/out" "$T/tick"
 check "column (full @202): a cached tick is the full render" cmp -s "$T/got" "$T/tick"
 # A line 1 with no room for its entry moves the column down, onto the
 # first rows that all have room, instead of dropping it to rows.
-prepare full "$PAY/full.json"; render "$PAY/full.json" - COLUMNS=150; normalize "$T/out" "$T/got"
+# AGENTLINE_HOST=0: rows 2-3 have room for the column only without the host.
+prepare full "$PAY/full.json"; render "$PAY/full.json" - COLUMNS=150 AGENTLINE_HOST=0; normalize "$T/out" "$T/got"
 check "column (full @150): not beside a full line 1" sh -c "! head -n 1 '$T/got' | grep -q '🤖'"
 check "column (full @150): beside the next two rows" sh -c "sed -n '2,3p' '$T/got' | grep -c '   🤖 \\(code review\\|run the whole integrat...\\)\$' | grep -qx 2"
 check "column (full @150): no list rows of its own" sh -c "! grep -q '^🤖' '$T/got'"

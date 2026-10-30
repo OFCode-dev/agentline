@@ -1,5 +1,5 @@
 Opus 5 │ 📊 25% │ 📥 250.0k │ 📤 1.2k │ 🔥 37% │ 💾 6.2G │ 💽 41%
-~/work │ 🌿 OFCode-dev/agentline@main │ DD/MM/YYYY Day │ HH:MM:SS
+🖥️ golden-host │ ~/work │ 🌿 OFCode-dev/agentline@main │ DD/MM/YYYY Day │ HH:MM:SS
 ⚙️ context7 · playwright
 ♻️ claude --resume onem-0002
 🛡️ Web ✓ · DB ✗ · Cache ✓ │ 🔐 ssh:2
