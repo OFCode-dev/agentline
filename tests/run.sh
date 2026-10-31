@@ -2149,11 +2149,12 @@ hostline AGENTLINE_HOST_NAME=abcdefghijklmnopqrstuvwxyz
 check "host: 20 characters at most" has "$T/got" '🖥️ abcdefghijklmnopqrst │'
 hostline HOSTNAME='☃☃' AGENTLINE_HOST_NAME=
 if has "$T/got" '🖥️'; then fail "host: nothing left after cleaning, hidden"; else pass; fi
-hostline AGENTLINE_GLYPHS=ascii
-check "host: ascii glyph" has "$T/got" 'host:golden-host'
 # A rename takes effect on the next tick: the render cache keys on it.
+hostline
 render "$PAY/minimal.json" 120 AGENTLINE_HOST_NAME=renamed; normalize "$T/out" "$T/got"
 check "host: a rename bypasses the render cache" has "$T/got" '🖥️ renamed'
+hostline AGENTLINE_GLYPHS=ascii
+check "host: ascii glyph" has "$T/got" 'host:golden-host'
 fill "$FIX/payloads/fable-max.json" "$PAY/fable-max.json"
 prepare fable-max "$PAY/fable-max.json"; render "$PAY/fable-max.json" 120 PATH="$LSHIM:$PATH_F"
 check "layout fallback: Fable name shown plain" grep -qF '✦ Fable 5.1' "$T/out"

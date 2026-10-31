@@ -2985,8 +2985,9 @@ fi
 # The machine, "🖥️ nexus" — the same bar runs on several hosts, and nothing
 # else on it says which. bash's own $HOSTNAME, no fork, up to the first dot;
 # AGENTLINE_HOST_NAME names it instead (a hostname is often not what you
-# call the box), AGENTLINE_HOST=0 hides it. Kept to [A-Za-z0-9._-], 20 at most.
-_host="${AGENTLINE_HOST_NAME:-${HOSTNAME%%.*}}"; _host="${_host//[!A-Za-z0-9._-]/}"
+# call the box), AGENTLINE_HOST=0 hides it. Kept to [A-Za-z0-9._-], 20 at most;
+# the class is spelled out, as elsewhere here, since a range is locale-bound.
+_host="${AGENTLINE_HOST_NAME:-${HOSTNAME%%.*}}"; _host="${_host//[!abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-]/}"
 [ "${AGENTLINE_HOST-}" = 0 ] || [ -z "$_host" ] || _seg host "${G_HOST}${_host:0:20}"
 [ -n "$version" ]          && _seg version "${DIM}v${version}${RESET}"
 # Breadcrumb: when the session has cd'd away from where it was launched
